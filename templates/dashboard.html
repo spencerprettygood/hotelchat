@@ -21,40 +21,47 @@
         </div>
     </div>
 
-    <!-- ✅ Dashboard -->
-    <div id="dashboard">
-        <div class="header">
-            <h2>Casino AI Dashboard</h2>
-            <button onclick="logout()">Logout</button>
+<!-- ✅ Dashboard -->
+<div id="dashboard">
+    <div class="header">
+        <h2>Casino AI Dashboard</h2>
+        <button onclick="logout()">Logout</button>
+    </div>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <h3>Live Chat</h3>
+            <p><strong>Conversations</strong></p>
+            <ul>
+                <li onclick="showConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
+                <li onclick="showConversations('your')">You <span id="yourCount">0</span></li>
+                <li onclick="showConversations('team')">Team <span id="teamCount">0</span></li>
+                <li onclick="showConversations('all')">All <span id="allCount">0</span></li>
+            </ul>
+
+            <!-- 🔹 Add Conversation List Section Here -->
+            <div class="conversation-list" id="conversationList">
+                <!-- Conversations will be dynamically loaded here -->
+            </div>
+
+            <p><strong>Channels</strong></p>
+            <ul>
+                <li onclick="filterByChannel('whatsapp')">WhatsApp</li>
+                <li onclick="filterByChannel('instagram')">Instagram</li>
+            </ul>
         </div>
 
-        <div class="container">
-            <!-- Sidebar -->
-            <div class="sidebar">
-                <h3>Live Chat</h3>
-                <p><strong>Conversations</strong></p>
-                <ul>
-                    <li>Unassigned <span id="unassignedCount">0</span></li>
-                    <li>You <span id="yourCount">0</span></li>
-                    <li>Team <span id="teamCount">0</span></li>
-                    <li>All <span id="allCount">0</span></li>
-                </ul>
-                <p><strong>Channels</strong></p>
-                <ul>
-                    <li>WhatsApp</li>
-                    <li>Instagram</li>
-                </ul>
-            </div>
-
-            <!-- Chat Panel -->
-            <div class="chat-panel">
-                <h3>Live Conversation</h3>
-                <div class="chat-messages" id="chatBox"></div>
-                <input type="text" id="messageInput" placeholder="Type a message...">
-                <button onclick="sendMessage()">Send</button>
-            </div>
+        <!-- Chat Panel -->
+        <div class="chat-panel">
+            <h3>Live Conversation</h3>
+            <div class="chat-messages" id="chatBox"></div>
+            <input type="text" id="messageInput" placeholder="Type a message...">
+            <button onclick="sendMessage()">Send</button>
         </div>
     </div>
+</div>
+
 
     <script src="/static/dashboard.js"></script>
 </body>
