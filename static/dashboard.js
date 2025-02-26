@@ -113,30 +113,33 @@ async function loadConversations() {
     }
 }
 
-// ✅ Open Chat Window when Clicking a Conversation
-function openChat(convoId) {
-    console.log("Opening chat for conversation ID:", convoId);
-    document.getElementById("chatBox").innerHTML = `<p>Loading chat...</p>`;
+const chatBox = document.getElementById("chatBox");
 
-    fetch(`/messages?convo_id=${convoId}`)
-        .then(response => response.json())
-        .then(messages => {
-            document.getElementById("chatBox").innerHTML = "";
-            messages.forEach(msg => {
-                const msgElement = document.createElement("div");
-                msgElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
-                msgElement.textContent = msg.message;
-                document.getElementById("chatBox").appendChild(msgElement);
-            });
-        })
-        .catch(error => console.error("Error loading messages:", error));
+// ✅ Function to Add Messages with Timestamp
+function addMessage(content, sender) {
+    const messageElement = document.createElement("div");
+    messageElement.classList.add("message", sender === "user" ? "user-message" : "agent-message");
+    messageElement.innerHTML = `
+        <p>${content}</p>
+        <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+    `;
+    chatBox.appendChild(messageElement);
+    chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
 }
 
-// ✅ Send Message Function
+// ✅ Send Message Function with Typing Indicator
 async function sendMessage() {
     const messageInput = document.getElementById("messageInput");
+    const typingIndicator = document.getElementById("typingIndicator");
     const message = messageInput.value.trim();
+
     if (!message) return;
+
+    addMessage(message, "user"); // Display user message
+    messageInput.value = "";
+
+    // Show Typing Indicator
+    typingIndicator.style.display = "block";
 
     const response = await fetch("/chat", {
         method: "POST",
@@ -145,10 +148,13 @@ async function sendMessage() {
     });
 
     const data = await response.json();
-    document.getElementById("chatBox").innerHTML += `<div class="message agent-message">${data.reply}</div>`;
 
-    messageInput.value = "";
+    // Hide Typing Indicator
+    typingIndicator.style.display = "none";
+
+    addMessage(data.reply, "agent"); // Display AI response
 }
+
 
 // ✅ Auto-Update Conversations Every 5 Seconds
 setInterval(loadConversations, 5000);
