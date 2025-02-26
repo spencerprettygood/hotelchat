@@ -1,16 +1,12 @@
-from flask import Flask, render_template, request, jsonify
-from flask import Flask, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import openai
 import sqlite3
 import os
-from flask_login import LoginManager
-from flask import send_file
 
-
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = "supersecretkey"
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -27,7 +23,6 @@ class Agent(UserMixin):
         self.id = id
         self.username = username
 
-# ✅ Load User Function
 @login_manager.user_loader
 def load_user(agent_id):
     conn = sqlite3.connect(DB_NAME)
@@ -39,24 +34,20 @@ def load_user(agent_id):
         return Agent(agent[0], agent[1])
     return None
 
-# ✅ Agent Login API (Fixing the issue)
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
-
     if "username" not in data or "password" not in data:
         return jsonify({"message": "Missing username or password"}), 400
 
     username = data["username"]
     password = data["password"]
-
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("SELECT id, username FROM agents WHERE username = ? AND password = ?", (username, password))
         agent = c.fetchone()
         conn.close()
-
         if agent:
             return jsonify({"message": "Login successful", "agent": agent[1]})
         else:
@@ -64,13 +55,23 @@ def login():
     except sqlite3.Error as e:
         return jsonify({"message": f"Database error: {str(e)}"}), 500
 
-
-# ✅ Agent Logout API
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
     return jsonify({"message": "Logged out successfully"})
+
+@app.route("/conversations")
+def get_conversations():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, username, latest_message FROM conversations ORDER BY last_updated DESC")
+    conversations = [
+        {"id": row[0], "username": row[1], "latest_message": row[2], "initials": row[1][0].upper()}
+        for row in c.fetchall()
+    ]
+    conn.close()
+    return jsonify(conversations)
 
 # ✅ Store message in database
 def log_message(user, message, sender, channel, client_name=None, client_contact=None, stay_date=None):
@@ -120,7 +121,6 @@ def chat():
 
     return jsonify({"reply": ai_reply})
 
-# ✅ Fetch Chat History API
 @app.route("/messages", methods=["GET"])
 @login_required
 def get_messages():
@@ -133,7 +133,6 @@ def get_messages():
     conn.close()
     return jsonify(messages)
 
-# ✅ Handle Human Handoff
 @app.route("/handoff", methods=["POST"])
 @login_required
 def handoff():
@@ -149,10 +148,9 @@ def handoff():
 
     return jsonify({"message": "Handoff initiated"})
 
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template("dashboard.html")  
-
+    return render_template("dashboard.html")
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)
