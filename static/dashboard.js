@@ -113,6 +113,57 @@ async function loadConversations() {
     }
 }
 
+async function assignChat(convoId) {
+    const response = await fetch("/assign_chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ convo_id: convoId }),
+    });
+
+    const data = await response.json();
+    alert(data.message);
+
+    // Refresh conversation list to reflect new assignment
+    loadConversations();
+}
+
+async function loadConversations() {
+    try {
+        const response = await fetch("/conversations");
+        const conversations = await response.json();
+        const unassignedList = document.getElementById("unassignedList");
+        const assignedList = document.getElementById("assignedList");
+
+        unassignedList.innerHTML = "";
+        assignedList.innerHTML = "";
+
+        conversations.forEach(convo => {
+            const convoItem = document.createElement("div");
+            convoItem.classList.add("conversation-item");
+            convoItem.innerHTML = `
+                <div class="conversation-avatar">
+                    <span class="avatar">${convo.initials}</span>
+                </div>
+                <div class="conversation-info">
+                    <h4>${convo.username}</h4>
+                    <p class="preview">${convo.latest_message}</p>
+                </div>
+            `;
+
+            // If conversation is unassigned, allow agent to take it
+            if (!convo.assigned_agent) {
+                convoItem.onclick = () => assignChat(convo.id);
+                unassignedList.appendChild(convoItem);
+            } else if (convo.assigned_agent === localStorage.getItem("agent")) {
+                assignedList.appendChild(convoItem);
+            }
+        });
+    } catch (error) {
+        console.error("Error loading conversations:", error);
+    }
+}
+
+
 
 // ✅ Function to Add Messages with Timestamp
 function addMessage(content, sender) {
