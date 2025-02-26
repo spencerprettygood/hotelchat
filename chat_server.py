@@ -211,5 +211,39 @@ def assign_chat():
 def index():
     return render_template("dashboard.html")
 
+def add_test_conversations():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # Ensure the table exists
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            latest_message TEXT,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            assigned_agent TEXT DEFAULT NULL
+        )
+    ''')
+
+    # Insert sample conversations if none exist
+    c.execute("SELECT COUNT(*) FROM conversations")
+    count = c.fetchone()[0]
+
+    if count == 0:
+        sample_data = [
+            ("John Doe", "Hello, I need help with a booking."),
+            ("Alice Smith", "Can I get a refund?"),
+            ("Michael Johnson", "How do I deposit money?"),
+        ]
+        c.executemany("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", sample_data)
+        conn.commit()
+
+    conn.close()
+
+# Call function to add test data
+add_test_conversations()
+
+
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)
