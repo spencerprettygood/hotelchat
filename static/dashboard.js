@@ -91,7 +91,9 @@ async function fetchMessages() {
     });
 
     chatBox.scrollTop = chatBox.scrollHeight;  // Auto-scroll to latest message
-}
+}    catch (error) {
+        console.error("Error fetching messages:", error);
+    }
 
 // ✅ Fetch and Display Conversations
 async function fetchAndDisplayConversations() {
