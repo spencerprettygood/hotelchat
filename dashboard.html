@@ -27,22 +27,34 @@
         </div>
 
         <div class="container">
-            <!-- Sidebar -->
-            <div class="sidebar">
-                <h3>Live Chat</h3>
-                <p><strong>Conversations</strong></p>
-                <ul>
-                    <li>Unassigned <span id="unassignedCount">0</span></li>
-                    <li>You <span id="yourCount">0</span></li>
-                    <li>Team <span id="teamCount">0</span></li>
-                    <li>All <span id="allCount">0</span></li>
-                </ul>
-                <p><strong>Channels</strong></p>
-                <ul>
-                    <li>WhatsApp</li>
-                    <li>Instagram</li>
-                </ul>
-            </div>
+        <!-- Sidebar -->
+<div class="sidebar">
+    <h3>Live Chat</h3>
+    <p><strong>Conversations</strong></p>
+    <ul>
+        <li>Unassigned <span id="unassignedCount">0</span></li>
+        <li>You <span id="yourCount">0</span></li>
+        <li>Team <span id="teamCount">0</span></li>
+        <li>All <span id="allCount">0</span></li>
+    </ul>
+
+    <p><strong>Unassigned Conversations</strong></p>
+    <div id="unassignedConversations" class="conversation-list">
+        <!-- Conversations will be dynamically added here -->
+    </div>
+
+    <p><strong>Assigned to Me</strong></p>
+    <div id="assignedConversations" class="conversation-list">
+        <!-- Assigned conversations will appear here -->
+    </div>
+
+    <p><strong>Channels</strong></p>
+    <ul>
+        <li>WhatsApp</li>
+        <li>Instagram</li>
+    </ul>
+</div>
+
 
             <!-- Chat Panel -->
             <div class="chat-panel">
