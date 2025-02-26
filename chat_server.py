@@ -157,17 +157,26 @@ def chat():
 
     return jsonify({"reply": ai_reply})
 
+# ✅ Fetch Chat History for a Specific User
 @app.route("/messages", methods=["GET"])
 @login_required
 def get_messages():
+    user_id = request.args.get("user")  # Get conversation ID from frontend
+    if not user_id:
+        return jsonify({"error": "Missing user ID"}), 400
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT user, message, sender, channel, client_name, client_contact, stay_date, timestamp FROM messages ORDER BY timestamp DESC LIMIT 50")
-    messages = [{"user": row[0], "message": row[1], "sender": row[2], "channel": row[3],
-                 "client_name": row[4], "client_contact": row[5], "stay_date": row[6], "timestamp": row[7]}
-                for row in c.fetchall()]
+    c.execute("""
+        SELECT message, sender, timestamp FROM messages 
+        WHERE user = ? ORDER BY timestamp ASC
+    """, (user_id,))
+    
+    messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
     conn.close()
+    
     return jsonify(messages)
+
 
 @app.route("/handoff", methods=["POST"])
 @login_required
