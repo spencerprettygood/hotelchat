@@ -69,8 +69,16 @@ function logout() {
 
 // ✅ Fetch and Display Messages
 async function fetchMessages() {
-    const response = await fetch("/messages");
-    if (!response.ok) return;
+    const response = await fetch("/messages", {
+        method: "GET",
+        credentials: "include",  // ✅ Ensures session cookies are sent
+        headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+        console.error("Failed to fetch messages:", response.status);
+        return;
+    }
 
     const messages = await response.json();
     chatBox.innerHTML = "";
@@ -82,8 +90,9 @@ async function fetchMessages() {
         chatBox.appendChild(messageElement);
     });
 
-    chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
+    chatBox.scrollTop = chatBox.scrollHeight;  // Auto-scroll to latest message
 }
+
 // ✅ Fetch and Display Conversations
 async function fetchAndDisplayConversations() {
     const response = await fetch("/conversations");
