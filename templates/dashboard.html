@@ -52,13 +52,22 @@
             </ul>
         </div>
 
-        <!-- Chat Panel -->
-        <div class="chat-panel">
-            <h3>Live Conversation</h3>
-            <div class="chat-messages" id="chatBox"></div>
-            <input type="text" id="messageInput" placeholder="Type a message...">
-            <button onclick="sendMessage()">Send</button>
-        </div>
+       <!-- Chat Panel -->
+<div class="chat-panel">
+    <h3>Live Conversation</h3>
+    
+    <!-- Chat Messages Container -->
+    <div class="chat-messages" id="chatBox"></div>
+    
+    <!-- Typing Indicator -->
+    <div id="typingIndicator" class="typing-indicator">John is typing...</div>
+
+    <!-- Chat Input Box -->
+    <div class="chat-input">
+        <input type="text" id="messageInput" placeholder="Type a message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+</div>
     </div>
 </div>
 
