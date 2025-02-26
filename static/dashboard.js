@@ -113,7 +113,6 @@ async function loadConversations() {
     }
 }
 
-const chatBox = document.getElementById("chatBox");
 
 // ✅ Function to Add Messages with Timestamp
 function addMessage(content, sender) {
