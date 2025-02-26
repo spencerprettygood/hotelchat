@@ -85,33 +85,54 @@ async function fetchMessages() {
     chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
 }
 // ✅ Fetch and Display Conversations
-async function loadConversations() {
-    try {
-        const response = await fetch("/conversations");
-        const conversations = await response.json();
-        const conversationList = document.getElementById("conversationList");
-
-        conversationList.innerHTML = ""; // Clear previous conversations
-
-        conversations.forEach(convo => {
-            const convoItem = document.createElement("div");
-            convoItem.classList.add("conversation-item");
-            convoItem.innerHTML = `
-                <div class="conversation-avatar">
-                    <span class="avatar">${convo.initials}</span>
-                </div>
-                <div class="conversation-info">
-                    <h4>${convo.username}</h4>
-                    <p class="preview">${convo.latest_message}</p>
-                </div>
-            `;
-            convoItem.onclick = () => openChat(convo.id);
-            conversationList.appendChild(convoItem);
-        });
-    } catch (error) {
-        console.error("Error loading conversations:", error);
+async function fetchAndDisplayConversations() {
+    const response = await fetch("/conversations");
+    if (!response.ok) {
+        console.error("Failed to fetch conversations");
+        return;
     }
+
+    const conversations = await response.json();
+    const conversationList = document.getElementById("unassignedConversations");
+    conversationList.innerHTML = "";
+
+    conversations.forEach(convo => {
+        const convoElement = document.createElement("div");
+        convoElement.classList.add("conversation-item");
+        convoElement.innerHTML = `
+            <div class="avatar">${convo.username.charAt(0).toUpperCase()}</div>
+            <div class="conversation-info">
+                <strong>${convo.username}</strong>
+                <p>${convo.latest_message.substring(0, 25)}...</p>
+            </div>
+        `;
+        convoElement.onclick = () => loadConversation(convo.id, convo.username); // Click event
+        conversationList.appendChild(convoElement);
+    });
 }
+
+// ✅ Load Messages When Clicking a Conversation
+async function loadConversation(convoId, username) {
+    const response = await fetch(`/messages?user=${convoId}`);
+    if (!response.ok) {
+        console.error("Failed to load messages");
+        return;
+    }
+
+    const messages = await response.json();
+    const chatBox = document.getElementById("chatBox");
+    chatBox.innerHTML = `<h3>Chat with ${username}</h3>`; // Update chat header
+
+    messages.forEach(msg => {
+        const messageElement = document.createElement("div");
+        messageElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
+        messageElement.textContent = msg.message;
+        chatBox.appendChild(messageElement);
+    });
+
+    chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll
+}
+
 
 async function assignChat(convoId) {
     const response = await fetch("/assign_chat", {
