@@ -118,6 +118,61 @@ button {
     transition: background 0.3s;
 }
 
+/* ✅ Conversation List Styling */
+.conversation-list {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+}
+
+.conversation-item {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    border-bottom: 1px solid #ddd;
+    cursor: pointer;
+    transition: background 0.3s ease-in-out;
+}
+
+.conversation-item:hover {
+    background: #f7f7f7;
+}
+
+/* 🔹 Avatar for Each User */
+.conversation-avatar {
+    width: 40px;
+    height: 40px;
+    background: #007aff;
+    color: white;
+    font-weight: bold;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 50%;
+    margin-right: 10px;
+    font-size: 16px;
+    text-transform: uppercase;
+}
+
+/* 🔹 Conversation Information */
+.conversation-info h4 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: bold;
+    color: #333;
+}
+
+.conversation-info .preview {
+    margin: 3px 0 0;
+    color: #777;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+}
+
+
 button:hover {
     background: #005bb5;
 }
