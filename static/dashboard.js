@@ -67,23 +67,6 @@ function logout() {
     });
 }
 
-// ✅ Fetch and Display Messages
-async function fetchMessages() {
-    const response = await fetch("/messages");
-    if (!response.ok) return;
-
-    const messages = await response.json();
-    chatBox.innerHTML = "";
-
-    messages.forEach(msg => {
-        const messageElement = document.createElement("div");
-        messageElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
-        messageElement.textContent = msg.message;
-        chatBox.appendChild(messageElement);
-    });
-
-    chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
-}
 
 // ✅ Fetch and Display Conversations
 async function loadConversations() {
