@@ -120,7 +120,6 @@ async function loadConversation(convoId, username) {
     }
 
     const messages = await response.json();
-    const chatBox = document.getElementById("chatBox");
     chatBox.innerHTML = `<h3>Chat with ${username}</h3>`; // Update chat header
 
     messages.forEach(msg => {
