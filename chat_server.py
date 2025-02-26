@@ -184,6 +184,29 @@ def handoff():
 
     return jsonify({"message": "Handoff initiated"})
 
+@app.route("/assign_chat", methods=["POST"])
+@login_required
+def assign_chat():
+    data = request.get_json()
+    convo_id = data.get("convo_id")
+
+    if not convo_id:
+        return jsonify({"message": "Missing conversation ID"}), 400
+
+    agent_name = current_user.username
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE conversations SET assigned_agent = ? WHERE id = ?", (agent_name, convo_id))
+    conn.commit()
+    conn.close()
+
+    # Emit real-time update to all connected agents
+    socketio.emit("chat_assigned", {"convo_id": convo_id, "agent": agent_name})
+
+    return jsonify({"message": f"Conversation {convo_id} assigned to {agent_name}."})
+
+
 @app.route("/")
 def index():
     return render_template("dashboard.html")
