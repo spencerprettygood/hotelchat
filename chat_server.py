@@ -23,14 +23,16 @@ def initialize_database():
     c = conn.cursor()
 
     # Create the conversations table if it doesn't exist
-    c.execute('''
+        c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             latest_message TEXT,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            assigned_agent TEXT DEFAULT NULL  -- ✅ Added this field
         )
     ''')
+
 
     # Create the messages table if it doesn't exist
     c.execute('''
@@ -159,8 +161,10 @@ def chat():
 
 # ✅ Fetch Chat History for a Specific User
 @app.route("/messages", methods=["GET"])
-@login_required
 def get_messages():
+    if not current_user.is_authenticated:
+        return jsonify({"error": "Unauthorized"}), 401  # Return error only if user isn't logged in
+
     user_id = request.args.get("user")  # Get conversation ID from frontend
     if not user_id:
         return jsonify({"error": "Missing user ID"}), 400
@@ -194,8 +198,10 @@ def handoff():
     return jsonify({"message": "Handoff initiated"})
 
 @app.route("/assign_chat", methods=["POST"])
-@login_required
 def assign_chat():
+    if not current_user.is_authenticated:
+        return jsonify({"message": "Unauthorized"}), 401  # ✅ Only block if truly unauthenticated
+
     data = request.get_json()
     convo_id = data.get("convo_id")
 
@@ -214,6 +220,7 @@ def assign_chat():
     socketio.emit("chat_assigned", {"convo_id": convo_id, "agent": agent_name})
 
     return jsonify({"message": f"Conversation {convo_id} assigned to {agent_name}."})
+
 
 
 @app.route("/")
