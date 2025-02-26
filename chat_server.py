@@ -18,6 +18,42 @@ login_manager.init_app(app)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 DB_NAME = "chatbot.db"
 
+def initialize_database():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # Create the conversations table if it doesn't exist
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            latest_message TEXT,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Create the messages table if it doesn't exist
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            message TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            client_name TEXT,
+            client_contact TEXT,
+            stay_date TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+# Call the function to ensure tables are created
+initialize_database()
+
+
 class Agent(UserMixin):
     def __init__(self, id, username):
         self.id = id
