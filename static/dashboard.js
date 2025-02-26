@@ -85,6 +85,81 @@ async function fetchMessages() {
     chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
 }
 
+// ✅ Fetch and Display Conversations
+async function loadConversations() {
+    try {
+        const response = await fetch("/conversations");
+        const conversations = await response.json();
+        const conversationList = document.getElementById("conversationList");
+
+        conversationList.innerHTML = ""; // Clear previous conversations
+
+        conversations.forEach(convo => {
+            const convoItem = document.createElement("div");
+            convoItem.classList.add("conversation-item");
+            convoItem.innerHTML = `
+                <div class="conversation-avatar">
+                    <span class="avatar">${convo.initials}</span>
+                </div>
+                <div class="conversation-info">
+                    <h4>${convo.username}</h4>
+                    <p class="preview">${convo.latest_message}</p>
+                </div>
+            `;
+            convoItem.onclick = () => openChat(convo.id);
+            conversationList.appendChild(convoItem);
+        });
+    } catch (error) {
+        console.error("Error loading conversations:", error);
+    }
+}
+
+// ✅ Open Chat Window when Clicking a Conversation
+function openChat(convoId) {
+    console.log("Opening chat for conversation ID:", convoId);
+    document.getElementById("chatBox").innerHTML = `<p>Loading chat...</p>`;
+
+    fetch(`/messages?convo_id=${convoId}`)
+        .then(response => response.json())
+        .then(messages => {
+            document.getElementById("chatBox").innerHTML = "";
+            messages.forEach(msg => {
+                const msgElement = document.createElement("div");
+                msgElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
+                msgElement.textContent = msg.message;
+                document.getElementById("chatBox").appendChild(msgElement);
+            });
+        })
+        .catch(error => console.error("Error loading messages:", error));
+}
+
+// ✅ Send Message Function
+async function sendMessage() {
+    const messageInput = document.getElementById("messageInput");
+    const message = messageInput.value.trim();
+    if (!message) return;
+
+    const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message })
+    });
+
+    const data = await response.json();
+    document.getElementById("chatBox").innerHTML += `<div class="message agent-message">${data.reply}</div>`;
+
+    messageInput.value = "";
+}
+
+// ✅ Auto-Update Conversations Every 5 Seconds
+setInterval(loadConversations, 5000);
+
+// ✅ Run functions on page load
+document.addEventListener("DOMContentLoaded", function () {
+    loadConversations();
+});
+
+
 // ✅ Notify Dashboard when a new message arrives
 async function listenForNewMessages() {
 const socket = io({
