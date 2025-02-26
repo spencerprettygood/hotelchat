@@ -150,7 +150,7 @@ def handoff():
 
 @app.route('/')
 def index():
-    return send_file('dashboard.html')
+    return render_template("dashboard.html")  
 
 
 if __name__ == "__main__":
