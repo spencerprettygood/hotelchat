@@ -48,10 +48,6 @@ def initialize_database():
             user TEXT NOT NULL,
             message TEXT NOT NULL,
             sender TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            client_name TEXT,
-            client_contact TEXT,
-            stay_date TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         )
@@ -62,6 +58,51 @@ def initialize_database():
 
 initialize_database()
 
+# ✅ Add Test Conversations on Startup
+def add_test_conversations():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # Check if there are already existing conversations
+    c.execute("SELECT COUNT(*) FROM conversations")
+    existing_convos = c.fetchone()[0]
+
+    if existing_convos == 0:
+        print("🔹 No conversations found. Adding test conversations...")
+        
+        # Insert fake conversations
+        test_conversations = [
+            ("john_doe", "Hey, I need help with a bet."),
+            ("jane_smith", "How do I withdraw my winnings?"),
+            ("mark_taylor", "What are the odds for tonight’s game?"),
+        ]
+
+        convo_ids = []
+        for username, message in test_conversations:
+            c.execute("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", (username, message))
+            convo_ids.append(c.lastrowid)
+
+        # Insert test messages into the chat
+        test_messages = [
+            (convo_ids[0], "john_doe", "Hey, I need help with a bet.", "user"),
+            (convo_ids[0], "AI", "Sure! What do you need help with?", "ai"),
+            (convo_ids[1], "jane_smith", "How do I withdraw my winnings?", "user"),
+            (convo_ids[1], "AI", "You can withdraw via Sinpe Móvil.", "ai"),
+            (convo_ids[2], "mark_taylor", "What are the odds for tonight’s game?", "user"),
+            (convo_ids[2], "AI", "Let me check the latest odds for you.", "ai"),
+        ]
+
+        for convo_id, user, message, sender in test_messages:
+            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+                      (convo_id, user, message, sender))
+
+        conn.commit()
+        print("✅ Test conversations added.")
+
+    conn.close()
+
+# Run the function on startup
+add_test_conversations()
 
 # ✅ Define User Class for Login
 class Agent(UserMixin):
@@ -117,15 +158,6 @@ def get_conversations():
     conn.close()
     return jsonify(conversations)
 
-# ✅ Store Messages
-def log_message(conversation_id, user, message, sender):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)",
-              (conversation_id, user, message, sender))
-    conn.commit()
-    conn.close()
-
 # ✅ Fetch Chat Messages for a Conversation
 @app.route("/messages", methods=["GET"])
 def get_messages():
@@ -161,26 +193,6 @@ def chat():
 
     socketio.emit("new_message", {"conversation_id": convo_id, "message": ai_reply, "sender": "ai"})
     return jsonify({"reply": ai_reply})
-
-# ✅ Assign Chat to Agent
-@app.route("/assign_chat", methods=["POST"])
-@login_required
-def assign_chat():
-    data = request.get_json()
-    convo_id = data.get("convo_id")
-    agent_name = current_user.username
-
-    if not convo_id:
-        return jsonify({"message": "Missing conversation ID"}), 400
-
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("UPDATE conversations SET assigned_agent = ? WHERE id = ?", (agent_name, convo_id))
-    conn.commit()
-    conn.close()
-
-    socketio.emit("chat_assigned", {"conversation_id": convo_id, "agent": agent_name})
-    return jsonify({"message": f"Conversation {convo_id} assigned to {agent_name}."})
 
 # ✅ Serve the Dashboard
 @app.route("/")
