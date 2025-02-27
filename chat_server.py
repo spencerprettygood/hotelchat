@@ -22,7 +22,7 @@ def initialize_database():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    # Create the conversations table if it doesn't exist
+    # ✅ Create conversations table if it doesn't exist
     c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +33,7 @@ def initialize_database():
         )
     ''')
 
-    # Create the messages table if it doesn't exist
+    # ✅ Create messages table if it doesn't exist
     c.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +51,7 @@ def initialize_database():
     conn.commit()
     conn.close()
 
-# ✅ Call the function to ensure tables are created
+# ✅ Call the function to ensure database tables exist
 initialize_database()
 
 
