@@ -3,66 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Casino AI - Admin Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"></script>
+    <title>Casino AI Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
     <script defer src="/static/dashboard.js"></script>
 </head>
 <body>
     <!-- ✅ Login Page -->
-    <div id="loginPage">
-        <div class="login-container">
-            <h2>Agent Login</h2>
-            <input type="text" id="username" placeholder="Username">
-            <input type="password" id="password" placeholder="Password">
-            <button onclick="login()">Login</button>
-        </div>
+    <div id="loginPage" class="login-container">
+        <h2>Agent Login</h2>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
     </div>
 
-    <!-- ✅ Dashboard (Hidden Until Login) -->
+    <!-- ✅ Dashboard -->
     <div id="dashboard" style="display: none;">
+        <!-- 🔹 Header -->
         <div class="header">
             <h2>Casino AI Dashboard</h2>
             <button onclick="logout()">Logout</button>
         </div>
 
+        <!-- 🔹 Main Container (3-column layout) -->
         <div class="container">
-            <!-- ✅ Sidebar (Navigation) -->
+            <!-- 🔹 Sidebar (First Column) -->
             <div class="sidebar">
                 <h3>Live Chat</h3>
-                <p><strong><a href="#" id="conversationsTab">Conversations</a></strong></p>
+                <p><strong>Conversations</strong></p>
                 <ul>
-                    <li onclick="showConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
-                    <li onclick="showConversations('your')">You <span id="yourCount">0</span></li>
-                    <li onclick="showConversations('team')">Team <span id="teamCount">0</span></li>
-                    <li onclick="showConversations('all')">All <span id="allCount">0</span></li>
+                    <li onclick="loadConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
+                    <li onclick="loadConversations('you')">You <span id="yourCount">0</span></li>
+                    <li onclick="loadConversations('team')">Team <span id="teamCount">0</span></li>
+                    <li onclick="loadConversations('all')">All <span id="allCount">0</span></li>
                 </ul>
-                <h3>Channels</h3>
+                <p><strong>Channels</strong></p>
                 <ul>
                     <li onclick="filterByChannel('whatsapp')">WhatsApp</li>
                     <li onclick="filterByChannel('instagram')">Instagram</li>
                 </ul>
             </div>
 
-            <!-- ✅ Middle Column (Conversations List) -->
-            <div class="conversation-panel" id="conversationPanel">
+            <!-- 🔹 Conversation List (Second Column) -->
+            <div class="conversation-panel">
                 <h3>Conversations</h3>
-                <ul id="conversationList" class="conversation-list"></ul>
+                <ul id="conversationList" class="conversation-list">
+                    <!-- Conversations will be loaded here dynamically -->
+                </ul>
             </div>
 
-            <!-- ✅ Right Panel (Chat Window) -->
+            <!-- 🔹 Chat Panel (Third Column) -->
             <div class="chat-panel">
                 <h3>Live Conversation</h3>
-
-                <!-- Chat Messages Container -->
                 <div class="chat-messages" id="chatBox"></div>
-
-                <!-- Typing Indicator -->
-                <div id="typingIndicator" class="typing-indicator">John is typing...</div>
-
-                <!-- Chat Input Box -->
                 <div class="chat-input">
-                    <input type="text" id="messageInput" placeholder="Type a message..." onkeypress="handleKeyPress(event)">
+                    <input type="text" id="messageInput" placeholder="Type a message...">
                     <button onclick="sendMessage()">Send</button>
                 </div>
             </div>
