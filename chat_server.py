@@ -62,6 +62,55 @@ def initialize_database():
 
 initialize_database()
 
+# ✅ Add Test Conversations & Messages
+def add_test_conversations():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # Check if there are already existing conversations
+    c.execute("SELECT COUNT(*) FROM conversations")
+    existing_convos = c.fetchone()[0]
+
+    if existing_convos == 0:
+        print("🔹 No conversations found. Adding test conversations...")
+        
+        # Insert fake conversations
+        test_conversations = [
+            ("john_doe", "Hey, I need help with a bet."),
+            ("jane_smith", "How do I withdraw my winnings?"),
+            ("mark_taylor", "What are the odds for tonight’s game?"),
+        ]
+
+        for username, message in test_conversations:
+            c.execute("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", (username, message))
+
+        # Get conversation IDs
+        c.execute("SELECT id FROM conversations")
+        convo_ids = [row[0] for row in c.fetchall()]
+
+        # Insert test messages into the chat
+        test_messages = [
+            (convo_ids[0], "john_doe", "Hey, I need help with a bet.", "user"),
+            (convo_ids[0], "AI", "Sure! What do you need help with?", "ai"),
+            (convo_ids[1], "jane_smith", "How do I withdraw my winnings?", "user"),
+            (convo_ids[1], "AI", "You can withdraw via Sinpe Móvil.", "ai"),
+            (convo_ids[2], "mark_taylor", "What are the odds for tonight’s game?", "user"),
+            (convo_ids[2], "AI", "Let me check the latest odds for you.", "ai"),
+        ]
+
+        for convo_id, user, message, sender in test_messages:
+            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+                      (convo_id, user, message, sender))
+
+        conn.commit()
+        print("✅ Test conversations added.")
+
+    conn.close()
+
+# Run the function on startup
+add_test_conversations()
+
+
 # ✅ Define User Class for Login
 class Agent(UserMixin):
     def __init__(self, id, username):
