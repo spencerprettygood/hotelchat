@@ -27,33 +27,40 @@
         </div>
 
         <div class="container">
-        <!-- Sidebar -->
-<div class="sidebar">
-    <h3>Live Chat</h3>
-    <p><strong>Conversations</strong></p>
-    <ul>
-        <li>Unassigned <span id="unassignedCount">0</span></li>
-        <li>You <span id="yourCount">0</span></li>
-        <li>Team <span id="teamCount">0</span></li>
-        <li>All <span id="allCount">0</span></li>
-    </ul>
-
-    <p><strong>Unassigned Conversations</strong></p>
-    <div id="unassignedConversations" class="conversation-list">
-        <!-- Conversations will be dynamically added here -->
+    <!-- Left Sidebar (Navigation) -->
+    <div class="sidebar">
+        <h3>Live Chat</h3>
+        <p><strong>Conversations</strong></p>
+        <ul>
+            <li><a href="#" onclick="showConversations()">Unassigned <span id="unassignedCount">0</span></a></li>
+            <li><a href="#">You <span id="yourCount">0</span></a></li>
+            <li><a href="#">Team <span id="teamCount">0</span></a></li>
+            <li><a href="#">All <span id="allCount">0</span></a></li>
+        </ul>
+        <p><strong>Channels</strong></p>
+        <ul>
+            <li>WhatsApp</li>
+            <li>Instagram</li>
+        </ul>
     </div>
 
-    <p><strong>Assigned to Me</strong></p>
-    <div id="assignedConversations" class="conversation-list">
-        <!-- Assigned conversations will appear here -->
+    <!-- Middle Column (Conversations List) -->
+    <div class="conversation-panel">
+        <h3>Conversations</h3>
+        <ul id="conversationList">
+            <!-- Conversations will be loaded here dynamically -->
+        </ul>
     </div>
 
-    <p><strong>Channels</strong></p>
-    <ul>
-        <li>WhatsApp</li>
-        <li>Instagram</li>
-    </ul>
+    <!-- Right Panel (Chat Window) -->
+    <div class="chat-panel">
+        <h3>Live Conversation</h3>
+        <div class="chat-messages" id="chatBox"></div>
+        <input type="text" id="messageInput" placeholder="Type a message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
 </div>
+
 
 
             <!-- Chat Panel -->
