@@ -84,16 +84,28 @@ body {
 
 .container {
     display: flex;
-    height: 80%;
+    height: 80vh;
+    gap: 10px;
 }
 
+/* Sidebar (Navigation) */
 .sidebar {
-    width: 300px;
+    width: 250px;
     background: #f0f0f5;
     padding: 20px;
     border-right: 2px solid #ddd;
 }
 
+/* Middle Column (Conversations) */
+.conversation-panel {
+    width: 300px;
+    background: #ffffff;
+    padding: 20px;
+    border-right: 2px solid #ddd;
+    overflow-y: auto;
+}
+
+/* Chat Panel (Right Side) */
 .chat-panel {
     flex-grow: 1;
     padding: 20px;
@@ -117,6 +129,7 @@ button {
     cursor: pointer;
     transition: background 0.3s;
 }
+
 
 /* ✅ Conversation List Styling */
 .conversation-list {
