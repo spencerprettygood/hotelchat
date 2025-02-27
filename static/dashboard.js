@@ -66,7 +66,7 @@ function logout() {
         checkLogin(); // Redirect back to login screen
     });
 }
-
+  
 // ✅ Fetch and Display Conversations
 async function fetchConversations() {
     try {
@@ -117,13 +117,6 @@ async function loadChat(convoId) {
     }
 }
 
-// ✅ Load Messages When Clicking a Conversation
-async function loadConversation(convoId, username) {
-    const response = await fetch(`/messages?user=${convoId}`);
-    if (!response.ok) {
-        console.error("Failed to load messages");
-        return;
-    }
 
     const messages = await response.json();
     chatBox.innerHTML = `<h3>Chat with ${username}</h3>`; // Update chat header
