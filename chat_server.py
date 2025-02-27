@@ -23,6 +23,7 @@ def initialize_database():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
+    # ✅ Ensure agents table exists
     c.execute('''
         CREATE TABLE IF NOT EXISTS agents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +32,7 @@ def initialize_database():
         )
     ''')
 
+    # ✅ Ensure conversations table exists
     c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,20 +43,33 @@ def initialize_database():
         )
     ''')
 
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conversation_id INTEGER NOT NULL,
-            user TEXT NOT NULL,
-            message TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        )
-    ''')
+    # ✅ Check if messages table exists with the correct columns
+    c.execute("PRAGMA table_info(messages)")
+    existing_columns = [row[1] for row in c.fetchall()]
 
-    conn.commit()
+    if "conversation_id" not in existing_columns:
+        print("⚠️ Fixing messages table: Adding missing conversation_id column.")
+        
+        # Drop the old messages table if it doesn't have conversation_id
+        c.execute("DROP TABLE IF EXISTS messages")
+        
+        # Create the correct messages table
+        c.execute('''
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                user TEXT NOT NULL,
+                message TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            )
+        ''')
+        conn.commit()
+        print("✅ Fixed messages table.")
+
     conn.close()
+
 
 initialize_database()
 
