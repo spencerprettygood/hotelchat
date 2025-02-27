@@ -1,6 +1,6 @@
 /* ✅ General Styles */
 body {
-    font-family: Arial, sans-serif;
+    font-family: 'Arial', sans-serif;
     background-color: #f4f4f4;
     margin: 0;
     padding: 0;
@@ -22,47 +22,56 @@ body {
     border-radius: 8px;
     box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
     width: 300px;
+    text-align: left;
 }
 
 .login-container h2 {
     margin-bottom: 15px;
+    text-align: center;
 }
 
 .login-container input {
     width: 100%;
-    padding: 10px;
-    margin: 8px 0;
+    padding: 12px;
+    margin: 10px 0;
     border: 1px solid #ddd;
-    border-radius: 5px;
+    border-radius: 6px;
 }
 
 .login-container button {
     width: 100%;
-    padding: 10px;
+    padding: 12px;
     background: #007aff;
     color: white;
     border: none;
-    border-radius: 5px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 16px;
+    transition: background 0.3s;
 }
 
 .login-container button:hover {
     background: #005bb5;
 }
 
-/* ✅ Dashboard Container */
+/* ✅ Dashboard Layout */
 .container {
     display: flex;
     height: 100vh;
+    background: #ffffff;
 }
 
-/* ✅ Sidebar Styling */
+/* ✅ Sidebar (First Panel - Navigation) */
 .sidebar {
     width: 250px;
-    background: #f0f0f5;
+    background: #f7f7f7;
     padding: 20px;
     border-right: 2px solid #ddd;
     text-align: left;
+}
+
+.sidebar h3 {
+    margin-bottom: 15px;
 }
 
 .sidebar ul {
@@ -71,112 +80,142 @@ body {
 }
 
 .sidebar ul li {
-    padding: 10px;
+    padding: 12px;
     cursor: pointer;
-    transition: background 0.3s;
+    font-size: 14px;
+    transition: background 0.3s ease-in-out;
+    border-radius: 6px;
 }
 
 .sidebar ul li:hover {
-    background: #ddd;
+    background: #e0e0e0;
 }
 
-/* ✅ Middle Panel (Conversations List) */
+/* ✅ Conversations Panel (Second Panel) */
 .conversation-panel {
     width: 300px;
     background: #ffffff;
-    padding: 20px;
+    padding: 15px;
     border-right: 2px solid #ddd;
     overflow-y: auto;
 }
 
+.conversation-panel h3 {
+    text-align: left;
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+/* ✅ Conversation List */
 .conversation-list {
     list-style: none;
     padding: 0;
 }
 
 .conversation-item {
-    padding: 10px;
+    display: flex;
+    align-items: center;
+    padding: 12px;
     border-bottom: 1px solid #ddd;
     cursor: pointer;
     transition: background 0.3s;
+    border-radius: 6px;
 }
 
 .conversation-item:hover {
-    background: #f9f9f9;
+    background: #f1f1f1;
 }
 
-/* ✅ Chat Panel (Right Side) */
+.conversation-item.selected {
+    background: #007aff;
+    color: white;
+}
+
+/* ✅ Chat Panel (Third Panel) */
 .chat-panel {
     flex-grow: 1;
     padding: 20px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    background: #f8f9fa;
 }
 
+/* ✅ Chat Messages Box */
 .chat-messages {
-    height: 500px;
+    flex-grow: 1;
     overflow-y: auto;
     border: 1px solid #ddd;
     padding: 15px;
     border-radius: 8px;
-    background: #fafafa;
-    flex-grow: 1;
+    background: white;
+    max-height: 550px;
 }
 
-/* ✅ Chat Input Box */
+/* ✅ Chat Bubbles */
+.message {
+    max-width: 75%;
+    padding: 12px;
+    border-radius: 15px;
+    margin: 5px 0;
+    font-size: 14px;
+    display: inline-block;
+}
+
+/* User Messages */
+.user-message {
+    background: #007aff;
+    color: white;
+    align-self: flex-end;
+    text-align: right;
+    border-bottom-right-radius: 0;
+}
+
+/* Agent Messages */
+.agent-message {
+    background: #e9ecef;
+    color: black;
+    align-self: flex-start;
+    border-bottom-left-radius: 0;
+}
+
+/* ✅ Timestamp */
+.timestamp {
+    font-size: 11px;
+    margin-top: 3px;
+    opacity: 0.7;
+}
+
+/* ✅ Chat Input Section */
 .chat-input {
     display: flex;
     align-items: center;
     padding: 10px;
-    background: #ffffff;
+    background: white;
     border-top: 1px solid #ddd;
 }
 
 .chat-input input {
     flex-grow: 1;
-    padding: 10px;
+    padding: 12px;
     border: 1px solid #ddd;
-    border-radius: 5px;
+    border-radius: 20px;
+    outline: none;
     margin-right: 10px;
 }
 
 .chat-input button {
     background: #007aff;
     color: white;
-    padding: 10px 15px;
+    padding: 12px 18px;
     border: none;
-    border-radius: 8px;
+    border-radius: 20px;
     cursor: pointer;
     transition: background 0.3s;
+    font-size: 14px;
 }
 
 .chat-input button:hover {
-    background: #005bb5;
-}
-
-/* ✅ Message Bubbles */
-.message {
-    padding: 10px;
-    margin: 8px 0;
-    border-radius: 8px;
-    max-width: 75%;
-    font-size: 14px;
-    display: inline-block;
-}
-
-.user-message {
-    background-color: #007aff;
-    color: white;
-    align-self: flex-end;
-    border-bottom-right-radius: 0;
-}
-
-.agent-message {
-    background-color: #e5e5ea;
-    color: black;
-    align-self: flex-start;
-    border-bottom-left-radius: 0;
+    background: #0056b3;
 }
 
 /* ✅ Typing Indicator */
@@ -184,7 +223,7 @@ body {
     font-style: italic;
     color: #666;
     padding: 10px;
-    display: none; /* Hidden by default */
+    display: none;
 }
 
 /* ✅ Responsive Design */
