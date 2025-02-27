@@ -4,11 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Casino AI - Admin Dashboard</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"></script>
-    <script src="/static/dashboard.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"></script>
+    <script defer src="/static/dashboard.js"></script>
 </head>
 <body>
     <!-- ✅ Login Page -->
@@ -21,60 +19,54 @@
         </div>
     </div>
 
-<!-- ✅ Dashboard -->
-<div id="dashboard">
-    <div class="header">
-        <h2>Casino AI Dashboard</h2>
-        <button onclick="logout()">Logout</button>
-    </div>
-
-    <div class="container">
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <h3>Live Chat</h3>
-            <p><strong><a href="#" id="conversationsTab">Conversations</a></strong></p>
-            <ul>
-                <li onclick="showConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
-                <li onclick="showConversations('your')">You <span id="yourCount">0</span></li>
-                <li onclick="showConversations('team')">Team <span id="teamCount">0</span></li>
-                <li onclick="showConversations('all')">All <span id="allCount">0</span></li>
-            </ul>
-
-            <!-- 🔹 Add Conversation List Section Here -->
-           <!-- Unassigned Conversations -->
-<!-- ✅ New Conversations Section (Hidden by Default) -->
-<div id="conversationPanel" style="display: none;">
-    <h2>Conversations</h2>
-    <div id="conversationList"></div>
-</div>
-
-            <p><strong>Channels</strong></p>
-            <ul>
-                <li onclick="filterByChannel('whatsapp')">WhatsApp</li>
-                <li onclick="filterByChannel('instagram')">Instagram</li>
-            </ul>
+    <!-- ✅ Dashboard (Hidden Until Login) -->
+    <div id="dashboard" style="display: none;">
+        <div class="header">
+            <h2>Casino AI Dashboard</h2>
+            <button onclick="logout()">Logout</button>
         </div>
 
-       <!-- Chat Panel -->
-<div class="chat-panel">
-    <h3>Live Conversation</h3>
-    
-    <!-- Chat Messages Container -->
-    <div class="chat-messages" id="chatBox"></div>
-    
-    <!-- Typing Indicator -->
-    <div id="typingIndicator" class="typing-indicator">John is typing...</div>
+        <div class="container">
+            <!-- ✅ Sidebar (Navigation) -->
+            <div class="sidebar">
+                <h3>Live Chat</h3>
+                <p><strong><a href="#" id="conversationsTab">Conversations</a></strong></p>
+                <ul>
+                    <li onclick="showConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
+                    <li onclick="showConversations('your')">You <span id="yourCount">0</span></li>
+                    <li onclick="showConversations('team')">Team <span id="teamCount">0</span></li>
+                    <li onclick="showConversations('all')">All <span id="allCount">0</span></li>
+                </ul>
+                <h3>Channels</h3>
+                <ul>
+                    <li onclick="filterByChannel('whatsapp')">WhatsApp</li>
+                    <li onclick="filterByChannel('instagram')">Instagram</li>
+                </ul>
+            </div>
 
-    <!-- Chat Input Box -->
-    <div class="chat-input">
-        <input type="text" id="messageInput" placeholder="Type a message...">
-        <button onclick="sendMessage()">Send</button>
+            <!-- ✅ Middle Column (Conversations List) -->
+            <div class="conversation-panel" id="conversationPanel">
+                <h3>Conversations</h3>
+                <ul id="conversationList" class="conversation-list"></ul>
+            </div>
+
+            <!-- ✅ Right Panel (Chat Window) -->
+            <div class="chat-panel">
+                <h3>Live Conversation</h3>
+
+                <!-- Chat Messages Container -->
+                <div class="chat-messages" id="chatBox"></div>
+
+                <!-- Typing Indicator -->
+                <div id="typingIndicator" class="typing-indicator">John is typing...</div>
+
+                <!-- Chat Input Box -->
+                <div class="chat-input">
+                    <input type="text" id="messageInput" placeholder="Type a message..." onkeypress="handleKeyPress(event)">
+                    <button onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
     </div>
-</div>
-    </div>
-</div>
-
-
-    <script src="/static/dashboard.js"></script>
 </body>
 </html>
