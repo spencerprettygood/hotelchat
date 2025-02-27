@@ -38,7 +38,7 @@ async function login() {
     }
 
     try {
-        const response = await fetch("https://patroni.pythonanywhere.com/login", {
+        const response = await fetch("/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
@@ -49,7 +49,7 @@ async function login() {
             localStorage.setItem("agent", username);
             document.getElementById("loginPage").style.display = "none";
             document.getElementById("dashboard").style.display = "block";
-            fetchMessages(); // Load chat messages after login
+            fetchConversations(); // Fetch conversations after login
         } else {
             alert(data.message || "Login failed.");
         }
@@ -58,6 +58,7 @@ async function login() {
         console.error("Login error:", error);
     }
 }
+
 
 // ✅ Agent Logout
 function logout() {
