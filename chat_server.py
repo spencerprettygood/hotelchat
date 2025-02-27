@@ -23,16 +23,15 @@ def initialize_database():
     c = conn.cursor()
 
     # Create the conversations table if it doesn't exist
-        c.execute('''
+    c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             latest_message TEXT,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            assigned_agent TEXT DEFAULT NULL  -- ✅ Added this field
+            assigned_agent TEXT DEFAULT NULL
         )
     ''')
-
 
     # Create the messages table if it doesn't exist
     c.execute('''
@@ -52,7 +51,7 @@ def initialize_database():
     conn.commit()
     conn.close()
 
-# Call the function to ensure tables are created
+# ✅ Call the function to ensure tables are created
 initialize_database()
 
 
@@ -250,14 +249,14 @@ def add_test_conversations():
         sample_data = [
             ("John Doe", "Hello, I need help with a booking."),
             ("Alice Smith", "Can I get a refund?"),
-            ("Michael Johnson", "How do I deposit money?"),
+            ("Michael Johnson", "How do I deposit money?")
         ]
         c.executemany("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", sample_data)
         conn.commit()
 
     conn.close()
 
-# Call function to add test data
+# ✅ Call function to add test data
 add_test_conversations()
 
 
