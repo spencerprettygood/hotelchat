@@ -16,6 +16,7 @@ document.addEventListener("DOMContentLoaded", function () {
 // ✅ Check if an agent is logged in
 function checkLogin() {
     const agent = localStorage.getItem("agent");
+
     if (agent) {
         document.getElementById("loginPage").style.display = "none";
         document.getElementById("dashboard").style.display = "block";
@@ -60,10 +61,8 @@ async function login() {
 
 // ✅ Agent Logout
 function logout() {
-    fetch("/logout", { method: "POST" }).then(() => {
-        localStorage.removeItem("agent");
-        checkLogin(); // Redirect to login
-    });
+    localStorage.removeItem("agent");
+    checkLogin();
 }
 
 // ✅ Fetch and Display Conversations
@@ -110,7 +109,7 @@ async function loadChat(convoId, username) {
         });
 
         chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll
-        updateClientInfo(username); // ✅ Update client panel
+        updateClientInfo(username);
     } catch (error) {
         console.error("Error loading chat:", error);
     }
@@ -206,3 +205,4 @@ document.addEventListener("DOMContentLoaded", function() {
 
 // ✅ Auto-Update Conversations Every 5 Seconds
 setInterval(loadConversations, 5000);
+
