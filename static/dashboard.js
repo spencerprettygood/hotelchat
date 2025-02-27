@@ -67,61 +67,54 @@ function logout() {
     });
 }
 
-// ✅ Fetch and Display Messages
-async function fetchMessages() {
+// ✅ Fetch and Display Conversations
+async function fetchConversations() {
     try {
-        const response = await fetch("/messages", {
-            method: "GET",
-            credentials: "include",  // ✅ Ensures session cookies are sent
-            headers: { "Content-Type": "application/json" },
-        });
+        const response = await fetch("/conversations"); // Fetch from backend
+        if (!response.ok) throw new Error("Failed to fetch conversations");
 
-        if (!response.ok) {
-            console.error("Failed to fetch messages:", response.status);
-            return;
-        }
+        const conversations = await response.json();
+        const conversationList = document.getElementById("conversationList");
+        conversationList.innerHTML = ""; // Clear existing list
+
+        conversations.forEach(convo => {
+            const convoItem = document.createElement("li");
+            convoItem.innerHTML = `<strong>${convo.username}</strong> <br> ${convo.latest_message}`;
+            convoItem.classList.add("conversation-item");
+            convoItem.onclick = () => loadChat(convo.id);
+            conversationList.appendChild(convoItem);
+        });
+    } catch (error) {
+        console.error("Error loading conversations:", error);
+    }
+}
+
+// Function to show conversations when clicking on "Conversations"
+function showConversations() {
+    fetchConversations();
+}
+
+// Load chat when clicking on a conversation
+async function loadChat(convoId) {
+    try {
+        const response = await fetch(`/messages?conversation_id=${convoId}`);
+        if (!response.ok) throw new Error("Failed to load messages");
 
         const messages = await response.json();
+        const chatBox = document.getElementById("chatBox");
         chatBox.innerHTML = "";
 
         messages.forEach(msg => {
             const messageElement = document.createElement("div");
-            messageElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
+            messageElement.classList.add(msg.sender === "user" ? "user-message" : "agent-message");
             messageElement.textContent = msg.message;
             chatBox.appendChild(messageElement);
         });
 
-        chatBox.scrollTop = chatBox.scrollHeight;  // Auto-scroll to latest message
+        chatBox.scrollTop = chatBox.scrollHeight; // Scroll to latest message
     } catch (error) {
-        console.error("Error fetching messages:", error);
+        console.error("Error loading chat:", error);
     }
-}
-  
-// ✅ Fetch and Display Conversations
-async function fetchAndDisplayConversations() {
-    const response = await fetch("/conversations");
-    if (!response.ok) {
-        console.error("Failed to fetch conversations");
-        return;
-    }
-
-    const conversations = await response.json();
-    const conversationList = document.getElementById("unassignedConversations");
-    conversationList.innerHTML = "";
-
-    conversations.forEach(convo => {
-        const convoElement = document.createElement("div");
-        convoElement.classList.add("conversation-item");
-        convoElement.innerHTML = `
-            <div class="avatar">${convo.username.charAt(0).toUpperCase()}</div>
-            <div class="conversation-info">
-                <strong>${convo.username}</strong>
-                <p>${convo.latest_message.substring(0, 25)}...</p>
-            </div>
-        `;
-        convoElement.onclick = () => loadConversation(convo.id, convo.username); // Click event
-        conversationList.appendChild(convoElement);
-    });
 }
 
 // ✅ Load Messages When Clicking a Conversation
