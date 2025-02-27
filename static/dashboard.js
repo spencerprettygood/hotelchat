@@ -244,11 +244,18 @@ setInterval(loadConversations, 5000);
 
 // ✅ Run functions on page load
 document.addEventListener("DOMContentLoaded", function () {
-    document.getElementById("conversationsTab").addEventListener("click", function () {
-        document.getElementById("conversationPanel").style.display = "block"; // ✅ Show conversation panel
-        loadConversations(); // ✅ Fetch and display conversations only when tab is clicked
-    });
+    const conversationsTab = document.getElementById("conversationsTab");
+    const conversationPanel = document.getElementById("conversationPanel");
+
+    if (conversationsTab) {
+        conversationsTab.addEventListener("click", function (event) {
+            event.preventDefault(); // Prevent default link behavior
+            conversationPanel.style.display = "block"; // Show the panel
+            loadConversations(); // Fetch and display conversations
+        });
+    }
 });
+
 
 
 
