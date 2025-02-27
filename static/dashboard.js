@@ -66,6 +66,36 @@ function logout() {
         checkLogin(); // Redirect back to login screen
     });
 }
+
+// ✅ Fetch and Display Messages
+async function fetchMessages() {
+    try {
+        const response = await fetch("/messages", {
+            method: "GET",
+            credentials: "include",  // ✅ Ensures session cookies are sent
+            headers: { "Content-Type": "application/json" },
+        });
+
+        if (!response.ok) {
+            console.error("Failed to fetch messages:", response.status);
+            return;
+        }
+
+        const messages = await response.json();
+        chatBox.innerHTML = "";
+
+        messages.forEach(msg => {
+            const messageElement = document.createElement("div");
+            messageElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
+            messageElement.textContent = msg.message;
+            chatBox.appendChild(messageElement);
+        });
+
+        chatBox.scrollTop = chatBox.scrollHeight;  // Auto-scroll to latest message
+    } catch (error) {
+        console.error("Error fetching messages:", error);
+    }
+}
   
 // ✅ Fetch and Display Conversations
 async function fetchConversations() {
