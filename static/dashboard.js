@@ -244,8 +244,12 @@ setInterval(loadConversations, 5000);
 
 // ✅ Run functions on page load
 document.addEventListener("DOMContentLoaded", function () {
-    loadConversations();
+    document.getElementById("conversationsTab").addEventListener("click", function () {
+        document.getElementById("conversationPanel").style.display = "block"; // ✅ Show conversation panel
+        loadConversations(); // ✅ Fetch and display conversations only when tab is clicked
+    });
 });
+
 
 
 // ✅ Notify Dashboard when a new message arrives
