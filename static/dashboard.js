@@ -72,19 +72,43 @@ async function loadConversations() {
         if (!response.ok) throw new Error("Failed to fetch conversations");
 
         const conversations = await response.json();
-        conversationList.innerHTML = "";
+        conversationList.innerHTML = ""; // Clear previous list
 
         conversations.forEach(convo => {
-            const convoItem = document.createElement("li");
+            // Create Conversation Container
+            const convoItem = document.createElement("div");
             convoItem.classList.add("conversation-item");
-            convoItem.innerHTML = `<strong>${convo.username}</strong> <br> ${convo.latest_message}`;
             convoItem.onclick = () => loadChat(convo.id, convo.username);
+
+            // Avatar Circle (First Letter of Username)
+            const avatar = document.createElement("div");
+            avatar.classList.add("conversation-avatar");
+            avatar.textContent = convo.username.charAt(0).toUpperCase(); 
+
+            // Conversation Details (Name + Preview)
+            const details = document.createElement("div");
+            details.classList.add("conversation-details");
+
+            const name = document.createElement("div");
+            name.classList.add("name");
+            name.textContent = convo.username;
+
+            const preview = document.createElement("div");
+            preview.classList.add("preview");
+            preview.textContent = convo.latest_message || "No messages yet";
+
+            // Append Elements
+            details.appendChild(name);
+            details.appendChild(preview);
+            convoItem.appendChild(avatar);
+            convoItem.appendChild(details);
             conversationList.appendChild(convoItem);
         });
     } catch (error) {
         console.error("Error loading conversations:", error);
     }
 }
+
 
 // ✅ Show Conversations when clicking the tab
 conversationsTab.addEventListener("click", function (event) {
