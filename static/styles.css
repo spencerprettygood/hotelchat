@@ -104,9 +104,10 @@ body {
 }
 
 /* ✅ Chat Panel (Third Column) */
+/* ✅ Chat Panel Adjustments */
 .chat-panel {
     flex-grow: 1;
-    max-width: 550px; /* Prevents stretching too much */
+    max-width: 550px;
     padding: 20px;
     display: flex;
     flex-direction: column;
@@ -115,7 +116,7 @@ body {
     border-left: 2px solid #ddd;
 }
 
-/* ✅ Chat Messages */
+/* ✅ Chat Messages Box */
 .chat-messages {
     height: 100%;
     min-height: 450px;
@@ -125,52 +126,58 @@ body {
     border-radius: 15px;
     display: flex;
     flex-direction: column;
+    gap: 10px; /* Adds spacing between messages */
 }
 
-/* ✅ Individual Message Styling */
+/* ✅ Message Bubbles */
 .message {
     max-width: 75%;
     padding: 12px 16px;
     font-size: 14px;
     position: relative;
-    margin: 8px 0;
+    margin: 5px 0;
     border-radius: 20px;
     display: inline-block;
     line-height: 1.4;
     word-wrap: break-word;
 }
 
-/* ✅ User Messages (Blue iPhone Bubble) */
+/* ✅ User Messages (Blue iPhone-style) */
 .user-message {
     background-color: #007aff;
     color: white;
     align-self: flex-end;
     border-bottom-right-radius: 6px;
     text-align: left;
+    padding: 12px 16px;
+    max-width: 60%;
+    word-break: break-word;
+    box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.2);
 }
 
-/* ✅ Agent Messages (Gray iPhone Bubble) */
+/* ✅ Agent Messages (Gray iPhone-style) */
 .agent-message {
     background-color: #e5e5ea;
     color: black;
     align-self: flex-start;
     border-bottom-left-radius: 6px;
     text-align: left;
+    padding: 12px 16px;
+    max-width: 60%;
+    word-break: break-word;
+    box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.2);
 }
 
-/* ✅ Typing Indicator */
-.typing-indicator {
-    background: #e5e5ea;
-    color: black;
-    padding: 8px 12px;
-    border-radius: 15px;
-    font-size: 14px;
-    width: fit-content;
-    align-self: flex-start;
+/* ✅ Timestamp Formatting */
+.message-timestamp {
+    font-size: 12px;
+    color: #666;
+    display: block;
+    text-align: right;
     margin-top: 5px;
 }
 
-/* ✅ Chat Input */
+/* ✅ Chat Input Fix */
 .chat-input {
     display: flex;
     align-items: center;
@@ -203,6 +210,7 @@ body {
 .chat-input button:hover {
     background: #005bb5;
 }
+
 
 /* ✅ Responsive Design */
 @media (max-width: 1024px) {
