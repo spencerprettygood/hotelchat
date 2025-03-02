@@ -267,4 +267,3 @@ document.addEventListener("DOMContentLoaded", function () {
 
 // ✅ Auto-Update Conversations Every 5 Seconds
 setInterval(loadConversations, 5000);
-
