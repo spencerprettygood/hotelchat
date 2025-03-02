@@ -38,6 +38,8 @@ function checkLogin() {
 
 // ✅ Agent Login
 async function login() {
+    console.log("✅ Login function is running");
+
     const username = document.getElementById("username").value;
     const password = document.getElementById("password").value;
 
@@ -56,17 +58,16 @@ async function login() {
         const data = await response.json();
         if (response.ok) {
             localStorage.setItem("agent", username);
-            document.getElementById("loginPage").style.display = "none";
-            document.getElementById("dashboard").style.display = "block";
-            loadConversations();
+            window.location.reload(); // Reload to apply login
         } else {
             alert(data.message || "Login failed.");
         }
     } catch (error) {
+        console.error("❌ ERROR: Login failed", error);
         alert("Error connecting to server.");
-        console.error("Login error:", error);
     }
 }
+
 
 // ✅ Agent Logout
 function logout() {
