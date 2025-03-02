@@ -11,6 +11,13 @@ const notificationSound = new Audio('/static/notification.mp3');
 document.addEventListener("DOMContentLoaded", function () {
     checkLogin();
     listenForNewMessages();
+
+    const loginButton = document.getElementById("loginButton");
+    if (loginButton) {
+        loginButton.addEventListener("click", login);
+    } else {
+        console.error("❌ ERROR: Login button not found.");
+    }
 });
 
 // ✅ Check if an agent is logged in
