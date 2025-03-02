@@ -218,13 +218,37 @@ function updateClientInfo(name) {
 }
 
 // ✅ Run Initial Functions
-document.addEventListener("DOMContentLoaded", function() {
+document.addEventListener("DOMContentLoaded", function () {
+    console.log("✅ Page Loaded - Running Initial Functions");
+
+    // Check if agent is logged in
     if (localStorage.getItem("agent")) {
-        document.getElementById("loginPage").style.display = "none";
-        document.getElementById("dashboard").style.display = "block";
-        loadConversations();
+        console.log("✅ Agent Found in Local Storage");
+        const loginPage = document.getElementById("loginPage");
+        const dashboard = document.getElementById("dashboard");
+
+        if (loginPage && dashboard) {
+            loginPage.style.display = "none";
+            dashboard.style.display = "block";
+        }
+
+        // Ensure conversations list exists before calling function
+        if (document.getElementById("conversationList")) {
+            loadConversations();
+        } else {
+            console.error("❌ ERROR: Conversation list element not found!");
+        }
+    } else {
+        console.log("🔒 No Agent Found - Showing Login Page");
     }
-    listenForNewMessages();
+
+    // Ensure Socket.IO is loaded before calling real-time functions
+    if (typeof io !== "undefined") {
+        console.log("✅ Socket.IO is loaded");
+        listenForNewMessages();
+    } else {
+        console.error("❌ ERROR: Socket.IO is not loaded. Check your script includes.");
+    }
 });
 
 // ✅ Auto-Update Conversations Every 5 Seconds
