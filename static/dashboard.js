@@ -12,13 +12,15 @@ document.addEventListener("DOMContentLoaded", function () {
     checkLogin();
     listenForNewMessages();
 
-    const loginButton = document.getElementById("loginButton");
+    const loginButton = document.querySelector("button[onclick='login()']");
     if (loginButton) {
         loginButton.addEventListener("click", login);
+        console.log("✅ Login button event listener added");
     } else {
         console.error("❌ ERROR: Login button not found.");
     }
 });
+
 
 // ✅ Check if an agent is logged in
 function checkLogin() {
