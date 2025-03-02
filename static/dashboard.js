@@ -252,13 +252,18 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     // Ensure Socket.IO is loaded before calling real-time functions
+  document.addEventListener("DOMContentLoaded", function () {
+    console.log("✅ Page Loaded - Running Initial Functions");
+
     if (typeof io !== "undefined") {
         console.log("✅ Socket.IO is loaded");
-        listenForNewMessages();
+        const socket = io.connect();
+        listenForNewMessages(socket);
     } else {
         console.error("❌ ERROR: Socket.IO is not loaded. Check your script includes.");
     }
 });
+
 
 // ✅ Auto-Update Conversations Every 5 Seconds
 setInterval(loadConversations, 5000);
