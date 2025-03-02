@@ -164,11 +164,20 @@ async function sendMessage() {
 }
 
 // ✅ Allow Sending Message by Pressing Enter
-document.getElementById("messageInput").addEventListener("keypress", function (event) {
-    if (event.key === "Enter") {
-        sendMessage();
+document.addEventListener("DOMContentLoaded", function () {
+    const messageInput = document.getElementById("messageInput");
+
+    if (messageInput) {
+        messageInput.addEventListener("keypress", function (event) {
+            if (event.key === "Enter") {
+                sendMessage();
+            }
+        });
+    } else {
+        console.error("❌ ERROR: 'messageInput' not found on page load.");
     }
 });
+
 
 // ✅ Add Message to Chat
 function addMessage(content, sender) {
