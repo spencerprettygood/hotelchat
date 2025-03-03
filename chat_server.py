@@ -1,3 +1,6 @@
+import gevent.monkey
+gevent.monkey.patch_all()  # Must be at the top, before any other imports
+
 from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -12,7 +15,7 @@ import requests
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 # Setup Login Manager
 login_manager = LoginManager()
