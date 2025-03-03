@@ -5,3 +5,5 @@ Flask-Login==0.6.3
 openai==0.28.0
 gunicorn==23.0.0
 eventlet==0.39.0
+twilio==9.3.3
+requests==2.32.3
