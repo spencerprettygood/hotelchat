@@ -9,7 +9,7 @@ import os
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')  # Explicitly use eventlet
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Setup Login Manager
 login_manager = LoginManager()
