@@ -52,9 +52,20 @@ async function login() {
 }
 
 function logout() {
-    localStorage.removeItem("agent");
-    fetch("/logout", { method: "POST" });
-    checkLogin();
+    fetch("/logout", { 
+        method: "POST",
+        credentials: 'include', // Send cookies for Flask-Login session
+        headers: { "Content-Type": "application/json" }
+    })
+    .then(response => {
+        if (response.ok) {
+            localStorage.removeItem("agent");
+            checkLogin();
+        } else {
+            console.error("Logout failed:", response.status);
+        }
+    })
+    .catch(error => console.error("Error during logout:", error));
 }
 
 async function loadConversations(filter = 'all') {
