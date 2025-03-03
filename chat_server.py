@@ -9,7 +9,7 @@ import os
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*")  # Remove async_mode, let it auto-select
 
 # Setup Login Manager
 login_manager = LoginManager()
@@ -21,23 +21,17 @@ DB_NAME = "chatbot.db"
 def initialize_database():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    # Create agents table
     c.execute('''CREATE TABLE IF NOT EXISTS agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL)''')
-    
-    # Create conversations table
     c.execute('''CREATE TABLE IF NOT EXISTS conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL,
         latest_message TEXT,
         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         assigned_agent TEXT DEFAULT NULL)''')
-    
-    # Drop and recreate messages table to ensure correct schema
-    c.execute("DROP TABLE IF EXISTS messages")  # Force recreate to fix schema
+    c.execute("DROP TABLE IF EXISTS messages")
     c.execute('''CREATE TABLE messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER NOT NULL,
@@ -46,8 +40,6 @@ def initialize_database():
         sender TEXT NOT NULL,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
-    
-    # Add test agent
     c.execute("SELECT COUNT(*) FROM agents")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
@@ -164,15 +156,12 @@ def chat():
     user_message = data.get("message")
     if not convo_id or not user_message:
         return jsonify({"error": "Missing required fields"}), 400
-
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT username FROM conversations WHERE id = ?", (convo_id,))
     username = c.fetchone()[0]
     conn.close()
-
     log_message(convo_id, username, user_message, "user")
-
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -186,13 +175,10 @@ def chat():
     except Exception as e:
         ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
         print(f"OpenAI error: {e}")
-
     log_message(convo_id, "AI", ai_reply, "ai")
-    socketio.emit("new_message", {"conversation_id": convo_id, "message": ai_reply, "sender": "ai"})
-
+    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai"})
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
         socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username})
-
     return jsonify({"reply": ai_reply})
 
 @app.route("/handoff", methods=["POST"])
