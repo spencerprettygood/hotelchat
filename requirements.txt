@@ -2,8 +2,8 @@ Flask==3.1.0
 Flask-Cors==5.0.0
 Flask-SocketIO==5.5.1
 Flask-Login==0.6.3
-openai==1.42.0
+openai[datalib]==1.42.0
 gunicorn==23.0.0
-eventlet==0.39.0
+gevent==24.2.1  # Switch to gevent
 twilio==9.3.3
 requests==2.32.3
