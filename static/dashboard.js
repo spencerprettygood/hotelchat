@@ -3,44 +3,61 @@ const conversationList = document.getElementById("conversationList");
 const notificationSound = new Audio('/static/notification.mp3');
 let socket = null;
 let isLoading = false;
-let hasInitialized = false;  // Track if WebSocket has been set up
 
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ Page loaded at:", new Date().toLocaleTimeString());
-    if (!hasInitialized) {
-        checkLogin();
-        hasInitialized = true;
-    } else {
-        console.log("🔄 DOMContentLoaded fired again, skipping initialization");
-    }
+    checkLogin();  // Always check on load
 });
 
-function checkLogin() {
+async function checkLogin() {
     const agent = localStorage.getItem("agent");
     console.log("🔄 Checking login state at:", new Date().toLocaleTimeString());
+    
+    // Verify session with server before proceeding
     if (agent) {
-        console.log("✅ Agent logged in:", agent);
-        document.getElementById("loginPage").style.display = "none";
-        document.getElementById("dashboard").style.display = "block";
-        if (!socket) {
-            console.log("🔌 Initializing WebSocket");
-            listenForNewMessages();
-        } else {
-            console.log("🔌 WebSocket already exists, skipping initialization");
+        try {
+            console.log("🔄 Verifying session for agent:", agent);
+            const response = await fetch("/conversations", { 
+                method: "GET",
+                credentials: 'include'  // Include session cookies
+            });
+            if (response.ok) {
+                console.log("✅ Session valid, loading dashboard");
+                document.getElementById("loginPage").style.display = "none";
+                document.getElementById("dashboard").style.display = "block";
+                if (!socket) {
+                    console.log("🔌 Initializing WebSocket");
+                    listenForNewMessages();
+                } else {
+                    console.log("🔌 WebSocket already exists");
+                }
+                loadConversations();
+            } else {
+                console.log("❌ Session invalid, clearing agent and showing login");
+                localStorage.removeItem("agent");
+                showLoginPage();
+            }
+        } catch (error) {
+            console.error("❌ Error verifying session:", error);
+            localStorage.removeItem("agent");
+            showLoginPage();
         }
-        loadConversations();
     } else {
-        console.log("🔒 No agent logged in");
-        document.getElementById("loginPage").style.display = "flex";
-        document.getElementById("dashboard").style.display = "none";
-        if (socket) {
-            console.log("🔌 Disconnecting existing WebSocket");
-            socket.disconnect();
-            socket = null;
-        }
-        chatBox.innerHTML = "";
-        conversationList.innerHTML = "";
+        console.log("🔒 No agent in localStorage, showing login");
+        showLoginPage();
     }
+}
+
+function showLoginPage() {
+    document.getElementById("loginPage").style.display = "flex";
+    document.getElementById("dashboard").style.display = "none";
+    if (socket) {
+        console.log("🔌 Disconnecting WebSocket");
+        socket.disconnect();
+        socket = null;
+    }
+    chatBox.innerHTML = "";
+    conversationList.innerHTML = "";
 }
 
 async function login() {
@@ -56,11 +73,12 @@ async function login() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
+            credentials: 'include'  // Ensure session cookies are sent
         });
         const data = await response.json();
         if (response.ok) {
             localStorage.setItem("agent", data.agent);
-            console.log("✅ Login successful");
+            console.log("✅ Login successful, agent:", data.agent);
             checkLogin();
         } else {
             console.error("❌ Login failed:", data.message);
@@ -82,12 +100,18 @@ function logout() {
         if (response.ok) {
             console.log("✅ Logout successful");
             localStorage.removeItem("agent");
-            checkLogin();
+            showLoginPage();  // Immediately show login page
+            window.location.reload();  // Force full reset
         } else {
             console.error("❌ Logout failed:", response.status);
+            alert("Logout failed, please try again.");
         }
     })
-    .catch(error => console.error("Error during logout:", error));
+    .catch(error => {
+        console.error("Error during logout:", error);
+        localStorage.removeItem("agent");
+        showLoginPage();
+    });
 }
 
 async function loadConversations(filter = 'all') {
@@ -98,7 +122,7 @@ async function loadConversations(filter = 'all') {
     isLoading = true;
     try {
         console.log("🔄 Loading conversations with filter:", filter);
-        const response = await fetch("/conversations");
+        const response = await fetch("/conversations", { credentials: 'include' });
         if (!response.ok) throw new Error("Failed to fetch conversations: " + response.status);
         const conversations = await response.json();
         conversationList.innerHTML = "";
@@ -155,7 +179,7 @@ async function loadChat(convoId, username) {
     isLoading = true;
     try {
         console.log("🔄 Loading chat for convo ID:", convoId);
-        const response = await fetch(`/messages?conversation_id=${convoId}`);
+        const response = await fetch(`/messages?conversation_id=${convoId}`, { credentials: 'include' });
         if (!response.ok) throw new Error("Failed to load messages: " + response.status);
         const messages = await response.json();
         chatBox.innerHTML = "";
@@ -193,6 +217,7 @@ async function sendMessage() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ conversation_id: currentConvoId, message }),
+            credentials: 'include'
         });
         const data = await response.json();
         addMessage(data.reply, "ai");
@@ -217,7 +242,7 @@ function listenForNewMessages() {
     }
     socket = io('https://hotel-chatbot-1qj5.onrender.com', { 
         transports: ["websocket"],
-        reconnection: false  // Disable automatic reconnect to test stability
+        reconnection: false
     });
     socket.on("connect", () => {
         console.log("✅ WebSocket connected at:", new Date().toLocaleTimeString());
@@ -240,7 +265,6 @@ function listenForNewMessages() {
     });
 }
 
-// Add keypress listener once
 const messageInput = document.getElementById("messageInput");
 messageInput.removeEventListener("keypress", handleKeypress);
 messageInput.addEventListener("keypress", handleKeypress);
@@ -257,6 +281,7 @@ async function handoff() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ conversation_id: convoId }),
+            credentials: 'include'
         });
         const data = await response.json();
         alert(data.message);
