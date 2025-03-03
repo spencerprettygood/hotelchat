@@ -5,6 +5,9 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 import openai
 import sqlite3
 import os
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
+import requests
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -15,9 +18,20 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+# OpenAI Setup
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     print("⚠️ OPENAI_API_KEY not set in environment variables")
+
+# Twilio Setup
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+# Instagram Setup
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 
 DB_NAME = "chatbot.db"
 
@@ -34,7 +48,10 @@ def initialize_database():
             username TEXT NOT NULL,
             latest_message TEXT,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            assigned_agent TEXT DEFAULT NULL)''')
+            assigned_agent TEXT DEFAULT NULL,
+            channel TEXT DEFAULT 'dashboard',
+            opted_in INTEGER DEFAULT 0
+        )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,8 +150,8 @@ def logout():
 def get_conversations():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, username, latest_message, assigned_agent FROM conversations ORDER BY last_updated DESC")
-    conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3]} for row in c.fetchall()]
+    c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations ORDER BY last_updated DESC")
+    conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3], "channel": row[4]} for row in c.fetchall()]
     conn.close()
     return jsonify(conversations)
 
@@ -174,23 +191,169 @@ def chat():
     conn.close()
     log_message(convo_id, username, user_message, "user")
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a hotel chatbot. Answer guest questions and escalate to a human if the query is complex or requires personal assistance."},
                 {"role": "user", "content": user_message}
             ],
             max_tokens=150
         )
-        ai_reply = response.choices[0].message["content"].strip()
+        ai_reply = response.choices[0].message.content.strip()
     except Exception as e:
         ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
         print(f"OpenAI error: {e}")
     log_message(convo_id, "AI", ai_reply, "ai")
-    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai"})
+    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "dashboard"})
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
-        socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username})
+        socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": "dashboard"})
     return jsonify({"reply": ai_reply})
+
+@app.route("/whatsapp", methods=["POST"])
+def whatsapp():
+    incoming_msg = request.values.get("Body", "").strip().upper()
+    from_number = request.values.get("From", "").replace("whatsapp:", "")
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, opted_in FROM conversations WHERE username = ?", (from_number,))
+    convo = c.fetchone()
+    if not convo:
+        c.execute("INSERT INTO conversations (username, latest_message, channel) VALUES (?, ?, ?)", 
+                  (from_number, incoming_msg, "whatsapp"))
+        convo_id = c.lastrowid
+        opted_in = 0
+    else:
+        convo_id, opted_in = convo
+    if incoming_msg == "YES" and not opted_in:
+        c.execute("UPDATE conversations SET opted_in = 1 WHERE id = ?", (convo_id,))
+        conn.commit()
+        twilio_client.messages.create(
+            body="Thank you for opting in! You'll now receive updates from us.",
+            from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+            to=f"whatsapp:{from_number}"
+        )
+        log_message(convo_id, "AI", "Thank you for opting in!", "ai")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": "Thank you for opting in!", "sender": "ai", "channel": "whatsapp"})
+        resp = MessagingResponse()
+        conn.close()
+        return str(resp)
+    conn.close()
+    log_message(convo_id, from_number, incoming_msg, "user")
+    if not opted_in and incoming_msg != "YES":
+        twilio_client.messages.create(
+            body="Would you like to receive updates from us? Reply YES to opt in.",
+            from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+            to=f"whatsapp:{from_number}"
+        )
+        log_message(convo_id, "AI", "Would you like to receive updates? Reply YES to opt in.", "ai")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": "Would you like to receive updates? Reply YES to opt in.", "sender": "ai", "channel": "whatsapp"})
+        resp = MessagingResponse()
+        return str(resp)
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a hotel chatbot. Answer guest questions and escalate to a human if the query is complex or requires personal assistance."},
+                {"role": "user", "content": incoming_msg}
+            ],
+            max_tokens=150
+        )
+        ai_reply = response.choices[0].message.content.strip()
+    except Exception as e:
+        ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+        print(f"OpenAI error: {e}")
+    log_message(convo_id, "AI", ai_reply, "ai")
+    twilio_client.messages.create(
+        body=ai_reply,
+        from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+        to=f"whatsapp:{from_number}"
+    )
+    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+    if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
+        socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": from_number, "channel": "whatsapp"})
+    resp = MessagingResponse()
+    return str(resp)
+
+@app.route("/instagram", methods=["POST"])
+def instagram():
+    data = request.get_json()
+    if "object" not in data or data["object"] != "instagram":
+        return "OK", 200
+    for entry in data.get("entry", []):
+        for messaging in entry.get("messaging", []):
+            sender_id = messaging["sender"]["id"]
+            incoming_msg = messaging["message"].get("text", "")
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            c.execute("SELECT id FROM conversations WHERE username = ?", (sender_id,))
+            convo = c.fetchone()
+            if not convo:
+                c.execute("INSERT INTO conversations (username, latest_message, channel) VALUES (?, ?, ?)", (sender_id, incoming_msg, "instagram"))
+                convo_id = c.lastrowid
+            else:
+                convo_id = convo[0]
+            conn.close()
+            log_message(convo_id, sender_id, incoming_msg, "user")
+            try:
+                response = openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a hotel chatbot. Answer guest questions and escalate to a human if the query is complex or requires personal assistance."},
+                        {"role": "user", "content": incoming_msg}
+                    ],
+                    max_tokens=150
+                )
+                ai_reply = response.choices[0].message.content.strip()
+            except Exception as e:
+                ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+                print(f"OpenAI error: {e}")
+            log_message(convo_id, "AI", ai_reply, "ai")
+            requests.post(
+                f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
+                json={"recipient": {"id": sender_id}, "message": {"text": ai_reply}}
+            )
+            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "instagram"})
+            if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
+                socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": sender_id, "channel": "instagram"})
+    return "EVENT_RECEIVED", 200
+
+@app.route("/instagram", methods=["GET"])
+def instagram_verify():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == os.getenv("VERIFY_TOKEN", "mysecretverifytoken"):
+        return challenge, 200
+    return "Verification failed", 403
+
+@app.route("/send-welcome", methods=["POST"])
+def send_welcome():
+    data = request.get_json()
+    to_number = data.get("to_number")
+    user_name = data.get("user_name", "Guest")
+    if not to_number:
+        return jsonify({"error": "Missing to_number"}), 400
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, opted_in FROM conversations WHERE username = ? AND channel = ?", (to_number, "whatsapp"))
+    convo = c.fetchone()
+    if not convo or not convo[1]:
+        conn.close()
+        return jsonify({"error": "User not opted in"}), 403
+    convo_id = convo[0]
+    conn.close()
+    try:
+        twilio_client.messages.create(
+            body=f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance.",
+            from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+            to=to_number
+        )
+        log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!", "sender": "ai", "channel": "whatsapp"})
+        return jsonify({"message": "Welcome message sent"}), 200
+    except Exception as e:
+        print(f"Twilio error: {e}")
+        return jsonify({"error": "Failed to send message"}), 500
 
 @app.route("/handoff", methods=["POST"])
 @login_required
@@ -202,11 +365,11 @@ def handoff():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("UPDATE conversations SET assigned_agent = ? WHERE id = ?", (current_user.username, convo_id))
-    c.execute("SELECT username FROM conversations WHERE id = ?", (convo_id,))
-    username = c.fetchone()[0]
+    c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
+    username, channel = c.fetchone()
     conn.commit()
     conn.close()
-    socketio.emit("handoff", {"conversation_id": convo_id, "agent": current_user.username, "user": username})
+    socketio.emit("handoff", {"conversation_id": convo_id, "agent": current_user.username, "user": username, "channel": channel})
     return jsonify({"message": f"Chat assigned to {current_user.username}"})
 
 @app.route("/")
