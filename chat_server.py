@@ -9,72 +9,83 @@ import os
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")  # Remove async_mode, let it auto-select
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')  # Explicitly use eventlet
 
 # Setup Login Manager
 login_manager = LoginManager()
 login_manager.init_app(app)
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+if not openai.api_key:
+    print("⚠️ OPENAI_API_KEY not set in environment variables")
+
 DB_NAME = "chatbot.db"
 
 def initialize_database():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS agents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL,
-        latest_message TEXT,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        assigned_agent TEXT DEFAULT NULL)''')
-    c.execute("DROP TABLE IF EXISTS messages")
-    c.execute('''CREATE TABLE messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER NOT NULL,
-        user TEXT NOT NULL,
-        message TEXT NOT NULL,
-        sender TEXT NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
-    c.execute("SELECT COUNT(*) FROM agents")
-    if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
-        print("✅ Added test agent: agent1/password123")
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS agents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            latest_message TEXT,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            assigned_agent TEXT DEFAULT NULL)''')
+        c.execute("DROP TABLE IF EXISTS messages")
+        c.execute('''CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            user TEXT NOT NULL,
+            message TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
+        c.execute("SELECT COUNT(*) FROM agents")
+        if c.fetchone()[0] == 0:
+            c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
+            print("✅ Added test agent: agent1/password123")
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"⚠️ Database initialization error: {e}")
+    finally:
+        conn.close()
 
 initialize_database()
 
 def add_test_conversations():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM conversations")
-    if c.fetchone()[0] == 0:
-        test_conversations = [
-            ("guest1", "Hi, can I book a room?"),
-            ("guest2", "What’s the check-in time?"),
-            ("guest3", "Do you have a pool?")]
-        convo_ids = []
-        for username, message in test_conversations:
-            c.execute("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", (username, message))
-            convo_ids.append(c.lastrowid)
-        test_messages = [
-            (convo_ids[0], "guest1", "Hi, can I book a room?", "user"),
-            (convo_ids[0], "AI", "Yes, I can help with that! What dates are you looking for?", "ai"),
-            (convo_ids[1], "guest2", "What’s the check-in time?", "user"),
-            (convo_ids[1], "AI", "Check-in is at 3 PM.", "ai"),
-            (convo_ids[2], "guest3", "Do you have a pool?", "user"),
-            (convo_ids[2], "AI", "Yes, we have an outdoor pool!", "ai")]
-        for convo_id, user, message, sender in test_messages:
-            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
-                      (convo_id, user, message, sender))
-        conn.commit()
-        print("✅ Test conversations added.")
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM conversations")
+        if c.fetchone()[0] == 0:
+            test_conversations = [
+                ("guest1", "Hi, can I book a room?"),
+                ("guest2", "What’s the check-in time?"),
+                ("guest3", "Do you have a pool?")]
+            convo_ids = []
+            for username, message in test_conversations:
+                c.execute("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", (username, message))
+                convo_ids.append(c.lastrowid)
+            test_messages = [
+                (convo_ids[0], "guest1", "Hi, can I book a room?", "user"),
+                (convo_ids[0], "AI", "Yes, I can help with that! What dates are you looking for?", "ai"),
+                (convo_ids[1], "guest2", "What’s the check-in time?", "user"),
+                (convo_ids[1], "AI", "Check-in is at 3 PM.", "ai"),
+                (convo_ids[2], "guest3", "Do you have a pool?", "user"),
+                (convo_ids[2], "AI", "Yes, we have an outdoor pool!", "ai")]
+            for convo_id, user, message, sender in test_messages:
+                c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+                          (convo_id, user, message, sender))
+            conn.commit()
+            print("✅ Test conversations added.")
+    except sqlite3.Error as e:
+        print(f"⚠️ Test conversations error: {e}")
+    finally:
+        conn.close()
 
 add_test_conversations()
 
