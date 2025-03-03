@@ -1,14 +1,10 @@
 const chatBox = document.getElementById("chatBox");
 const conversationList = document.getElementById("conversationList");
 const notificationSound = new Audio('/static/notification.mp3');
+let socket = null;  // Single Socket.IO instance
 
 document.addEventListener("DOMContentLoaded", function () {
     checkLogin();
-    if (typeof io !== "undefined") {
-        listenForNewMessages();
-    } else {
-        console.error("❌ ERROR: Socket.IO not loaded.");
-    }
 });
 
 function checkLogin() {
@@ -16,10 +12,17 @@ function checkLogin() {
     if (agent) {
         document.getElementById("loginPage").style.display = "none";
         document.getElementById("dashboard").style.display = "block";
+        if (!socket) listenForNewMessages();  // Initialize only once
         loadConversations();
     } else {
         document.getElementById("loginPage").style.display = "flex";
         document.getElementById("dashboard").style.display = "none";
+        if (socket) {
+            socket.disconnect();  // Clean up on logout
+            socket = null;
+        }
+        chatBox.innerHTML = "";  // Reset chat
+        conversationList.innerHTML = "";  // Reset conversations
     }
 }
 
@@ -39,9 +42,7 @@ async function login() {
         const data = await response.json();
         if (response.ok) {
             localStorage.setItem("agent", data.agent);
-            document.getElementById("loginPage").style.display = "none";
-            document.getElementById("dashboard").style.display = "block";
-            loadConversations();
+            checkLogin();
         } else {
             alert(data.message || "Login failed.");
         }
@@ -54,7 +55,7 @@ async function login() {
 function logout() {
     fetch("/logout", { 
         method: "POST",
-        credentials: 'include', // Send cookies for Flask-Login session
+        credentials: 'include',
         headers: { "Content-Type": "application/json" }
     })
     .then(response => {
@@ -170,8 +171,9 @@ function addMessage(content, sender) {
 }
 
 function listenForNewMessages() {
-    const socket = io('https://hotel-chatbot-1qj5.onrender.com', { 
-        transports: ["websocket"], // Force WebSocket on Render
+    if (socket) return;  // Prevent duplicate connections
+    socket = io('https://hotel-chatbot-1qj5.onrender.com', { 
+        transports: ["websocket"],
         reconnection: true,
         reconnectionAttempts: 5
     });
@@ -182,7 +184,7 @@ function listenForNewMessages() {
         console.error("❌ WebSocket connection error:", error);
     });
     socket.on("new_message", (data) => {
-        if (data.conversation_id === currentConvoId) {
+        if (data.convo_id === currentConvoId) {
             addMessage(data.message, data.sender);
         }
         loadConversations();
