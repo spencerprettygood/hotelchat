@@ -7,7 +7,7 @@ import sqlite3
 import os
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")  # Use Render env var
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
@@ -16,7 +16,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
-DB_NAME = "chatbot.db"  # Note: Use a persistent DB like PostgreSQL for production
+DB_NAME = "chatbot.db"
 
 def initialize_database():
     conn = sqlite3.connect(DB_NAME)
@@ -40,11 +40,11 @@ def initialize_database():
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
     
-    # Add test agent
+    # Add test agent (your original credentials)
     c.execute("SELECT COUNT(*) FROM agents")
     if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("admin", "password123"))
-        print("✅ Added test agent: admin/password123")
+        c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
+        print("✅ Added test agent: agent1/password123")
     conn.commit()
     conn.close()
 
@@ -210,4 +210,4 @@ def index():
     return render_template("dashboard.html")
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)  # Use Render's PORT
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
