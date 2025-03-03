@@ -3,15 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Casino AI Dashboard</title>
-    <link rel="icon" href="/static/favicon.png">
+    <title>Hotel Chatbot Dashboard</title>
     <link rel="stylesheet" href="/static/styles.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"></script>
-    
-
 </head>
 <body>
-    <!-- ✅ Login Page -->
     <div id="loginPage" class="login-container">
         <h2>Agent Login</h2>
         <input type="text" id="username" placeholder="Username">
@@ -19,17 +15,12 @@
         <button onclick="login()">Login</button>
     </div>
 
-    <!-- ✅ Dashboard -->
     <div id="dashboard" style="display: none;">
-        <!-- 🔹 Header -->
         <div class="header">
-            <h2>Casino AI Dashboard</h2>
+            <h2>Hotel Chatbot Dashboard</h2>
             <button onclick="logout()">Logout</button>
         </div>
-
-        <!-- 🔹 Main Container (3-column layout) -->
         <div class="container">
-            <!-- 🔹 Sidebar (First Column) -->
             <div class="sidebar">
                 <h3>Live Chat</h3>
                 <p><strong>Conversations</strong></p>
@@ -45,18 +36,13 @@
                     <li onclick="filterByChannel('instagram')">Instagram</li>
                 </ul>
             </div>
-
-            <!-- 🔹 Conversation List (Second Column) -->
             <div class="conversation-panel">
                 <h3>Conversations</h3>
-                <ul id="conversationList" class="conversation-list">
-                    <!-- Conversations will be loaded here dynamically -->
-                </ul>
+                <ul id="conversationList" class="conversation-list"></ul>
             </div>
-
-            <!-- 🔹 Chat Panel (Third Column) -->
             <div class="chat-panel">
                 <h3>Live Conversation</h3>
+                <div id="clientName">-</div>
                 <div class="chat-messages" id="chatBox"></div>
                 <div class="chat-input">
                     <input type="text" id="messageInput" placeholder="Type a message...">
@@ -65,6 +51,6 @@
             </div>
         </div>
     </div>
-<script src="/static/dashboard.js"></script>
+    <script src="/static/dashboard.js"></script>
 </body>
 </html>
