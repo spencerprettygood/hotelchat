@@ -3,26 +3,31 @@ const conversationList = document.getElementById("conversationList");
 const notificationSound = new Audio('/static/notification.mp3');
 let socket = null;
 let isLoading = false;
+let pollingInterval = null;
+let isLoggedIn = false;
 
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ Page loaded at:", new Date().toLocaleTimeString());
-    checkLogin();  // Always check on load
+    // Force initial visibility to login page
+    document.getElementById("loginPage").style.display = "flex";
+    document.getElementById("dashboard").style.display = "none";
+    checkLogin();
 });
 
 async function checkLogin() {
     const agent = localStorage.getItem("agent");
     console.log("🔄 Checking login state at:", new Date().toLocaleTimeString());
     
-    // Verify session with server before proceeding
     if (agent) {
         try {
             console.log("🔄 Verifying session for agent:", agent);
             const response = await fetch("/conversations", { 
                 method: "GET",
-                credentials: 'include'  // Include session cookies
+                credentials: 'include'
             });
             if (response.ok) {
                 console.log("✅ Session valid, loading dashboard");
+                isLoggedIn = true;
                 document.getElementById("loginPage").style.display = "none";
                 document.getElementById("dashboard").style.display = "block";
                 if (!socket) {
@@ -32,6 +37,7 @@ async function checkLogin() {
                     console.log("🔌 WebSocket already exists");
                 }
                 loadConversations();
+                startPolling();  // Start polling only after login
             } else {
                 console.log("❌ Session invalid, clearing agent and showing login");
                 localStorage.removeItem("agent");
@@ -49,6 +55,7 @@ async function checkLogin() {
 }
 
 function showLoginPage() {
+    isLoggedIn = false;
     document.getElementById("loginPage").style.display = "flex";
     document.getElementById("dashboard").style.display = "none";
     if (socket) {
@@ -56,6 +63,7 @@ function showLoginPage() {
         socket.disconnect();
         socket = null;
     }
+    stopPolling();
     chatBox.innerHTML = "";
     conversationList.innerHTML = "";
 }
@@ -73,7 +81,7 @@ async function login() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
-            credentials: 'include'  // Ensure session cookies are sent
+            credentials: 'include'
         });
         const data = await response.json();
         if (response.ok) {
@@ -100,8 +108,8 @@ function logout() {
         if (response.ok) {
             console.log("✅ Logout successful");
             localStorage.removeItem("agent");
-            showLoginPage();  // Immediately show login page
-            window.location.reload();  // Force full reset
+            showLoginPage();
+            window.location.reload();
         } else {
             console.error("❌ Logout failed:", response.status);
             alert("Logout failed, please try again.");
@@ -297,9 +305,23 @@ function filterByChannel(channel) {
     console.log(`Filtering by ${channel} - not implemented yet`);
 }
 
-setInterval(() => {
-    if (!isLoading) {
-        console.log("🔄 Polling conversations");
-        loadConversations();
+function startPolling() {
+    if (pollingInterval) {
+        console.log("🔄 Polling already active");
+        return;
     }
-}, 10000);
+    pollingInterval = setInterval(() => {
+        if (!isLoading && isLoggedIn) {
+            console.log("🔄 Polling conversations");
+            loadConversations();
+        }
+    }, 10000);
+}
+
+function stopPolling() {
+    if (pollingInterval) {
+        console.log("🔄 Stopping polling");
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
