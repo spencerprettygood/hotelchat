@@ -159,7 +159,17 @@ function addMessage(content, sender) {
 }
 
 function listenForNewMessages() {
-    const socket = io({ transports: ["websocket", "polling"] });  // Prefer WebSocket for Render
+    const socket = io('https://hotel-chatbot-1qj5.onrender.com', { 
+        transports: ["websocket"], // Force WebSocket on Render
+        reconnection: true,
+        reconnectionAttempts: 5
+    });
+    socket.on("connect", () => {
+        console.log("✅ WebSocket connected");
+    });
+    socket.on("connect_error", (error) => {
+        console.error("❌ WebSocket connection error:", error);
+    });
     socket.on("new_message", (data) => {
         if (data.conversation_id === currentConvoId) {
             addMessage(data.message, data.sender);
