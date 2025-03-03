@@ -1,7 +1,7 @@
 const chatBox = document.getElementById("chatBox");
 const conversationList = document.getElementById("conversationList");
 const notificationSound = new Audio('/static/notification.mp3');
-let socket = null;  // Single Socket.IO instance
+let socket = null;
 
 document.addEventListener("DOMContentLoaded", function () {
     checkLogin();
@@ -12,17 +12,17 @@ function checkLogin() {
     if (agent) {
         document.getElementById("loginPage").style.display = "none";
         document.getElementById("dashboard").style.display = "block";
-        if (!socket) listenForNewMessages();  // Initialize only once
+        if (!socket) listenForNewMessages();
         loadConversations();
     } else {
         document.getElementById("loginPage").style.display = "flex";
         document.getElementById("dashboard").style.display = "none";
         if (socket) {
-            socket.disconnect();  // Clean up on logout
+            socket.disconnect();
             socket = null;
         }
-        chatBox.innerHTML = "";  // Reset chat
-        conversationList.innerHTML = "";  // Reset conversations
+        chatBox.innerHTML = "";
+        conversationList.innerHTML = "";
     }
 }
 
@@ -171,7 +171,7 @@ function addMessage(content, sender) {
 }
 
 function listenForNewMessages() {
-    if (socket) return;  // Prevent duplicate connections
+    if (socket) return;
     socket = io('https://hotel-chatbot-1qj5.onrender.com', { 
         transports: ["websocket"],
         reconnection: true,
