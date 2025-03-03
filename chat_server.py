@@ -21,17 +21,24 @@ DB_NAME = "chatbot.db"
 def initialize_database():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    
+    # Create agents table
     c.execute('''CREATE TABLE IF NOT EXISTS agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL)''')
+    
+    # Create conversations table
     c.execute('''CREATE TABLE IF NOT EXISTS conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL,
         latest_message TEXT,
         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         assigned_agent TEXT DEFAULT NULL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS messages (
+    
+    # Drop and recreate messages table to ensure correct schema
+    c.execute("DROP TABLE IF EXISTS messages")  # Force recreate to fix schema
+    c.execute('''CREATE TABLE messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER NOT NULL,
         user TEXT NOT NULL,
@@ -40,7 +47,7 @@ def initialize_database():
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
     
-    # Add test agent (your original credentials)
+    # Add test agent
     c.execute("SELECT COUNT(*) FROM agents")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
