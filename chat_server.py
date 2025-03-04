@@ -286,10 +286,12 @@ def chat():
             c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
             handoff_notified = c.fetchone()[0]
             if not handoff_notified:
-                socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": channel})
-                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                # Automatically assign to "agent1" instead of marking as unassigned
+                default_agent = "agent1"  # Replace with dynamic agent selection if needed
+                c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                 conn.commit()
-                print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
+                socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
+                print(f"Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
             conn.close()
         return jsonify({"reply": ai_reply})
     else:
@@ -425,10 +427,12 @@ def whatsapp():
         c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
         handoff_notified = c.fetchone()[0]
         if not handoff_notified:
-            socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": from_number, "channel": "whatsapp"})
-            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+            # Automatically assign to "agent1" instead of marking as unassigned
+            default_agent = "agent1"
+            c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
             conn.commit()
-            print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
+            socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "whatsapp"})
+            print(f"Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
         conn.close()
 
     resp = MessagingResponse()
@@ -479,10 +483,12 @@ def instagram():
                 c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
                 handoff_notified = c.fetchone()[0]
                 if not handoff_notified:
-                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": sender_id, "channel": "instagram"})
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                    # Automatically assign to "agent1"
+                    default_agent = "agent1"
+                    c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                     conn.commit()
-                    print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
+                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": sender_id, "channel": "instagram"})
+                    print(f"Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                 conn.close()
     return "EVENT_RECEIVED", 200
 
