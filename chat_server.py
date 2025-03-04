@@ -200,10 +200,19 @@ def chat():
     sender = "agent" if current_user.is_authenticated else "user"
     log_message(convo_id, username, user_message, sender)
 
-    # If message is from an agent, emit it and return (no AI response needed)
+    # If message is from an agent, emit it and send to WhatsApp if channel is whatsapp
     if sender == "agent":
         socketio.emit("new_message", {"convo_id": convo_id, "message": user_message, "sender": "agent", "channel": channel})
-        return jsonify({"reply": "Message sent by agent"})
+        if channel == "whatsapp":
+            try:
+                twilio_client.messages.create(
+                    body=user_message,
+                    from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                    to=username
+                )
+            except Exception as e:
+                print(f"Twilio error sending agent message: {e}")
+        return jsonify({"status": "success"})
 
     # Otherwise, process as a client message and get AI response
     try:
@@ -221,6 +230,12 @@ def chat():
         print(f"OpenAI error: {e}")
     log_message(convo_id, "AI", ai_reply, "ai")
     socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
+    if channel == "whatsapp":
+        twilio_client.messages.create(
+            body=ai_reply,
+            from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+            to=username
+        )
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
         socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": channel})
     return jsonify({"reply": ai_reply})
@@ -279,11 +294,6 @@ def whatsapp():
         ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
         print(f"OpenAI error: {e}")
     log_message(convo_id, "AI", ai_reply, "ai")
-    twilio_client.messages.create(
-        body=ai_reply,
-        from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-        to=f"whatsapp:{from_number}"
-    )
     socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
         socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": from_number, "channel": "whatsapp"})
