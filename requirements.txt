@@ -3,6 +3,7 @@ Flask-Cors==5.0.0
 Flask-SocketIO==5.5.1
 Flask-Login==0.6.3
 openai==1.45.0
+httpx==0.27.0
 gunicorn==23.0.0
 gevent==24.2.1  # Switch to gevent
 twilio==9.3.3
