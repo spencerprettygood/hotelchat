@@ -352,7 +352,7 @@ def chat():
                         c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                         conn.commit()
                         # Increase delay to ensure the transaction is committed
-                        time.sleep(1.0)
+                        time.sleep(2.0)
                         socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
                         logger.info(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                     conn.close()
@@ -446,6 +446,7 @@ def telegram():
 
         # Process the message with AI
         logger.info("✅ Processing message with AI")
+        ai_reply = None
         try:
             logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-3.5-turbo: {incoming_msg}")
             response = openai.ChatCompletion.create(
@@ -459,9 +460,10 @@ def telegram():
             ai_reply = response.choices[0].message.content.strip()
             logger.info("✅ AI reply: " + ai_reply)
         except Exception as e:
-            ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
             logger.error(f"❌ OpenAI error: {str(e)}")
             logger.error(f"❌ OpenAI error type: {type(e).__name__}")
+            ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+            logger.info("✅ Set default AI reply due to error: " + ai_reply)
 
         # Fallback: Force handoff for specific keywords like "HELP"
         logger.info("✅ Checking for HELP keyword")
@@ -501,7 +503,7 @@ def telegram():
                     c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                     conn.commit()
                     # Increase delay to ensure the transaction is committed
-                    time.sleep(1.0)
+                    time.sleep(2.0)
                     socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "telegram"})
                     logger.info(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                 conn.close()
@@ -575,7 +577,7 @@ def instagram():
                             default_agent = "agent1"
                             c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                             conn.commit()
-                            time.sleep(1.0)
+                            time.sleep(2.0)
                             socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": sender_id, "channel": "instagram"})
                             logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, assigned to {default_agent}")
                         conn.close()
@@ -653,11 +655,24 @@ def handoff():
         logger.error(f"❌ Error in /handoff endpoint: {e}")
         return jsonify({"error": "Failed to assign chat"}), 500
 
+@app.route("/clear-database", methods=["POST"])
+def clear_database():
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("DELETE FROM conversations")
+        c.execute("DELETE FROM messages")
+        conn.commit()
+        conn.close()
+        logger.info("✅ Database cleared successfully")
+        return jsonify({"message": "Database cleared successfully"}), 200
+    except Exception as e:
+        logger.error(f"❌ Error clearing database: {str(e)}")
+        return jsonify({"error": "Failed to clear database"}), 500
+
 @app.route("/")
 def index():
     return render_template("dashboard.html")
-
-
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
