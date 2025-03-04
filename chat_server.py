@@ -494,7 +494,6 @@ def telegram():
         except Exception as e:
             logger.error(f"❌ Telegram error sending AI message: {str(e)}")
             socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
-
         # Handle handoff if needed
         logger.info("✅ Checking for handoff condition")
         if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
@@ -506,21 +505,19 @@ def telegram():
                 handoff_notified, visible_in_conversations = result if result else (0, 0)
                 logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                 if not handoff_notified:
-                    # Mark as handoff needed but do not assign to an agent
                     c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                     conn.commit()
-                    # Increase delay to ensure the transaction is committed
                     time.sleep(3.0)
-                    # Debug: Verify the update
                     c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                     updated_result = c.fetchone()
                     logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": from_number, "channel": "telegram"})
-                    logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+                    # Emit a refresh event instead of a handoff event with a popup
+                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+                    logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 conn.close()
             except Exception as e:
                 logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
-
+        
         logger.info("✅ Returning OK for Telegram")
         return "OK", 200
     except Exception as e:
