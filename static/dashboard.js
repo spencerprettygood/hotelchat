@@ -144,7 +144,6 @@ async function loadConversations(filter = 'all') {
 
             const convoItem = document.createElement("div");
             convoItem.classList.add("conversation-item");
-            convoItem.onclick = () => loadChat(convo.id, convo.username);
             const avatar = document.createElement("div");
             avatar.classList.add("conversation-avatar");
             avatar.textContent = convo.username.charAt(0).toUpperCase();
@@ -160,6 +159,25 @@ async function loadConversations(filter = 'all') {
             details.appendChild(preview);
             convoItem.appendChild(avatar);
             convoItem.appendChild(details);
+
+            // Add "Claim Chat" button for unassigned chats
+            if (!convo.assigned_agent) {
+                const claimButton = document.createElement("button");
+                claimButton.textContent = "Claim Chat";
+                claimButton.style.padding = "5px 10px";
+                claimButton.style.marginLeft = "10px";
+                claimButton.style.backgroundColor = "#007bff";
+                claimButton.style.color = "white";
+                claimButton.style.border = "none";
+                claimButton.style.borderRadius = "5px";
+                claimButton.style.cursor = "pointer";
+                claimButton.onclick = () => handoff(convo.id);
+                convoItem.appendChild(claimButton);
+            } else {
+                // Allow clicking to load chat if not unassigned
+                convoItem.onclick = () => loadChat(convo.id, convo.username);
+            }
+
             conversationList.appendChild(convoItem);
 
             if (!convo.assigned_agent) unassignedCount++;
@@ -277,8 +295,12 @@ function listenForNewMessages() {
     });
     socket.on("new_message", (data) => {
         console.log("📩 New message received:", data);
+        console.log("Current convoId:", currentConvoId, "Data convo_id:", data.convo_id);
         if (data.convo_id === currentConvoId) {
             addMessage(data.message, data.sender);
+        } else {
+            // Automatically load the chat if it's not currently selected
+            loadChat(data.convo_id, data.user || "Unknown");
         }
         const now = Date.now();
         if (now - lastUpdate > 2000) {
@@ -288,7 +310,7 @@ function listenForNewMessages() {
     });
     socket.on("handoff", (data) => {
         console.log("🔔 Handoff event:", data);
-        alert(`${data.agent} took over chat with ${data.user}`);
+        alert(`New unassigned chat with ${data.user} (ID: ${data.conversation_id})`);
         loadConversations();
     });
 }
@@ -300,9 +322,7 @@ function handleKeypress(event) {
     if (event.key === "Enter") sendMessage();
 }
 
-async function handoff() {
-    const convoId = prompt("Enter the conversation ID to take over:");
-    if (!convoId) return;
+async function handoff(convoId) {
     try {
         console.log("🔄 Attempting handoff for convo ID:", convoId);
         const response = await fetch("/handoff", {
