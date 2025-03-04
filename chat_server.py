@@ -10,7 +10,6 @@ import httpx
 import sqlite3
 import os
 from telegram import Bot
-import asyncio
 import requests
 from datetime import datetime, timedelta
 import time
@@ -259,7 +258,7 @@ def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated})
 
 @app.route("/chat", methods=["POST"])
-async def chat():
+def chat():
     data = request.get_json()
     convo_id = data.get("conversation_id")
     user_message = data.get("message")
@@ -291,7 +290,7 @@ async def chat():
             if channel == "telegram":
                 try:
                     logger.info(f"Sending agent message to Telegram - To: {username}, Body: {user_message}")
-                    await telegram_bot.send_message(chat_id=username, text=user_message)
+                    telegram_bot.send_message(chat_id=username, text=user_message)
                     logger.info("✅ Agent message sent to Telegram:", user_message)
                 except Exception as e:
                     logger.error(f"❌ Telegram error sending agent message: {str(e)}")
@@ -340,7 +339,7 @@ async def chat():
             if channel == "telegram":
                 try:
                     logger.info(f"Sending AI message to Telegram - To: {username}, Body: {ai_reply}")
-                    await telegram_bot.send_message(chat_id=username, text=ai_reply)
+                    telegram_bot.send_message(chat_id=username, text=ai_reply)
                     logger.info("✅ AI message sent to Telegram:", ai_reply)
                 except Exception as e:
                     logger.error(f"❌ Telegram error sending AI message: {str(e)}")
@@ -375,9 +374,10 @@ async def chat():
         return jsonify({"error": "Failed to process chat message"}), 500
 
 @app.route("/telegram", methods=["POST"])
-async def telegram():
+def telegram():
     logger.info("✅ Entering /telegram endpoint")
     update = request.get_json()
+    logger.info(f"Received update: {update}")
     if "message" not in update:
         logger.info("✅ Not a message update, returning OK")
         return "OK", 200
@@ -436,7 +436,7 @@ async def telegram():
             welcome_message = "Welcome to Sunshine Hotel! I'm here to assist with your bookings. How can I help you today?"
             try:
                 logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
-                await telegram_bot.send_message(chat_id=from_number, text=welcome_message)
+                telegram_bot.send_message(chat_id=from_number, text=welcome_message)
                 logger.info("✅ Sent welcome message to Telegram")
             except Exception as e:
                 logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
@@ -459,7 +459,7 @@ async def telegram():
                 max_tokens=150
             )
             ai_reply = response.choices[0].message.content.strip()
-            logger.info("✅ AI reply:", ai_reply)
+            logger.info("✅ AI reply: " + ai_reply)
         except Exception as e:
             logger.error(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
             logger.error(f"❌ OpenAI error type: {type(e).__name__}")
@@ -474,7 +474,7 @@ async def telegram():
                     max_tokens=150
                 )
                 ai_reply = response.choices[0].message.content.strip()
-                logger.info("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
+                logger.info("✅ Fallback AI reply with gpt-3.5-turbo: " + ai_reply)
             except Exception as e:
                 ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
                 logger.error(f"❌ Fallback OpenAI error: {str(e)}")
@@ -484,7 +484,7 @@ async def telegram():
         logger.info("✅ Checking for HELP keyword")
         if "HELP" in incoming_msg.upper():
             ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-            logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
+            logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
 
         # Log and emit the AI response
         logger.info("✅ Logging AI response")
@@ -496,8 +496,8 @@ async def telegram():
         logger.info("✅ Sending AI response to Telegram")
         try:
             logger.info(f"Sending AI message to Telegram - To: {from_number}, Body: {ai_reply}")
-            await telegram_bot.send_message(chat_id=from_number, text=ai_reply)
-            logger.info("✅ AI message sent to Telegram:", ai_reply)
+            telegram_bot.send_message(chat_id=from_number, text=ai_reply)
+            logger.info("✅ AI message sent to Telegram: " + ai_reply)
         except Exception as e:
             logger.error(f"❌ Telegram error sending AI message: {str(e)}")
             socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
@@ -528,7 +528,7 @@ async def telegram():
         logger.info("✅ Returning OK for Telegram")
         return "OK", 200
     except Exception as e:
-        logger.error(f"❌ Error in /telegram endpoint: {e}")
+        logger.error(f"❌ Error in /telegram endpoint: {str(e)}")
         return "OK", 200
 
 @app.route("/instagram", methods=["POST"])
@@ -567,7 +567,7 @@ def instagram():
                         max_tokens=150
                     )
                     ai_reply = response.choices[0].message.content.strip()
-                    logger.info("✅ Instagram AI reply:", ai_reply)
+                    logger.info("✅ Instagram AI reply: " + ai_reply)
                 except Exception as e:
                     logger.error(f"❌ Instagram OpenAI error with gpt-4o-mini: {str(e)}")
                     logger.error(f"❌ Instagram OpenAI error type: {type(e).__name__}")
@@ -582,7 +582,7 @@ def instagram():
                             max_tokens=150
                         )
                         ai_reply = response.choices[0].message.content.strip()
-                        logger.info("✅ Fallback Instagram AI reply with gpt-3.5-turbo:", ai_reply)
+                        logger.info("✅ Fallback Instagram AI reply with gpt-3.5-turbo: " + ai_reply)
                     except Exception as e:
                         ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
                         logger.error(f"❌ Fallback Instagram OpenAI error: {str(e)}")
@@ -629,7 +629,7 @@ def instagram_verify():
     return "Verification failed", 403
 
 @app.route("/send-welcome", methods=["POST"])
-async def send_welcome():
+def send_welcome():
     data = request.get_json()
     to_number = data.get("to_number")
     user_name = data.get("user_name", "Guest")
@@ -649,7 +649,7 @@ async def send_welcome():
     try:
         logger.info(f"✅ Sending welcome message to Telegram chat {to_number}")
         welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
-        await telegram_bot.send_message(chat_id=to_number, text=welcome_message)
+        telegram_bot.send_message(chat_id=to_number, text=welcome_message)
         logger.info("✅ Logging welcome message in /send-welcome")
         log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
         logger.info("✅ Emitting new_message event in /send-welcome")
