@@ -286,8 +286,8 @@ def chat():
             c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
             handoff_notified = c.fetchone()[0]
             if not handoff_notified:
-                # Automatically assign to "agent1" instead of marking as unassigned
-                default_agent = "agent1"  # Replace with dynamic agent selection if needed
+                # Automatically assign to "agent1"
+                default_agent = "agent1"
                 c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                 conn.commit()
                 socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
@@ -355,12 +355,12 @@ def whatsapp():
             c.execute("UPDATE conversations SET opted_in = 1 WHERE id = ?", (convo_id,))
             conn.commit()
             conn.close()
+            opted_in = 1  # Update the local variable
             ai_reply = "Thank you for opting in!"
             log_message(convo_id, "AI", ai_reply, "ai")
             print("Emitting new_message for opt-in response, convo_id:", convo_id)
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
-            resp = MessagingResponse()
-            return str(resp)
+            # Do not return here; let the AI response logic run
         else:
             try:
                 twilio_client.messages.create(
@@ -376,11 +376,10 @@ def whatsapp():
             log_message(convo_id, "AI", ai_reply, "ai")
             print("Emitting new_message for opt-in prompt, convo_id:", convo_id)
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
-            resp = MessagingResponse()
-            return str(resp)
+            # Do not return here; let the AI response logic run if needed
 
-    # Process the message with AI if no opt-in response was sent
-    if ai_reply is None:
+    # Process the message with AI if no opt-in response was sent or after opt-in
+    if ai_reply is None or opted_in:  # Only process AI if not already handled or if opted in
         try:
             print(f"Processing message with AI for convo_id {convo_id}")
             response = openai.chat.completions.create(
@@ -427,7 +426,7 @@ def whatsapp():
         c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
         handoff_notified = c.fetchone()[0]
         if not handoff_notified:
-            # Automatically assign to "agent1" instead of marking as unassigned
+            # Automatically assign to "agent1"
             default_agent = "agent1"
             c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
             conn.commit()
@@ -483,7 +482,6 @@ def instagram():
                 c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
                 handoff_notified = c.fetchone()[0]
                 if not handoff_notified:
-                    # Automatically assign to "agent1"
                     default_agent = "agent1"
                     c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                     conn.commit()
