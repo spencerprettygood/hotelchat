@@ -112,6 +112,14 @@ function fetchConversations() {
         return;
     }
 
+    // Fetch conversations
+function fetchConversations() {
+    const conversationList = document.getElementById('conversationList');
+    if (!conversationList) {
+        console.error('Conversation list (conversationList) is missing.');
+        return;
+    }
+
     fetch('/conversations')
         .then(response => {
             if (!response.ok) {
@@ -144,7 +152,8 @@ function fetchConversations() {
 
             filteredConversations.forEach(convo => {
                 const li = document.createElement('li');
-                li.textContent = `${convo.username} (${convo.channel}): ${convo.latest_message}`;
+                // Show only username and channel
+                li.textContent = `${convo.username} (${convo.channel})`;
                 li.dataset.convoId = convo.id;
                 li.onclick = () => loadConversation(convo.id);
                 conversationList.appendChild(li);
