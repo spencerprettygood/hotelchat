@@ -440,7 +440,7 @@ def telegram():
         # Send welcome message for new conversations
         if is_new_conversation:
             logger.info("✅ Sending welcome message for new conversation")
-            welcome_message = "Welcome to Sunshine Hotel! I'm here to assist with your bookings. How can I help you today?"
+            welcome_message = "Thank you for contacting us."
             try:
                 logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
                 send_telegram_message(from_number, welcome_message)
