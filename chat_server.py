@@ -62,7 +62,7 @@ def initialize_database():
             opted_in INTEGER DEFAULT 0,
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
-            visible_in_conversations INTEGER DEFAULT 0  -- New column to control visibility in Conversations panel
+            visible_in_conversations INTEGER DEFAULT 0
         )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
@@ -275,6 +275,7 @@ def chat():
                 socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": channel})
                 c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                 conn.commit()
+                print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
             conn.close()
         return jsonify({"reply": ai_reply})
     else:
@@ -283,7 +284,7 @@ def chat():
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
-    incoming_msg = request.values.get("Body", "").strip().upper()
+    incoming_msg = request.values.get("Body", "").strip()
     from_number = request.values.get("From", "").replace("whatsapp:", "")
     print("Received WhatsApp message:", incoming_msg, "from:", from_number)
     conn = sqlite3.connect(DB_NAME)
@@ -310,46 +311,55 @@ def whatsapp():
     log_message(convo_id, from_number, incoming_msg, "user")
     print("Emitting new_message for convo_id:", convo_id, "Message:", incoming_msg)
     socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "whatsapp", "user": from_number})
-    
+
     # Only proceed with AI response if ai_enabled is True
     if not ai_enabled:
         print("AI disabled for convo_id:", convo_id, "Skipping AI response")
         resp = MessagingResponse()
         return str(resp)
 
-    if incoming_msg == "YES" and not opted_in:
-        try:
-            twilio_client.messages.create(
-                body="Thank you for opting in! You'll now receive updates from us.",
-                from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                to=f"whatsapp:{from_number}"
-            )
-            print("Sent opt-in message to WhatsApp")
-        except Exception as e:
-            print(f"Twilio error sending opt-in message: {str(e)}")
-            print(f"Twilio error details: {e.__dict__}")
-        log_message(convo_id, "AI", "Thank you for opting in!", "ai")
-        print("Emitting new_message for convo_id:", convo_id)
-        socketio.emit("new_message", {"convo_id": convo_id, "message": "Thank you for opting in!", "sender": "ai", "channel": "whatsapp"})
-        resp = MessagingResponse()
-        return str(resp)
-    if not opted_in and incoming_msg != "YES":
-        try:
-            twilio_client.messages.create(
-                body="Would you like to receive updates from us? Reply YES to opt in.",
-                from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                to=f"whatsapp:{from_number}"
-            )
-            print("Sent opt-in prompt to WhatsApp")
-        except Exception as e:
-            print(f"Twilio error sending opt-in prompt: {str(e)}")
-            print(f"Twilio error details: {e.__dict__}")
-        log_message(convo_id, "AI", "Would you like to receive updates? Reply YES to opt in.", "ai")
-        print("Emitting new_message for convo_id:", convo_id)
-        socketio.emit("new_message", {"convo_id": convo_id, "message": "Would you like to receive updates? Reply YES to opt in.", "sender": "ai", "channel": "whatsapp"})
-        resp = MessagingResponse()
-        return str(resp)
+    if not opted_in:
+        if incoming_msg.upper() == "YES":
+            try:
+                twilio_client.messages.create(
+                    body="Thank you for opting in! You'll now receive updates from us.",
+                    from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                    to=f"whatsapp:{from_number}"
+                )
+                print("Sent opt-in message to WhatsApp")
+            except Exception as e:
+                print(f"Twilio error sending opt-in message: {str(e)}")
+                print(f"Twilio error details: {e.__dict__}")
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            c.execute("UPDATE conversations SET opted_in = 1 WHERE id = ?", (convo_id,))
+            conn.commit()
+            conn.close()
+            log_message(convo_id, "AI", "Thank you for opting in!", "ai")
+            print("Emitting new_message for convo_id:", convo_id)
+            socketio.emit("new_message", {"convo_id": convo_id, "message": "Thank you for opting in!", "sender": "ai", "channel": "whatsapp"})
+            resp = MessagingResponse()
+            return str(resp)
+        else:
+            try:
+                twilio_client.messages.create(
+                    body="Would you like to receive updates from us? Reply YES to opt in.",
+                    from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                    to=f"whatsapp:{from_number}"
+                )
+                print("Sent opt-in prompt to WhatsApp")
+            except Exception as e:
+                print(f"Twilio error sending opt-in prompt: {str(e)}")
+                print(f"Twilio error details: {e.__dict__}")
+            log_message(convo_id, "AI", "Would you like to receive updates? Reply YES to opt in.", "ai")
+            print("Emitting new_message for convo_id:", convo_id)
+            socketio.emit("new_message", {"convo_id": convo_id, "message": "Would you like to receive updates? Reply YES to opt in.", "sender": "ai", "channel": "whatsapp"})
+            resp = MessagingResponse()
+            return str(resp)
+
+    # Process the message with AI
     try:
+        print(f"Processing message with AI for convo_id {convo_id}")
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -363,6 +373,12 @@ def whatsapp():
     except Exception as e:
         ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
         print(f"OpenAI error: {e}")
+
+    # Fallback: Force handoff for specific keywords like "HELP"
+    if "HELP" in incoming_msg.upper():
+        ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+        print("Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
+
     log_message(convo_id, "AI", ai_reply, "ai")
     print("Emitting new_message for convo_id:", convo_id)
     socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
@@ -375,6 +391,7 @@ def whatsapp():
             socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": from_number, "channel": "whatsapp"})
             c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
             conn.commit()
+            print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
         conn.close()
     resp = MessagingResponse()
     return str(resp)
@@ -419,7 +436,16 @@ def instagram():
             )
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "instagram"})
             if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
-                socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": sender_id, "channel": "instagram"})
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
+                handoff_notified = c.fetchone()[0]
+                if not handoff_notified:
+                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": sender_id, "channel": "instagram"})
+                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                    conn.commit()
+                    print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
+                conn.close()
     return "EVENT_RECEIVED", 200
 
 @app.route("/instagram", methods=["GET"])
