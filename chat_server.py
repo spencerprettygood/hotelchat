@@ -61,7 +61,8 @@ def initialize_database():
             channel TEXT DEFAULT 'dashboard',
             opted_in INTEGER DEFAULT 0,
             ai_enabled INTEGER DEFAULT 1,
-            handoff_notified INTEGER DEFAULT 0
+            handoff_notified INTEGER DEFAULT 0,
+            visible_in_conversations INTEGER DEFAULT 0  -- New column to control visibility in Conversations panel
         )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
@@ -96,7 +97,7 @@ def add_test_conversations():
                 ("guest3", "Do you have a pool?")]
             convo_ids = []
             for username, message in test_conversations:
-                c.execute("INSERT INTO conversations (username, latest_message) VALUES (?, ?)", (username, message))
+                c.execute("INSERT INTO conversations (username, latest_message, visible_in_conversations) VALUES (?, ?, 1)", (username, message))
                 convo_ids.append(c.lastrowid)
             test_messages = [
                 (convo_ids[0], "guest1", "Hi, can I book a room?", "user"),
@@ -161,7 +162,8 @@ def logout():
 def get_conversations():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations ORDER BY last_updated DESC")
+    # Only fetch conversations that are visible (i.e., after a handoff)
+    c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
     conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3], "channel": row[4]} for row in c.fetchall()]
     conn.close()
     return jsonify(conversations)
@@ -271,7 +273,7 @@ def chat():
             handoff_notified = c.fetchone()[0]
             if not handoff_notified:
                 socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": channel})
-                c.execute("UPDATE conversations SET handoff_notified = 1 WHERE id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                 conn.commit()
             conn.close()
         return jsonify({"reply": ai_reply})
@@ -371,7 +373,7 @@ def whatsapp():
         handoff_notified = c.fetchone()[0]
         if not handoff_notified:
             socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": from_number, "channel": "whatsapp"})
-            c.execute("UPDATE conversations SET handoff_notified = 1 WHERE id = ?", (convo_id,))
+            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
             conn.commit()
         conn.close()
     resp = MessagingResponse()
