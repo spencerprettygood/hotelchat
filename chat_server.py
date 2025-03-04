@@ -319,7 +319,7 @@ def chat():
             try:
                 logger.info(f"Processing message with AI: {user_message}")
                 response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                         {"role": "user", "content": user_message}
@@ -327,7 +327,8 @@ def chat():
                     max_tokens=150
                 )
                 ai_reply = response.choices[0].message.content.strip()
-                logger.info("✅ AI reply: " + ai_reply)
+                model_used = response.model
+                logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
             except Exception as e:
                 ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
                 logger.error(f"❌ OpenAI error: {str(e)}")
@@ -460,9 +461,9 @@ def telegram():
         logger.info("✅ Processing message with AI")
         ai_reply = None
         try:
-            logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-3.5-turbo: {incoming_msg}")
+            logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                     {"role": "user", "content": incoming_msg}
@@ -470,7 +471,8 @@ def telegram():
                 max_tokens=150
             )
             ai_reply = response.choices[0].message.content.strip()
-            logger.info("✅ AI reply: " + ai_reply)
+            model_used = response.model
+            logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
         except Exception as e:
             logger.error(f"❌ OpenAI error: {str(e)}")
             logger.error(f"❌ OpenAI error type: {type(e).__name__}")
@@ -557,7 +559,7 @@ def instagram():
                 try:
                     logger.info(f"Processing Instagram message with AI: {incoming_msg}")
                     response = openai.ChatCompletion.create(
-                        model="gpt-3.5-turbo",
+                        model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                             {"role": "user", "content": incoming_msg}
@@ -565,7 +567,8 @@ def instagram():
                         max_tokens=150
                     )
                     ai_reply = response.choices[0].message.content.strip()
-                    logger.info("✅ Instagram AI reply: " + ai_reply)
+                    model_used = response.model
+                    logger.info(f"✅ Instagram AI reply: {ai_reply}, Model: {model_used}")
                 except Exception as e:
                     ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
                     logger.error(f"❌ Instagram OpenAI error: {str(e)}")
@@ -673,13 +676,14 @@ def handoff():
 def test_openai():
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": "Hello"}],
             max_tokens=10
         )
         ai_reply = response.choices[0].message.content.strip()
-        logger.info(f"✅ OpenAI test successful: {ai_reply}")
-        return jsonify({"status": "success", "reply": ai_reply}), 200
+        model_used = response.model
+        logger.info(f"✅ OpenAI test successful: {ai_reply}, Model: {model_used}")
+        return jsonify({"status": "success", "reply": ai_reply, "model": model_used}), 200
     except Exception as e:
         logger.error(f"❌ OpenAI test failed: {str(e)}")
         logger.error(f"❌ OpenAI test error type: {type(e).__name__}")
