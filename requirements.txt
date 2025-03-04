@@ -6,3 +6,4 @@ gevent
 openai==1.45.0
 python-telegram-bot==20.8
 requests
+gunicorn==22.0.0  # Add gunicorn
