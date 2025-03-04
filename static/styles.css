@@ -177,11 +177,12 @@ body {
 }
 
 .message {
-    margin-bottom: 10px;
+    margin-bottom: 15px; /* Increase spacing between messages */
     max-width: 70%;
-    padding: 10px;
-    border-radius: 10px;
+    padding: 10px 15px; /* More padding for a bubble-like feel */
+    border-radius: 15px; /* Rounded corners for bubble effect */
     position: relative;
+    word-wrap: break-word; /* Ensure long messages wrap */
 }
 
 .user-message {
@@ -190,6 +191,7 @@ body {
     margin-right: auto;
     margin-left: 10px;
     text-align: left;
+    border-top-left-radius: 0; /* Sharp corner on the left-top for user messages */
 }
 
 .agent-message {
@@ -198,6 +200,7 @@ body {
     margin-left: auto;
     margin-right: 10px;
     text-align: right;
+    border-top-right-radius: 0; /* Sharp corner on the right-top for AI messages */
 }
 
 .message-timestamp {
@@ -205,6 +208,7 @@ body {
     color: #999;
     display: block;
     margin-top: 5px;
+    text-align: inherit; /* Align timestamp with the message */
 }
 
 .chat-input {
