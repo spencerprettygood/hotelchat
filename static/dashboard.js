@@ -118,7 +118,7 @@ function logout() {
         }
     })
     .catch(error => {
-        console.error("Error during logout:", error);
+        console.error("❌ Error during logout:", error);
         localStorage.removeItem("agent");
         showLoginPage();
     });
@@ -135,6 +135,7 @@ async function loadConversations(filter = 'all') {
         const response = await fetch("/conversations", { credentials: 'include' });
         if (!response.ok) throw new Error("Failed to fetch conversations: " + response.status);
         const conversations = await response.json();
+        console.log("✅ Conversations fetched:", conversations);
         conversationList.innerHTML = "";
         let unassignedCount = 0, yourCount = 0, teamCount = 0;
 
@@ -192,10 +193,10 @@ async function loadChat(convoId, username) {
     isLoading = true;
     try {
         console.log("🔄 Loading chat for convo ID:", convoId);
-        // Check visibility before loading the chat
-        const isVisible = await checkVisibility(convoId);
+        // Poll for visibility before loading the chat
+        const isVisible = await pollVisibility(convoId);
         if (!isVisible) {
-            console.log(`Conversation ${convoId} is not visible yet, skipping load into Live Conversation`);
+            console.log(`Conversation ${convoId} is not visible after polling, skipping load into Live Conversation`);
             chatBox.innerHTML = "";
             document.getElementById("clientName").textContent = "";
             currentConvoId = null;
@@ -221,6 +222,30 @@ async function loadChat(convoId, username) {
     } finally {
         isLoading = false;
     }
+}
+
+async function pollVisibility(convoId, maxAttempts = 5, interval = 1000) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await fetch(`/check-visibility?conversation_id=${convoId}`, { credentials: 'include' });
+            const data = await response.json();
+            console.log(`✅ Visibility check attempt ${attempt} for convo ID ${convoId}:`, data.visible);
+            if (data.visible) {
+                return true;
+            }
+            if (!response.ok) {
+                console.error(`❌ Visibility check failed on attempt ${attempt}:`, data.error);
+                return false;
+            }
+        } catch (error) {
+            console.error(`❌ Error checking visibility on attempt ${attempt}:`, error);
+            return false;
+        }
+        // Wait before the next attempt
+        await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    console.error(`❌ Conversation ${convoId} not visible after ${maxAttempts} attempts`);
+    return false;
 }
 
 async function isAuthenticated() {
@@ -266,7 +291,7 @@ async function sendMessage() {
 
 function addMessage(content, sender) {
     const messageElement = document.createElement("div");
-    messageElement.classList.add("message", sender === "user" ? "user-message" : "agent-message");
+    messageElement.classList.add("message", sender === "user" ? "user-message" : sender === "agent" ? "agent-message" : "system-message");
     messageElement.innerHTML = `<p>${content}</p><span class="message-timestamp">${new Date().toLocaleTimeString()}</span>`;
     chatBox.appendChild(messageElement);
     chatBox.scrollTop = chatBox.scrollHeight;
@@ -276,7 +301,7 @@ async function checkVisibility(convoId) {
     try {
         const response = await fetch(`/check-visibility?conversation_id=${convoId}`, { credentials: 'include' });
         const data = await response.json();
-        console.log(`Visibility check for convo ID ${convoId}:`, data.visible);
+        console.log(`✅ Visibility check for convo ID ${convoId}:`, data.visible);
         return data.visible;
     } catch (error) {
         console.error("❌ Error checking visibility:", error);
@@ -304,7 +329,7 @@ function listenForNewMessages() {
         console.log("Current convoId:", currentConvoId, "Data convo_id:", data.convo_id);
         
         // Check if the conversation is visible before displaying in Live Conversation panel
-        const isVisible = await checkVisibility(data.convo_id);
+        const isVisible = await pollVisibility(data.convo_id);
         if (isVisible) {
             if (data.convo_id === currentConvoId) {
                 console.log("Adding message to current conversation:", data.message);
@@ -314,11 +339,12 @@ function listenForNewMessages() {
                 loadChat(data.convo_id, data.user || "Unknown");
             }
         } else {
-            console.log(`Conversation ${data.convo_id} is not visible yet, skipping display in Live Conversation`);
+            console.log(`Conversation ${data.convo_id} is not visible after polling, skipping display in Live Conversation`);
         }
 
         const now = Date.now();
         if (now - lastUpdate > 2000) {
+            console.log("🔄 Refreshing conversations after new message");
             loadConversations();
             lastUpdate = now;
         }
@@ -326,7 +352,15 @@ function listenForNewMessages() {
     socket.on("handoff", (data) => {
         console.log("🔔 Handoff event:", data);
         alert(`Chat with ${data.user} (ID: ${data.conversation_id}) has been assigned to ${data.agent}`);
+        console.log("🔄 Refreshing conversations after handoff");
         loadConversations();
+    });
+    socket.on("error", (data) => {
+        console.log("❌ Error event:", data);
+        alert(`Error in conversation ${data.convo_id} (${data.channel}): ${data.message}`);
+        if (data.convo_id === currentConvoId) {
+            addMessage(`Error: ${data.message}`, "system");
+        }
     });
 }
 
