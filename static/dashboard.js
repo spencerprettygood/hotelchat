@@ -2,9 +2,18 @@
 const socket = io();
 
 let currentConversationId = null;
+let currentFilter = 'unassigned'; // Default filter
+let currentChannel = null; // Default: no channel filter
 
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
+    const loginPage = document.getElementById('loginPage');
+    const dashboardSection = document.getElementById('dashboard');
+    if (!loginPage || !dashboardSection) {
+        console.error('Required DOM elements (loginPage, dashboard) are missing.');
+        return;
+    }
+
     checkAuthStatus();
     fetchConversations();
     setInterval(fetchConversations, 5000); // Poll every 5 seconds
@@ -13,24 +22,37 @@ document.addEventListener('DOMContentLoaded', () => {
 // Check if user is authenticated
 function checkAuthStatus() {
     fetch('/check-auth')
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            const loginPage = document.getElementById('loginPage');
+            const dashboardSection = document.getElementById('dashboard');
             if (data.is_authenticated) {
-                document.getElementById('login-section').style.display = 'none';
-                document.getElementById('dashboard').style.display = 'block';
+                loginPage.style.display = 'none';
+                dashboardSection.style.display = 'block';
             } else {
-                document.getElementById('login-section').style.display = 'block';
-                document.getElementById('dashboard').style.display = 'none';
+                loginPage.style.display = 'flex';
+                dashboardSection.style.display = 'none';
             }
         })
         .catch(error => console.error('Error checking auth status:', error));
 }
 
-// Login form submission
-document.getElementById('login-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
+// Login function for the button
+function login() {
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    if (!usernameInput || !passwordInput) {
+        console.error('Username or password input missing.');
+        return;
+    }
+
+    const username = usernameInput.value;
+    const password = passwordInput.value;
 
     fetch('/login', {
         method: 'POST',
@@ -39,10 +61,15 @@ document.getElementById('login-form').addEventListener('submit', (event) => {
         },
         body: JSON.stringify({ username, password }),
     })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.message === 'Login successful') {
-                document.getElementById('login-section').style.display = 'none';
+                document.getElementById('loginPage').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
                 fetchConversations();
             } else {
@@ -50,76 +77,145 @@ document.getElementById('login-form').addEventListener('submit', (event) => {
             }
         })
         .catch(error => console.error('Error during login:', error));
-});
+}
 
 // Logout button
-document.getElementById('logout-button').addEventListener('click', () => {
-    fetch('/logout', {
-        method: 'POST',
-    })
-        .then(response => response.json())
-        .then(data => {
-            if (data.message === 'Logged out successfully') {
-                document.getElementById('login-section').style.display = 'block';
-                document.getElementById('dashboard').style.display = 'none';
-            }
+const logoutButton = document.getElementById('logout-button');
+if (logoutButton) {
+    logoutButton.addEventListener('click', () => {
+        fetch('/logout', {
+            method: 'POST',
         })
-        .catch(error => console.error('Error during logout:', error));
-});
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.message === 'Logged out successfully') {
+                    document.getElementById('loginPage').style.display = 'flex';
+                    document.getElementById('dashboard').style.display = 'none';
+                }
+            })
+            .catch(error => console.error('Error during logout:', error));
+    });
+} else {
+    console.error('Logout button not found.');
+}
 
 // Fetch conversations
 function fetchConversations() {
-    fetch('/conversations')
-        .then(response => response.json())
-        .then(conversations => {
-            const unassignedList = document.getElementById('unassigned-conversations');
-            const yourList = document.getElementById('your-conversations');
-            unassignedList.innerHTML = '';
-            yourList.innerHTML = '';
+    const conversationList = document.getElementById('conversationList');
+    if (!conversationList) {
+        console.error('Conversation list (conversationList) is missing.');
+        return;
+    }
 
-            conversations.forEach(convo => {
+    fetch('/conversations')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(conversations => {
+            conversationList.innerHTML = '';
+
+            // Filter conversations based on currentFilter and currentChannel
+            let filteredConversations = conversations.filter(convo => {
+                // Filter by channel
+                if (currentChannel && convo.channel !== currentChannel) {
+                    return false;
+                }
+                // Filter by assignment
+                if (currentFilter === 'unassigned') {
+                    return !convo.assigned_agent;
+                } else if (currentFilter === 'you') {
+                    return convo.assigned_agent === 'agent1'; // Replace with current user's username if needed
+                } else if (currentFilter === 'team') {
+                    return convo.assigned_agent && convo.assigned_agent !== 'agent1';
+                }
+                return true; // 'all' filter
+            });
+
+            // Update counts
+            updateCounts(conversations);
+
+            filteredConversations.forEach(convo => {
                 const li = document.createElement('li');
                 li.textContent = `${convo.username} (${convo.channel}): ${convo.latest_message}`;
                 li.dataset.convoId = convo.id;
                 li.onclick = () => loadConversation(convo.id);
-
-                if (convo.assigned_agent) {
-                    yourList.appendChild(li);
-                } else {
-                    unassignedList.appendChild(li);
-                }
+                conversationList.appendChild(li);
             });
         })
         .catch(error => console.error('Error fetching conversations:', error));
 }
 
+// Update conversation counts
+function updateCounts(conversations) {
+    const unassignedCount = document.getElementById('unassignedCount');
+    const yourCount = document.getElementById('yourCount');
+    const teamCount = document.getElementById('teamCount');
+    const allCount = document.getElementById('allCount');
+
+    if (unassignedCount && yourCount && teamCount && allCount) {
+        unassignedCount.textContent = conversations.filter(c => !c.assigned_agent).length;
+        yourCount.textContent = conversations.filter(c => c.assigned_agent === 'agent1').length;
+        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== 'agent1').length;
+        allCount.textContent = conversations.length;
+    }
+}
+
+// Load conversations based on filter
+function loadConversations(filter) {
+    currentFilter = filter;
+    fetchConversations();
+}
+
+// Filter by channel
+function filterByChannel(channel) {
+    currentChannel = channel;
+    fetchConversations();
+}
+
 // Load a conversation into the active panel
 function loadConversation(convoId) {
     currentConversationId = convoId;
+    const chatBox = document.getElementById('chatBox');
+    const clientName = document.getElementById('clientName');
+    if (!chatBox || !clientName) {
+        console.error('Chat box or client name element not found.');
+        return;
+    }
+
     fetch(`/messages?conversation_id=${convoId}`)
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(messages => {
-            const chatWindow = document.getElementById('chat-window');
-            chatWindow.innerHTML = '';
+            chatBox.innerHTML = '';
 
             messages.forEach(msg => {
                 const div = document.createElement('div');
                 div.className = msg.sender === 'user' ? 'user-message' : 'ai-message';
                 div.textContent = `${msg.sender}: ${msg.message} (${msg.timestamp})`;
-                chatWindow.appendChild(div);
+                chatBox.appendChild(div);
             });
 
-            chatWindow.scrollTop = chatWindow.scrollHeight;
+            chatBox.scrollTop = chatBox.scrollHeight;
 
-            // Show handoff button if unassigned
-            fetch(`/conversations`)
+            // Update client name (username)
+            fetch('/conversations')
                 .then(response => response.json())
                 .then(conversations => {
                     const convo = conversations.find(c => c.id === convoId);
-                    if (convo && !convo.assigned_agent) {
-                        document.getElementById('handoff-button').style.display = 'block';
-                    } else {
-                        document.getElementById('handoff-button').style.display = 'none';
+                    if (convo) {
+                        clientName.textContent = convo.username;
                     }
                 });
         })
@@ -127,13 +223,18 @@ function loadConversation(convoId) {
 }
 
 // Send a message
-document.getElementById('send-message').addEventListener('click', () => {
+function sendMessage() {
     if (!currentConversationId) {
         alert('Please select a conversation.');
         return;
     }
 
-    const messageInput = document.getElementById('message-input');
+    const messageInput = document.getElementById('messageInput');
+    if (!messageInput) {
+        console.error('Message input not found.');
+        return;
+    }
+
     const message = messageInput.value.trim();
     if (!message) return;
 
@@ -147,7 +248,12 @@ document.getElementById('send-message').addEventListener('click', () => {
             message: message,
         }),
     })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.reply) {
                 // If AI responds, it will be handled via Socket.IO
@@ -159,47 +265,20 @@ document.getElementById('send-message').addEventListener('click', () => {
             }
         })
         .catch(error => console.error('Error sending message:', error));
-});
-
-// Handoff button
-document.getElementById('handoff-button').addEventListener('click', () => {
-    if (!currentConversationId) {
-        alert('Please select a conversation.');
-        return;
-    }
-
-    fetch('/handoff', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            conversation_id: currentConversationId,
-        }),
-    })
-        .then(response => response.json())
-        .then(data => {
-            if (data.message) {
-                alert(data.message);
-                fetchConversations();
-                document.getElementById('handoff-button').style.display = 'none';
-            } else {
-                alert('Error assigning chat: ' + data.error);
-            }
-        })
-        .catch(error => console.error('Error during handoff:', error));
-});
+}
 
 // Socket.IO event listeners
 socket.on('new_message', (data) => {
     console.log('New message received:', data);
     if (data.convo_id === currentConversationId) {
-        const chatWindow = document.getElementById('chat-window');
-        const div = document.createElement('div');
-        div.className = data.sender === 'user' ? 'user-message' : 'ai-message';
-        div.textContent = `${data.sender}: ${data.message}`;
-        chatWindow.appendChild(div);
-        chatWindow.scrollTop = chatWindow.scrollHeight;
+        const chatBox = document.getElementById('chatBox');
+        if (chatBox) {
+            const div = document.createElement('div');
+            div.className = data.sender === 'user' ? 'user-message' : 'ai-message';
+            div.textContent = `${data.sender}: ${data.message}`;
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
     }
     fetchConversations(); // Refresh the conversation list
 });
@@ -229,7 +308,12 @@ socket.on('handoff', (data) => {
 // Poll visibility of a conversation
 function pollVisibility(conversationId) {
     fetch(`/check-visibility?conversation_id=${conversationId}`)
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.visible) {
                 console.log(`Conversation ${conversationId} is now visible`);
