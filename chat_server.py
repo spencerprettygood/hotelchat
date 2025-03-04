@@ -59,7 +59,7 @@ def initialize_database():
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             assigned_agent TEXT DEFAULT NULL,
             channel TEXT DEFAULT 'dashboard',
-            opted_in INTEGER DEFAULT 0,
+            opted_in INTEGER DEFAULT 0,  -- Not used anymore, but keeping for schema compatibility
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
             visible_in_conversations INTEGER DEFAULT 0
@@ -305,17 +305,19 @@ def whatsapp():
     print("Received WhatsApp message:", incoming_msg, "from:", from_number)
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, opted_in, last_updated, handoff_notified, ai_enabled FROM conversations WHERE username = ?", (from_number,))
+    c.execute("SELECT id, last_updated, handoff_notified, ai_enabled FROM conversations WHERE username = ?", (from_number,))
     convo = c.fetchone()
-    if not convo:
+
+    # Check if this is a new conversation
+    is_new_conversation = not convo
+    if is_new_conversation:
         c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled) VALUES (?, ?, ?, 1)", 
                   (from_number, incoming_msg, "whatsapp"))
         convo_id = c.lastrowid
-        opted_in = 0
         handoff_notified = 0
         ai_enabled = 1
     else:
-        convo_id, opted_in, last_updated, handoff_notified, ai_enabled = convo
+        convo_id, last_updated, handoff_notified, ai_enabled = convo
         # Check if last message was more than 24 hours ago to reset ai_enabled and handoff_notified
         last_updated_dt = datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")
         if (datetime.now() - last_updated_dt) > timedelta(hours=24):
@@ -336,88 +338,62 @@ def whatsapp():
         resp = MessagingResponse()
         return str(resp)
 
-    # Handle opt-in flow
-    ai_reply = None
-    if not opted_in:
-        if incoming_msg.upper() == "YES":
-            try:
-                twilio_client.messages.create(
-                    body="Thank you for opting in! You'll now receive updates from us.",
-                    from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                    to=f"whatsapp:{from_number}"
-                )
-                print("Sent opt-in message to WhatsApp")
-            except Exception as e:
-                print(f"Twilio error sending opt-in message: {str(e)}")
-                print(f"Twilio error details: {e.__dict__}")
-            conn = sqlite3.connect(DB_NAME)
-            c = conn.cursor()
-            c.execute("UPDATE conversations SET opted_in = 1 WHERE id = ?", (convo_id,))
-            conn.commit()
-            conn.close()
-            opted_in = 1  # Update the local variable
-            ai_reply = "Thank you for opting in!"
-            log_message(convo_id, "AI", ai_reply, "ai")
-            print("Emitting new_message for opt-in response, convo_id:", convo_id)
-            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
-            # Do not return here; let the AI response logic run
-        else:
-            try:
-                twilio_client.messages.create(
-                    body="Would you like to receive updates from us? Reply YES to opt in.",
-                    from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                    to=f"whatsapp:{from_number}"
-                )
-                print("Sent opt-in prompt to WhatsApp")
-            except Exception as e:
-                print(f"Twilio error sending opt-in prompt: {str(e)}")
-                print(f"Twilio error details: {e.__dict__}")
-            ai_reply = "Would you like to receive updates? Reply YES to opt in."
-            log_message(convo_id, "AI", ai_reply, "ai")
-            print("Emitting new_message for opt-in prompt, convo_id:", convo_id)
-            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
-            # Do not return here; let the AI response logic run if needed
-
-    # Process the message with AI if no opt-in response was sent or after opt-in
-    if ai_reply is None or opted_in:  # Only process AI if not already handled or if opted in
+    # Send welcome message for new conversations
+    if is_new_conversation:
+        welcome_message = "Welcome to Sunshine Hotel! I'm here to assist with your bookings. How can I help you today?"
         try:
-            print(f"Processing message with AI for convo_id {convo_id}")
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                    {"role": "user", "content": incoming_msg}
-                ],
-                max_tokens=150
-            )
-            ai_reply = response.choices[0].message.content.strip()
-            print("AI reply:", ai_reply)
-        except Exception as e:
-            ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
-            print(f"OpenAI error: {e}")
-
-        # Fallback: Force handoff for specific keywords like "HELP"
-        if "HELP" in incoming_msg.upper():
-            ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
-            print("Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
-
-        # Log and emit the AI response
-        log_message(convo_id, "AI", ai_reply, "ai")
-        print("Emitting new_message for AI response, convo_id:", convo_id)
-        socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
-
-        # Send AI response to WhatsApp
-        try:
-            print("Sending AI message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{from_number}", "Body:", ai_reply)
             twilio_client.messages.create(
-                body=ai_reply,
+                body=welcome_message,
                 from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
                 to=f"whatsapp:{from_number}"
             )
-            print("AI message sent to WhatsApp:", ai_reply)
+            print("Sent welcome message to WhatsApp")
         except Exception as e:
-            print(f"Twilio error sending AI message: {str(e)}")
+            print(f"Twilio error sending welcome message: {str(e)}")
             print(f"Twilio error details: {e.__dict__}")
+        log_message(convo_id, "AI", welcome_message, "ai")
+        print("Emitting new_message for welcome message, convo_id:", convo_id)
+        socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "whatsapp"})
+
+    # Process the message with AI
+    try:
+        print(f"Processing message with AI for convo_id {convo_id}")
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
+                {"role": "user", "content": incoming_msg}
+            ],
+            max_tokens=150
+        )
+        ai_reply = response.choices[0].message.content.strip()
+        print("AI reply:", ai_reply)
+    except Exception as e:
+        ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+        print(f"OpenAI error: {e}")
+
+    # Fallback: Force handoff for specific keywords like "HELP"
+    if "HELP" in incoming_msg.upper():
+        ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+        print("Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
+
+    # Log and emit the AI response
+    log_message(convo_id, "AI", ai_reply, "ai")
+    print("Emitting new_message for AI response, convo_id:", convo_id)
+    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+
+    # Send AI response to WhatsApp
+    try:
+        print("Sending AI message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{from_number}", "Body:", ai_reply)
+        twilio_client.messages.create(
+            body=ai_reply,
+            from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+            to=f"whatsapp:{from_number}"
+        )
+        print("AI message sent to WhatsApp:", ai_reply)
+    except Exception as e:
+        print(f"Twilio error sending AI message: {str(e)}")
+        print(f"Twilio error details: {e.__dict__}")
 
     # Handle handoff if needed
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
@@ -508,11 +484,11 @@ def send_welcome():
         return jsonify({"error": "Missing to_number"}), 400
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, opted_in FROM conversations WHERE username = ? AND channel = ?", (to_number, "whatsapp"))
+    c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "whatsapp"))
     convo = c.fetchone()
-    if not convo or not convo[1]:
+    if not convo:
         conn.close()
-        return jsonify({"error": "User not opted in"}), 403
+        return jsonify({"error": "Conversation not found"}), 404
     convo_id = convo[0]
     conn.close()
     try:
