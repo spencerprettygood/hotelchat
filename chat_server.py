@@ -12,6 +12,7 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 import requests
 from datetime import datetime, timedelta
+import time
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -21,9 +22,16 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+# Initialize OpenAI client without proxies
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     print("⚠️ OPENAI_API_KEY not set in environment variables")
+
+# Explicitly set proxies to None to avoid proxy-related errors
+try:
+    openai.proxy = None  # Ensure no proxy is used
+except AttributeError:
+    print("⚠️ OpenAI library does not support proxy attribute, proceeding without proxy configuration")
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -244,7 +252,7 @@ def chat():
     convo_id = data.get("conversation_id")
     user_message = data.get("message")
     if not convo_id or not user_message:
-        print("❌ Missing required fields in /chat request")
+        print("�ungg Missing required fields in /chat request")
         return jsonify({"error": "Missing required fields"}), 400
     try:
         print("✅ Entering /chat endpoint")
@@ -280,6 +288,7 @@ def chat():
                 except Exception as e:
                     print(f"❌ Twilio error sending agent message: {str(e)}")
                     print(f"Twilio error details: {e.__dict__}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": channel})
             print("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
 
@@ -288,7 +297,7 @@ def chat():
         if ai_enabled:
             print("✅ AI is enabled, proceeding with AI response")
             try:
-                print("AI processing message:", user_message)
+                print("AI processing message with gpt-4o-mini:", user_message)
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
@@ -300,11 +309,27 @@ def chat():
                 ai_reply = response.choices[0].message.content.strip()
                 print("✅ AI reply:", ai_reply)
             except Exception as e:
-                ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                print(f"❌ OpenAI error: {e}")
+                print(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
+                print(f"❌ OpenAI error type: {type(e).__name__}")
+                print("✅ Falling back to gpt-3.5-turbo")
+                try:
+                    response = openai.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
+                            {"role": "user", "content": user_message}
+                        ],
+                        max_tokens=150
+                    )
+                    ai_reply = response.choices[0].message.content.strip()
+                    print("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
+                except Exception as e:
+                    ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                    print(f"❌ Fallback OpenAI error: {str(e)}")
+                    print(f"❌ Fallback OpenAI error type: {type(e).__name__}")
             print("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
             if channel == "whatsapp":
                 try:
                     print("Sending AI message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{username}", "Body:", ai_reply)
@@ -317,6 +342,7 @@ def chat():
                 except Exception as e:
                     print(f"❌ Twilio error sending AI message: {str(e)}")
                     print(f"Twilio error details: {e.__dict__}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": channel})
             print("✅ Checking for handoff condition")
             if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                 try:
@@ -330,6 +356,8 @@ def chat():
                         default_agent = "agent1"
                         c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                         conn.commit()
+                        # Add a slight delay to ensure the transaction is committed
+                        time.sleep(0.5)
                         socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
                         print(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                     conn.close()
@@ -410,6 +438,7 @@ def whatsapp():
             except Exception as e:
                 print(f"❌ Twilio error sending welcome message: {str(e)}")
                 print(f"Twilio error details: {e.__dict__}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to WhatsApp: {str(e)}", "channel": "whatsapp"})
             print("✅ Logging welcome message")
             log_message(convo_id, "AI", welcome_message, "ai")
             print("✅ Emitting new_message event for welcome message")
@@ -418,7 +447,7 @@ def whatsapp():
         # Process the message with AI
         print("✅ Processing message with AI")
         try:
-            print(f"Processing message with AI for convo_id {convo_id}: {incoming_msg}")
+            print(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -430,8 +459,24 @@ def whatsapp():
             ai_reply = response.choices[0].message.content.strip()
             print("✅ AI reply:", ai_reply)
         except Exception as e:
-            ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-            print(f"❌ OpenAI error: {e}")
+            print(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
+            print(f"❌ OpenAI error type: {type(e).__name__}")
+            print("✅ Falling back to gpt-3.5-turbo")
+            try:
+                response = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
+                        {"role": "user", "content": incoming_msg}
+                    ],
+                    max_tokens=150
+                )
+                ai_reply = response.choices[0].message.content.strip()
+                print("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
+            except Exception as e:
+                ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                print(f"❌ Fallback OpenAI error: {str(e)}")
+                print(f"❌ Fallback OpenAI error type: {type(e).__name__}")
 
         # Fallback: Force handoff for specific keywords like "HELP"
         print("✅ Checking for HELP keyword")
@@ -458,6 +503,7 @@ def whatsapp():
         except Exception as e:
             print(f"❌ Twilio error sending AI message: {str(e)}")
             print(f"Twilio error details: {e.__dict__}")
+            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": "whatsapp"})
 
         # Handle handoff if needed
         print("✅ Checking for handoff condition")
@@ -474,6 +520,8 @@ def whatsapp():
                     default_agent = "agent1"
                     c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                     conn.commit()
+                    # Add a slight delay to ensure the transaction is committed
+                    time.sleep(0.5)
                     socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "whatsapp"})
                     print(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                 conn.close()
@@ -527,8 +575,24 @@ def instagram():
                     ai_reply = response.choices[0].message.content.strip()
                     print("✅ Instagram AI reply:", ai_reply)
                 except Exception as e:
-                    ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                    print(f"❌ Instagram OpenAI error: {e}")
+                    print(f"❌ Instagram OpenAI error with gpt-4o-mini: {str(e)}")
+                    print(f"❌ Instagram OpenAI error type: {type(e).__name__}")
+                    print("✅ Falling back to gpt-3.5-turbo for Instagram")
+                    try:
+                        response = openai.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=[
+                                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
+                                {"role": "user", "content": incoming_msg}
+                            ],
+                            max_tokens=150
+                        )
+                        ai_reply = response.choices[0].message.content.strip()
+                        print("✅ Fallback Instagram AI reply with gpt-3.5-turbo:", ai_reply)
+                    except Exception as e:
+                        ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                        print(f"❌ Fallback Instagram OpenAI error: {str(e)}")
+                        print(f"❌ Fallback Instagram OpenAI error type: {type(e).__name__}")
                 print("✅ Logging Instagram AI response")
                 log_message(convo_id, "AI", ai_reply, "ai")
                 print("✅ Sending Instagram AI response")
@@ -548,6 +612,8 @@ def instagram():
                             default_agent = "agent1"
                             c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                             conn.commit()
+                            # Add a slight delay to ensure the transaction is committed
+                            time.sleep(0.5)
                             socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": sender_id, "channel": "instagram"})
                             print(f"✅ Instagram handoff triggered for convo_id {convo_id}, assigned to {default_agent}")
                         conn.close()
@@ -601,7 +667,8 @@ def send_welcome():
         print("✅ Welcome message sent successfully")
         return jsonify({"message": "Welcome message sent"}), 200
     except Exception as e:
-        print(f"❌ Twilio error in send-welcome: {e}")
+        print(f"❌ Twilio error in send-welcome: {str(e)}")
+        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to WhatsApp: {str(e)}", "channel": "whatsapp"})
         return jsonify({"error": "Failed to send message"}), 500
 
 @app.route("/handoff", methods=["POST"])
