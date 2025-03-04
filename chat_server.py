@@ -70,7 +70,7 @@ def initialize_database():
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             assigned_agent TEXT DEFAULT NULL,
             channel TEXT DEFAULT 'dashboard',
-            opted_in INTEGER DEFAULT 0,  -- Not used, but kept for schema compatibility
+            opted_in INTEGER DEFAULT 0,
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
             visible_in_conversations INTEGER DEFAULT 0
@@ -108,7 +108,8 @@ def add_test_conversations():
                 ("guest3", "Do you have a pool?")]
             convo_ids = []
             for username, message in test_conversations:
-                c.execute("INSERT INTO conversations (username, latest_message, visible_in_conversations) VALUES (?, ?, 1)", (username, message))
+                c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                          (username, message, "dashboard"))
                 convo_ids.append(c.lastrowid)
             test_messages = [
                 (convo_ids[0], "guest1", "Hi, can I book a room?", "user"),
@@ -120,6 +121,8 @@ def add_test_conversations():
             for convo_id, user, message, sender in test_messages:
                 c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
                           (convo_id, user, message, sender))
+            # Simulate a handoff for guest1 to make it visible
+            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_ids[0],))
             conn.commit()
             logger.info("✅ Test conversations added.")
     except sqlite3.Error as e:
@@ -346,9 +349,10 @@ def chat():
                 try:
                     conn = sqlite3.connect(DB_NAME)
                     c = conn.cursor()
-                    c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
-                    handoff_notified = c.fetchone()[0]
-                    logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}")
+                    c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                    result = c.fetchone()
+                    handoff_notified, visible_in_conversations = result if result else (0, 0)
+                    logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                     if not handoff_notified:
                         c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                         conn.commit()
@@ -356,8 +360,8 @@ def chat():
                         c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                         updated_result = c.fetchone()
                         logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                        socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": username, "channel": channel})
-                        logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+                        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+                        logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                     conn.close()
                 except Exception as e:
                     logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
@@ -401,7 +405,7 @@ def telegram():
         logger.info(f"✅ Is new conversation: {is_new_conversation}")
         if is_new_conversation:
             logger.info("✅ Creating new conversation")
-            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 1)", 
+            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
                       (from_number, incoming_msg, "telegram"))
             convo_id = c.lastrowid
             conn.commit()  # Explicit commit after insert
@@ -511,8 +515,7 @@ def telegram():
                     c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                     updated_result = c.fetchone()
                     logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                    # Emit a refresh event instead of a handoff event with a popup
-                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "telegram"})
                     logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 conn.close()
             except Exception as e:
@@ -543,7 +546,8 @@ def instagram():
                 c.execute("SELECT id FROM conversations WHERE username = ?", (sender_id,))
                 convo = c.fetchone()
                 if not convo:
-                    c.execute("INSERT INTO conversations (username, latest_message, channel) VALUES (?, ?, ?)", (sender_id, incoming_msg, "instagram"))
+                    c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                              (sender_id, incoming_msg, "instagram"))
                     convo_id = c.lastrowid
                 else:
                     convo_id = convo[0]
@@ -588,7 +592,7 @@ def instagram():
                             c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                             updated_result = c.fetchone()
                             logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                            socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": sender_id, "channel": "instagram"})
+                            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": sender_id, "channel": "instagram"})
                             logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                         conn.close()
                     except Exception as e:
@@ -658,7 +662,7 @@ def handoff():
         username, channel = c.fetchone()
         conn.commit()
         conn.close()
-        socketio.emit("handoff", {"conversation_id": convo_id, "agent": current_user.username, "user": username, "channel": channel})
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
         logger.info(f"✅ Chat {convo_id} assigned to {current_user.username}")
         return jsonify({"message": f"Chat assigned to {current_user.username}"})
     except Exception as e:
