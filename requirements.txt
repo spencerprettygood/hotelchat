@@ -3,7 +3,7 @@ Flask-CORS
 flask-socketio
 flask-login
 gevent
-openai==1.45.0
+openai==0.27.8  # Downgrade to avoid proxy issues
 python-telegram-bot==20.8
 requests
-gunicorn==22.0.0  # Add gunicorn
+gunicorn==22.0.0
