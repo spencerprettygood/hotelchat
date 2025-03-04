@@ -168,6 +168,20 @@ def get_conversations():
     conn.close()
     return jsonify(conversations)
 
+@app.route("/check-visibility", methods=["GET"])
+def check_visibility():
+    convo_id = request.args.get("conversation_id")
+    if not convo_id:
+        return jsonify({"error": "Missing conversation ID"}), 400
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+    result = c.fetchone()
+    conn.close()
+    if result:
+        return jsonify({"visible": bool(result[0])})
+    return jsonify({"error": "Conversation not found"}), 404
+
 @app.route("/messages", methods=["GET"])
 def get_messages():
     convo_id = request.args.get("conversation_id")
@@ -335,6 +349,7 @@ def whatsapp():
             c.execute("UPDATE conversations SET opted_in = 1 WHERE id = ?", (convo_id,))
             conn.commit()
             conn.close()
+            opted_in = 1  # Update the local variable
             log_message(convo_id, "AI", "Thank you for opting in!", "ai")
             print("Emitting new_message for convo_id:", convo_id)
             socketio.emit("new_message", {"convo_id": convo_id, "message": "Thank you for opting in!", "sender": "ai", "channel": "whatsapp"})
