@@ -5,10 +5,10 @@ let socket = null;
 let isLoading = false;
 let pollingInterval = null;
 let isLoggedIn = false;
+let lastUpdate = 0;
 
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ Page loaded at:", new Date().toLocaleTimeString());
-    // Force initial visibility to login page
     document.getElementById("loginPage").style.display = "flex";
     document.getElementById("dashboard").style.display = "none";
     checkLogin();
@@ -37,7 +37,7 @@ async function checkLogin() {
                     console.log("🔌 WebSocket already exists");
                 }
                 loadConversations();
-                startPolling();  // Start polling only after login
+                startPolling();
             } else {
                 console.log("❌ Session invalid, clearing agent and showing login");
                 localStorage.removeItem("agent");
@@ -192,6 +192,7 @@ async function loadChat(convoId, username) {
         const messages = await response.json();
         chatBox.innerHTML = "";
         messages.forEach(msg => {
+            console.log("Message sender:", msg.sender);
             const messageElement = document.createElement("div");
             messageElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
             messageElement.innerHTML = `<p>${msg.message}</p><span class="message-timestamp">${new Date(msg.timestamp).toLocaleTimeString()}</span>`;
@@ -210,6 +211,17 @@ async function loadChat(convoId, username) {
 
 let currentConvoId = null;
 
+async function isAuthenticated() {
+    try {
+        const response = await fetch("/check-auth", { credentials: 'include' });
+        const data = await response.json();
+        return data.is_authenticated;
+    } catch (error) {
+        console.error("❌ Error checking auth:", error);
+        return false;
+    }
+}
+
 async function sendMessage() {
     const messageInput = document.getElementById("messageInput");
     const message = messageInput.value.trim();
@@ -217,10 +229,13 @@ async function sendMessage() {
         console.log("⚠️ No message or convo ID, skipping send");
         return;
     }
-    addMessage(message, "user");
     messageInput.value = "";
+    
+    const isAgent = await isAuthenticated();
+    const sender = isAgent ? "agent" : "user";
+    console.log("🔄 Sending message as:", sender);
+
     try {
-        console.log("🔄 Sending message:", message);
         const response = await fetch("/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -228,8 +243,10 @@ async function sendMessage() {
             credentials: 'include'
         });
         const data = await response.json();
-        addMessage(data.reply, "ai");
-        console.log("✅ Message sent, reply received:", data.reply);
+        console.log("Response from /chat:", data);
+        if (sender !== "agent" && data.reply) {
+            addMessage(data.reply, "ai");
+        }
     } catch (error) {
         console.error("❌ Error sending message:", error);
     }
@@ -263,8 +280,11 @@ function listenForNewMessages() {
         if (data.convo_id === currentConvoId) {
             addMessage(data.message, data.sender);
         }
-        loadConversations();
-        try { notificationSound.play(); } catch (e) { console.log("Notification sound failed:", e); }
+        const now = Date.now();
+        if (now - lastUpdate > 2000) {
+            loadConversations();
+            lastUpdate = now;
+        }
     });
     socket.on("handoff", (data) => {
         console.log("🔔 Handoff event:", data);
@@ -312,8 +332,12 @@ function startPolling() {
     }
     pollingInterval = setInterval(() => {
         if (!isLoading && isLoggedIn) {
-            console.log("🔄 Polling conversations");
-            loadConversations();
+            const now = Date.now();
+            if (now - lastUpdate > 10000) {
+                console.log("🔄 Polling conversations");
+                loadConversations();
+                lastUpdate = now;
+            }
         }
     }, 10000);
 }
