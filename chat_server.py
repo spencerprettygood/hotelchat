@@ -350,14 +350,14 @@ def chat():
                     handoff_notified = c.fetchone()[0]
                     logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}")
                     if not handoff_notified:
-                        # Automatically assign to "agent1"
-                        default_agent = "agent1"
-                        c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                         conn.commit()
-                        # Increase delay to ensure the transaction is committed
-                        time.sleep(2.0)
-                        socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
-                        logger.info(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
+                        time.sleep(3.0)
+                        c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                        updated_result = c.fetchone()
+                        logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
+                        socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": username, "channel": channel})
+                        logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                     conn.close()
                 except Exception as e:
                     logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
@@ -404,6 +404,11 @@ def telegram():
             c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 1)", 
                       (from_number, incoming_msg, "telegram"))
             convo_id = c.lastrowid
+            conn.commit()  # Explicit commit after insert
+            # Debug: Verify the insert
+            c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+            insert_result = c.fetchone()
+            logger.info(f"✅ After creating convo_id {convo_id}: visible_in_conversations={insert_result[0]}")
             handoff_notified = 0
             ai_enabled = 1
             logger.info(f"✅ Created new conversation for {from_number}: convo_id {convo_id}")
@@ -501,14 +506,17 @@ def telegram():
                 handoff_notified, visible_in_conversations = result if result else (0, 0)
                 logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                 if not handoff_notified:
-                    # Automatically assign to "agent1"
-                    default_agent = "agent1"
-                    c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
+                    # Mark as handoff needed but do not assign to an agent
+                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                     conn.commit()
                     # Increase delay to ensure the transaction is committed
-                    time.sleep(2.0)
-                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "telegram"})
-                    logger.info(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
+                    time.sleep(3.0)
+                    # Debug: Verify the update
+                    c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                    updated_result = c.fetchone()
+                    logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
+                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": from_number, "channel": "telegram"})
+                    logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 conn.close()
             except Exception as e:
                 logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
@@ -577,12 +585,14 @@ def instagram():
                         c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
                         handoff_notified = c.fetchone()[0]
                         if not handoff_notified:
-                            default_agent = "agent1"
-                            c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                             conn.commit()
-                            time.sleep(2.0)
-                            socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": sender_id, "channel": "instagram"})
-                            logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, assigned to {default_agent}")
+                            time.sleep(3.0)
+                            c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                            updated_result = c.fetchone()
+                            logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
+                            socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": sender_id, "channel": "instagram"})
+                            logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                         conn.close()
                     except Exception as e:
                         logger.error(f"❌ Error during Instagram handoff for convo_id {convo_id}: {e}")
@@ -657,6 +667,22 @@ def handoff():
     except Exception as e:
         logger.error(f"❌ Error in /handoff endpoint: {e}")
         return jsonify({"error": "Failed to assign chat"}), 500
+
+@app.route("/test-openai", methods=["GET"])
+def test_openai():
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=10
+        )
+        ai_reply = response.choices[0].message.content.strip()
+        logger.info(f"✅ OpenAI test successful: {ai_reply}")
+        return jsonify({"status": "success", "reply": ai_reply}), 200
+    except Exception as e:
+        logger.error(f"❌ OpenAI test failed: {str(e)}")
+        logger.error(f"❌ OpenAI test error type: {type(e).__name__}")
+        return jsonify({"status": "failed", "error": str(e)}), 500
 
 @app.route("/clear-database", methods=["POST"])
 def clear_database():
