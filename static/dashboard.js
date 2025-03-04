@@ -6,7 +6,7 @@ let isLoading = false;
 let pollingInterval = null;
 let isLoggedIn = false;
 let lastUpdate = 0;
-let currentConvoId = null; // Ensure this starts as null
+let currentConvoId = null;
 
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ Page loaded at:", new Date().toLocaleTimeString());
@@ -67,7 +67,7 @@ function showLoginPage() {
     stopPolling();
     chatBox.innerHTML = "";
     conversationList.innerHTML = "";
-    currentConvoId = null; // Reset currentConvoId on logout
+    currentConvoId = null;
 }
 
 async function login() {
@@ -162,23 +162,8 @@ async function loadConversations(filter = 'all') {
             convoItem.appendChild(avatar);
             convoItem.appendChild(details);
 
-            // Add "Claim Chat" button for unassigned chats
-            if (!convo.assigned_agent) {
-                const claimButton = document.createElement("button");
-                claimButton.textContent = "Claim Chat";
-                claimButton.style.padding = "5px 10px";
-                claimButton.style.marginLeft = "10px";
-                claimButton.style.backgroundColor = "#007bff";
-                claimButton.style.color = "white";
-                claimButton.style.border = "none";
-                claimButton.style.borderRadius = "5px";
-                claimButton.style.cursor = "pointer";
-                claimButton.onclick = () => handoff(convo.id);
-                convoItem.appendChild(claimButton);
-            } else {
-                // Allow clicking to load chat if not unassigned
-                convoItem.onclick = () => loadChat(convo.id, convo.username);
-            }
+            // All chats are clickable to load into Live Conversation panel
+            convoItem.onclick = () => loadChat(convo.id, convo.username);
 
             conversationList.appendChild(convoItem);
 
@@ -340,7 +325,7 @@ function listenForNewMessages() {
     });
     socket.on("handoff", (data) => {
         console.log("🔔 Handoff event:", data);
-        alert(`New unassigned chat with ${data.user} (ID: ${data.conversation_id})`);
+        alert(`Chat with ${data.user} (ID: ${data.conversation_id}) has been assigned to ${data.agent}`);
         loadConversations();
     });
 }
