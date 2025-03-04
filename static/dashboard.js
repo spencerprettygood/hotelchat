@@ -112,14 +112,6 @@ function fetchConversations() {
         return;
     }
 
-    // Fetch conversations
-function fetchConversations() {
-    const conversationList = document.getElementById('conversationList');
-    if (!conversationList) {
-        console.error('Conversation list (conversationList) is missing.');
-        return;
-    }
-
     fetch('/conversations')
         .then(response => {
             if (!response.ok) {
@@ -152,10 +144,35 @@ function fetchConversations() {
 
             filteredConversations.forEach(convo => {
                 const li = document.createElement('li');
-                // Show only username and channel
-                li.textContent = `${convo.username} (${convo.channel})`;
-                li.dataset.convoId = convo.id;
-                li.onclick = () => loadConversation(convo.id);
+                // Create a container for the conversation info and button
+                const convoContainer = document.createElement('div');
+                convoContainer.style.display = 'flex';
+                convoContainer.style.justifyContent = 'space-between';
+                convoContainer.style.alignItems = 'center';
+
+                // Conversation info
+                const convoInfo = document.createElement('span');
+                convoInfo.textContent = `${convo.username} (${convo.channel})`;
+                convoInfo.onclick = () => loadConversation(convo.id);
+                convoInfo.style.cursor = 'pointer';
+                convoContainer.appendChild(convoInfo);
+
+                // Add "Take Over" button for unassigned conversations
+                if (!convo.assigned_agent) {
+                    const takeOverButton = document.createElement('button');
+                    takeOverButton.textContent = 'Take Over';
+                    takeOverButton.onclick = () => takeOverConversation(convo.id);
+                    takeOverButton.style.marginLeft = '10px';
+                    takeOverButton.style.padding = '5px 10px';
+                    takeOverButton.style.backgroundColor = '#007bff';
+                    takeOverButton.style.color = 'white';
+                    takeOverButton.style.border = 'none';
+                    takeOverButton.style.borderRadius = '3px';
+                    takeOverButton.style.cursor = 'pointer';
+                    convoContainer.appendChild(takeOverButton);
+                }
+
+                li.appendChild(convoContainer);
                 conversationList.appendChild(li);
             });
         })
@@ -189,6 +206,36 @@ function filterByChannel(channel) {
     fetchConversations();
 }
 
+// Take over a conversation
+function takeOverConversation(convoId) {
+    fetch('/handoff', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            conversation_id: convoId,
+        }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.message) {
+                fetchConversations(); // Refresh the conversation list
+                if (currentConversationId === convoId) {
+                    loadConversation(convoId); // Reload the current conversation
+                }
+            } else {
+                alert('Error assigning chat: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error during handoff:', error));
+}
+
 // Load a conversation into the active panel
 function loadConversation(convoId) {
     currentConversationId = convoId;
@@ -211,8 +258,22 @@ function loadConversation(convoId) {
 
             messages.forEach(msg => {
                 const div = document.createElement('div');
-                div.className = msg.sender === 'user' ? 'user-message' : 'ai-message';
-                div.textContent = `${msg.sender}: ${msg.message} (${msg.timestamp})`;
+                const isUser = msg.sender === 'user';
+                div.className = isUser ? 'user-message' : 'agent-message';
+
+                // Message text
+                const textSpan = document.createElement('span');
+                textSpan.textContent = msg.message;
+                div.appendChild(textSpan);
+
+                // Timestamp
+                const timestampSpan = document.createElement('span');
+                timestampSpan.className = 'message-timestamp';
+                // Extract time (e.g., "2025-03-04 21:24:54" -> "21:24")
+                const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
+                timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
+                div.appendChild(timestampSpan);
+
                 chatBox.appendChild(div);
             });
 
@@ -283,13 +344,24 @@ socket.on('new_message', (data) => {
         const chatBox = document.getElementById('chatBox');
         if (chatBox) {
             const div = document.createElement('div');
-            div.className = data.sender === 'user' ? 'user-message' : 'ai-message';
-            div.textContent = `${data.sender}: ${data.message}`;
+            const isUser = data.sender === 'user';
+            div.className = isUser ? 'user-message' : 'agent-message';
+
+            const textSpan = document.createElement('span');
+            textSpan.textContent = data.message;
+            div.appendChild(textSpan);
+
+            const timestampSpan = document.createElement('span');
+            timestampSpan.className = 'message-timestamp';
+            const now = new Date();
+            timestampSpan.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+            div.appendChild(timestampSpan);
+
             chatBox.appendChild(div);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
     }
-    fetchConversations(); // Refresh the conversation list
+    fetchConversations();
 });
 
 socket.on('error', (data) => {
@@ -297,20 +369,10 @@ socket.on('error', (data) => {
     alert(data.message);
 });
 
-socket.on('handoff', (data) => {
-    console.log('Handoff event received:', data);
+socket.on('refresh_conversations', (data) => {
+    console.log('Refresh conversations event received:', data);
     const conversationId = data.conversation_id;
-    const agent = data.agent;
-    const user = data.user;
-    const channel = data.channel;
-
-    // Show notification
-    alert(`Conversation ${conversationId} from ${user} (${channel}) needs attention.`);
-
-    // Check visibility of the conversation
     pollVisibility(conversationId);
-
-    // Refresh the conversation list immediately
     fetchConversations();
 });
 
