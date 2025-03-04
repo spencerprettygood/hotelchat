@@ -12,8 +12,6 @@ import requests
 from datetime import datetime, timedelta
 import time
 import logging
-from twilio.rest import Client
-from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -36,16 +34,12 @@ if not openai.api_key:
 # Log environment variables to debug
 logger.info(f"Environment variables: {dict(os.environ)}")
 
-# Initialize Twilio client
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("⚠️ TELEGRAM_BOT_TOKEN not set in environment variables")
+    raise ValueError("TELEGRAM_BOT_TOKEN not set")
 
-if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
-    logger.error("⚠️ Twilio credentials not set in environment variables")
-    raise ValueError("Twilio credentials not set")
-
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
@@ -76,7 +70,7 @@ def initialize_database():
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             assigned_agent TEXT DEFAULT NULL,
             channel TEXT DEFAULT 'dashboard',
-            opted_in INTEGER DEFAULT 0,
+            opted_in INTEGER DEFAULT 0,  -- Not used, but kept for schema compatibility
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
             visible_in_conversations INTEGER DEFAULT 0
@@ -114,7 +108,7 @@ def add_test_conversations():
                 ("guest3", "Do you have a pool?")]
             convo_ids = []
             for username, message in test_conversations:
-                c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", (username, message, "dashboard"))
+                c.execute("INSERT INTO conversations (username, latest_message, visible_in_conversations) VALUES (?, ?, 1)", (username, message))
                 convo_ids.append(c.lastrowid)
             test_messages = [
                 (convo_ids[0], "guest1", "Hi, can I book a room?", "user"),
@@ -126,8 +120,6 @@ def add_test_conversations():
             for convo_id, user, message, sender in test_messages:
                 c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
                           (convo_id, user, message, sender))
-            # Simulate a handoff for guest1 to make it visible
-            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_ids[0],))
             conn.commit()
             logger.info("✅ Test conversations added.")
     except sqlite3.Error as e:
@@ -183,7 +175,6 @@ def logout():
 
 @app.route("/conversations", methods=["GET"])
 def get_conversations():
-    logger.info(f"Received /conversations request: headers={request.headers}, args={request.args}")
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
@@ -201,7 +192,6 @@ def get_conversations():
 
 @app.route("/check-visibility", methods=["GET"])
 def check_visibility():
-    logger.info(f"Received /check-visibility request: headers={request.headers}, args={request.args}")
     convo_id = request.args.get("conversation_id")
     if not convo_id:
         logger.error("❌ Missing conversation ID in check-visibility request")
@@ -223,7 +213,6 @@ def check_visibility():
 
 @app.route("/messages", methods=["GET"])
 def get_messages():
-    logger.info(f"Received /messages request: headers={request.headers}, args={request.args}")
     convo_id = request.args.get("conversation_id")
     if not convo_id:
         logger.error("❌ Missing conversation ID in get-messages request")
@@ -257,11 +246,26 @@ def log_message(convo_id, user, message, sender):
         logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
     except Exception as e:
         logger.error(f"❌ Error logging message for convo_id {convo_id}: {e}")
+        raise  # Re-raise the exception to catch it in the caller
+
+def send_telegram_message(chat_id, text):
+    try:
+        url = f"{TELEGRAM_API_URL}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text
+        }
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
+        # Add a small delay to avoid rate limiting
+        time.sleep(0.5)
+    except Exception as e:
+        logger.error(f"❌ Failed to send Telegram message to {chat_id}: {str(e)}")
         raise
 
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
-    logger.info(f"Received /check-auth request: headers={request.headers}, args={request.args}")
     return jsonify({"is_authenticated": current_user.is_authenticated})
 
 @app.route("/chat", methods=["POST"])
@@ -285,28 +289,27 @@ def chat():
             logger.error(f"❌ Conversation not found: {convo_id}")
             return jsonify({"error": "Conversation not found"}), 404
         
+        # Determine sender: "user" for client, "agent" if sent by logged-in agent
         sender = "agent" if current_user.is_authenticated else "user"
         logger.info(f"✅ Processing /chat message as sender: {sender}")
         log_message(convo_id, username, user_message, sender)
 
+        # If message is from an agent, emit it and send to Telegram if channel is telegram
         if sender == "agent":
             logger.info("✅ Sender is agent, emitting new_message event")
             socketio.emit("new_message", {"convo_id": convo_id, "message": user_message, "sender": "agent", "channel": channel})
-            if channel == "whatsapp":
+            if channel == "telegram":
                 try:
-                    logger.info(f"Sending agent message to WhatsApp - To: {username}, Body: {user_message}")
-                    twilio_client.messages.create(
-                        body=user_message,
-                        from_=TWILIO_PHONE_NUMBER,
-                        to=f"whatsapp:{username}"
-                    )
-                    logger.info("✅ Agent message sent to WhatsApp: " + user_message)
+                    logger.info(f"Sending agent message to Telegram - To: {username}, Body: {user_message}")
+                    send_telegram_message(username, user_message)
+                    logger.info("✅ Agent message sent to Telegram: " + user_message)
                 except Exception as e:
-                    logger.error(f"❌ WhatsApp error sending agent message: {str(e)}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": channel})
+                    logger.error(f"❌ Telegram error sending agent message: {str(e)}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
             logger.info("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
 
+        # Otherwise, process as a client message and get AI response if AI is enabled
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if ai_enabled:
             logger.info("✅ AI is enabled, proceeding with AI response")
@@ -330,18 +333,14 @@ def chat():
             logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
-            if channel == "whatsapp":
+            if channel == "telegram":
                 try:
-                    logger.info(f"Sending AI message to WhatsApp - To: {username}, Body: {ai_reply}")
-                    twilio_client.messages.create(
-                        body=ai_reply,
-                        from_=TWILIO_PHONE_NUMBER,
-                        to=f"whatsapp:{username}"
-                    )
-                    logger.info("✅ AI message sent to WhatsApp: " + ai_reply)
+                    logger.info(f"Sending AI message to Telegram - To: {username}, Body: {ai_reply}")
+                    send_telegram_message(username, ai_reply)
+                    logger.info("✅ AI message sent to Telegram: " + ai_reply)
                 except Exception as e:
-                    logger.error(f"❌ WhatsApp error sending AI message: {str(e)}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": channel})
+                    logger.error(f"❌ Telegram error sending AI message: {str(e)}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
             logger.info("✅ Checking for handoff condition")
             if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                 try:
@@ -357,8 +356,8 @@ def chat():
                         c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                         updated_result = c.fetchone()
                         logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
-                        logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+                        socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": username, "channel": channel})
+                        logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                     conn.close()
                 except Exception as e:
                     logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
@@ -371,12 +370,23 @@ def chat():
         logger.error(f"❌ Error in /chat endpoint: {str(e)}")
         return jsonify({"error": "Failed to process chat message"}), 500
 
-@app.route("/whatsapp", methods=["POST"])
-def whatsapp():
-    logger.info("✅ Entering /whatsapp endpoint")
-    incoming_msg = request.form.get("Body", "").strip()
-    from_number = request.form.get("From", "").replace("whatsapp:", "")
-    logger.info(f"✅ Received WhatsApp message: {incoming_msg}, from: {from_number}")
+@app.route("/telegram", methods=["POST"])
+def telegram():
+    logger.info("✅ Entering /telegram endpoint")
+    update = request.get_json()
+    logger.info(f"Received update: {update}")
+    if "message" not in update:
+        logger.info("✅ Not a message update, returning OK")
+        return "OK", 200
+    
+    try:
+        chat_id = update["message"]["chat"]["id"]
+        incoming_msg = update["message"]["text"]
+        from_number = str(chat_id)
+        logger.info(f"✅ Received Telegram message: {incoming_msg}, from: {from_number}")
+    except KeyError as e:
+        logger.error(f"❌ Invalid Telegram update format: {str(e)}")
+        return "OK", 200
 
     try:
         logger.info("✅ Connecting to database")
@@ -386,14 +396,16 @@ def whatsapp():
         c.execute("SELECT id, last_updated, handoff_notified, ai_enabled FROM conversations WHERE username = ?", (from_number,))
         convo = c.fetchone()
 
+        # Check if this is a new conversation
         is_new_conversation = not convo
         logger.info(f"✅ Is new conversation: {is_new_conversation}")
         if is_new_conversation:
             logger.info("✅ Creating new conversation")
-            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
-                      (from_number, incoming_msg, "whatsapp"))
+            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 1)", 
+                      (from_number, incoming_msg, "telegram"))
             convo_id = c.lastrowid
-            conn.commit()
+            conn.commit()  # Explicit commit after insert
+            # Debug: Verify the insert
             c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
             insert_result = c.fetchone()
             logger.info(f"✅ After creating convo_id {convo_id}: visible_in_conversations={insert_result[0]}")
@@ -403,7 +415,9 @@ def whatsapp():
         else:
             convo_id, last_updated, handoff_notified, ai_enabled = convo
             logger.info(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}")
-            if (datetime.now() - datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")) > timedelta(hours=24):
+            # Check if last message was more than 24 hours ago to reset ai_enabled and handoff_notified
+            last_updated_dt = datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")
+            if (datetime.now() - last_updated_dt) > timedelta(hours=24):
                 logger.info("✅ Last message was >24 hours ago, resetting ai_enabled and handoff_notified")
                 c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
                 conn.commit()
@@ -411,36 +425,34 @@ def whatsapp():
                 ai_enabled = 1
         conn.close()
 
+        # Log and emit the client message
         logger.info("✅ Logging client message")
         log_message(convo_id, from_number, incoming_msg, "user")
         logger.info("✅ Emitting new_message event for client message")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "whatsapp", "user": from_number})
+        socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "telegram", "user": from_number})
 
+        # Only proceed with AI response if ai_enabled is True
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if not ai_enabled:
             logger.info("❌ AI disabled for convo_id: " + str(convo_id) + ", Skipping AI response")
             return "OK", 200
 
-        welcome_message = None
+        # Send welcome message for new conversations
         if is_new_conversation:
             logger.info("✅ Sending welcome message for new conversation")
-            welcome_message = "Welcome to Sunshine Hotel! I'm here to assist with your bookings. How can I help you today?"
+            welcome_message = "Thank you for contacting us."
             try:
-                logger.info(f"Sending welcome message to WhatsApp - To: {from_number}, Body: {welcome_message}")
-                twilio_client.messages.create(
-                    body=welcome_message,
-                    from_=TWILIO_PHONE_NUMBER,
-                    to=f"whatsapp:{from_number}"
-                )
-                time.sleep(0.5)
+                logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
+                send_telegram_message(from_number, welcome_message)
             except Exception as e:
-                logger.error(f"❌ WhatsApp error sending welcome message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to WhatsApp: {str(e)}", "channel": "whatsapp"})
+                logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
             logger.info("✅ Logging welcome message")
             log_message(convo_id, "AI", welcome_message, "ai")
             logger.info("✅ Emitting new_message event for welcome message")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "whatsapp"})
+            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
 
+        # Process the message with AI
         logger.info("✅ Processing message with AI")
         ai_reply = None
         try:
@@ -461,29 +473,28 @@ def whatsapp():
             ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
             logger.info("✅ Set default AI reply due to error: " + ai_reply)
 
+        # Fallback: Force handoff for specific keywords like "HELP"
         logger.info("✅ Checking for HELP keyword")
         if "HELP" in incoming_msg.upper():
             ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
 
+        # Log and emit the AI response
         logger.info("✅ Logging AI response")
         log_message(convo_id, "AI", ai_reply, "ai")
         logger.info("✅ Emitting new_message event for AI response")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+        socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "telegram"})
 
-        logger.info("✅ Sending AI response to WhatsApp")
+        # Send AI response to Telegram
+        logger.info("✅ Sending AI response to Telegram")
         try:
-            logger.info(f"Sending AI message to WhatsApp - To: {from_number}, Body: {ai_reply}")
-            twilio_client.messages.create(
-                body=ai_reply,
-                from_=TWILIO_PHONE_NUMBER,
-                to=f"whatsapp:{from_number}"
-            )
-            logger.info("✅ AI message sent to WhatsApp: " + ai_reply)
+            logger.info(f"Sending AI message to Telegram - To: {from_number}, Body: {ai_reply}")
+            send_telegram_message(from_number, ai_reply)
+            logger.info("✅ AI message sent to Telegram: " + ai_reply)
         except Exception as e:
-            logger.error(f"❌ WhatsApp error sending AI message: {str(e)}")
-            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": "whatsapp"})
-
+            logger.error(f"❌ Telegram error sending AI message: {str(e)}")
+            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
+        # Handle handoff if needed
         logger.info("✅ Checking for handoff condition")
         if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
             try:
@@ -500,17 +511,17 @@ def whatsapp():
                     c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                     updated_result = c.fetchone()
                     logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
+                    # Emit a refresh event instead of a handoff event with a popup
                     socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
                     logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 conn.close()
             except Exception as e:
                 logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
-
-        resp = MessagingResponse()
-        logger.info("✅ Returning empty response to Twilio")
-        return str(resp), 200
+        
+        logger.info("✅ Returning OK for Telegram")
+        return "OK", 200
     except Exception as e:
-        logger.error(f"❌ Error in /whatsapp endpoint: {str(e)}")
+        logger.error(f"❌ Error in /telegram endpoint: {str(e)}")
         logger.error(f"❌ Error type: {type(e).__name__}")
         return "OK", 200
 
@@ -532,7 +543,7 @@ def instagram():
                 c.execute("SELECT id FROM conversations WHERE username = ?", (sender_id,))
                 convo = c.fetchone()
                 if not convo:
-                    c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", (sender_id, incoming_msg, "instagram"))
+                    c.execute("INSERT INTO conversations (username, latest_message, channel) VALUES (?, ?, ?)", (sender_id, incoming_msg, "instagram"))
                     convo_id = c.lastrowid
                 else:
                     convo_id = convo[0]
@@ -577,8 +588,8 @@ def instagram():
                             c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                             updated_result = c.fetchone()
                             logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": sender_id, "channel": "instagram"})
-                            logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+                            socketio.emit("handoff", {"conversation_id": convo_id, "agent": None, "user": sender_id, "channel": "instagram"})
+                            logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                         conn.close()
                     except Exception as e:
                         logger.error(f"❌ Error during Instagram handoff for convo_id {convo_id}: {e}")
@@ -598,6 +609,39 @@ def instagram_verify():
     logger.error("❌ Instagram verification failed")
     return "Verification failed", 403
 
+@app.route("/send-welcome", methods=["POST"])
+def send_welcome():
+    data = request.get_json()
+    to_number = data.get("to_number")
+    user_name = data.get("user_name", "Guest")
+    if not to_number:
+        logger.error("❌ Missing to_number in /send-welcome request")
+        return jsonify({"error": "Missing to_number"}), 400
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "telegram"))
+    convo = c.fetchone()
+    if not convo:
+        conn.close()
+        logger.error("❌ Conversation not found in /send-welcome")
+        return jsonify({"error": "Conversation not found"}), 404
+    convo_id = convo[0]
+    conn.close()
+    try:
+        logger.info(f"✅ Sending welcome message to Telegram chat {to_number}")
+        welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
+        send_telegram_message(to_number, welcome_message)
+        logger.info("✅ Logging welcome message in /send-welcome")
+        log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
+        logger.info("✅ Emitting new_message event in /send-welcome")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!", "sender": "ai", "channel": "telegram"})
+        logger.info("✅ Welcome message sent successfully")
+        return jsonify({"message": "Welcome message sent"}), 200
+    except Exception as e:
+        logger.error(f"❌ Telegram error in send-welcome: {str(e)}")
+        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
+        return jsonify({"error": "Failed to send message"}), 500
+
 @app.route("/handoff", methods=["POST"])
 @login_required
 def handoff():
@@ -614,7 +658,7 @@ def handoff():
         username, channel = c.fetchone()
         conn.commit()
         conn.close()
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+        socketio.emit("handoff", {"conversation_id": convo_id, "agent": current_user.username, "user": username, "channel": channel})
         logger.info(f"✅ Chat {convo_id} assigned to {current_user.username}")
         return jsonify({"message": f"Chat assigned to {current_user.username}"})
     except Exception as e:
