@@ -259,7 +259,8 @@ function loadConversation(convoId) {
             messages.forEach(msg => {
                 const div = document.createElement('div');
                 const isUser = msg.sender === 'user';
-                div.className = isUser ? 'user-message' : 'agent-message';
+                div.className = 'message'; // Add the base message class
+                div.classList.add(isUser ? 'user-message' : 'agent-message');
 
                 // Message text
                 const textSpan = document.createElement('span');
@@ -269,7 +270,6 @@ function loadConversation(convoId) {
                 // Timestamp
                 const timestampSpan = document.createElement('span');
                 timestampSpan.className = 'message-timestamp';
-                // Extract time (e.g., "2025-03-04 21:24:54" -> "21:24")
                 const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
                 timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
                 div.appendChild(timestampSpan);
@@ -345,7 +345,8 @@ socket.on('new_message', (data) => {
         if (chatBox) {
             const div = document.createElement('div');
             const isUser = data.sender === 'user';
-            div.className = isUser ? 'user-message' : 'agent-message';
+            div.className = 'message'; // Add the base message class
+            div.classList.add(isUser ? 'user-message' : 'agent-message');
 
             const textSpan = document.createElement('span');
             textSpan.textContent = data.message;
