@@ -6,6 +6,7 @@ let isLoading = false;
 let pollingInterval = null;
 let isLoggedIn = false;
 let lastUpdate = 0;
+let currentConvoId = null; // Ensure this starts as null
 
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ Page loaded at:", new Date().toLocaleTimeString());
@@ -66,6 +67,7 @@ function showLoginPage() {
     stopPolling();
     chatBox.innerHTML = "";
     conversationList.innerHTML = "";
+    currentConvoId = null; // Reset currentConvoId on logout
 }
 
 async function login() {
@@ -205,6 +207,15 @@ async function loadChat(convoId, username) {
     isLoading = true;
     try {
         console.log("🔄 Loading chat for convo ID:", convoId);
+        // Check visibility before loading the chat
+        const isVisible = await checkVisibility(convoId);
+        if (!isVisible) {
+            console.log(`Conversation ${convoId} is not visible yet, skipping load into Live Conversation`);
+            chatBox.innerHTML = "";
+            document.getElementById("clientName").textContent = "";
+            currentConvoId = null;
+            return;
+        }
         const response = await fetch(`/messages?conversation_id=${convoId}`, { credentials: 'include' });
         if (!response.ok) throw new Error("Failed to load messages: " + response.status);
         const messages = await response.json();
@@ -226,8 +237,6 @@ async function loadChat(convoId, username) {
         isLoading = false;
     }
 }
-
-let currentConvoId = null;
 
 async function isAuthenticated() {
     try {
@@ -278,6 +287,18 @@ function addMessage(content, sender) {
     chatBox.scrollTop = chatBox.scrollHeight;
 }
 
+async function checkVisibility(convoId) {
+    try {
+        const response = await fetch(`/check-visibility?conversation_id=${convoId}`, { credentials: 'include' });
+        const data = await response.json();
+        console.log(`Visibility check for convo ID ${convoId}:`, data.visible);
+        return data.visible;
+    } catch (error) {
+        console.error("❌ Error checking visibility:", error);
+        return false;
+    }
+}
+
 function listenForNewMessages() {
     if (socket) {
         console.log("🔄 WebSocket already connected, skipping");
@@ -293,15 +314,24 @@ function listenForNewMessages() {
     socket.on("connect_error", (error) => {
         console.error("❌ WebSocket connection error:", error);
     });
-    socket.on("new_message", (data) => {
+    socket.on("new_message", async (data) => {
         console.log("📩 New message received:", data);
         console.log("Current convoId:", currentConvoId, "Data convo_id:", data.convo_id);
-        if (data.convo_id === currentConvoId) {
-            addMessage(data.message, data.sender);
+        
+        // Check if the conversation is visible before displaying in Live Conversation panel
+        const isVisible = await checkVisibility(data.convo_id);
+        if (isVisible) {
+            if (data.convo_id === currentConvoId) {
+                console.log("Adding message to current conversation:", data.message);
+                addMessage(data.message, data.sender);
+            } else {
+                console.log("Loading chat into Live Conversation:", data.convo_id);
+                loadChat(data.convo_id, data.user || "Unknown");
+            }
         } else {
-            // Automatically load the chat if it's not currently selected
-            loadChat(data.convo_id, data.user || "Unknown");
+            console.log(`Conversation ${data.convo_id} is not visible yet, skipping display in Live Conversation`);
         }
+
         const now = Date.now();
         if (now - lastUpdate > 2000) {
             loadConversations();
