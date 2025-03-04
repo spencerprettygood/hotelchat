@@ -8,7 +8,6 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 import openai
 import sqlite3
 import os
-from telegram import Bot
 import requests
 from datetime import datetime, timedelta
 import time
@@ -40,7 +39,7 @@ if not TELEGRAM_BOT_TOKEN:
     logger.error("⚠️ TELEGRAM_BOT_TOKEN not set in environment variables")
     raise ValueError("TELEGRAM_BOT_TOKEN not set")
 
-telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
@@ -246,6 +245,22 @@ def log_message(convo_id, user, message, sender):
         logger.error(f"❌ Error logging message for convo_id {convo_id}: {e}")
         raise  # Re-raise the exception to catch it in the caller
 
+def send_telegram_message(chat_id, text):
+    try:
+        url = f"{TELEGRAM_API_URL}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text
+        }
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
+        # Add a small delay to avoid rate limiting
+        time.sleep(0.5)
+    except Exception as e:
+        logger.error(f"❌ Failed to send Telegram message to {chat_id}: {str(e)}")
+        raise
+
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated})
@@ -283,7 +298,7 @@ def chat():
             if channel == "telegram":
                 try:
                     logger.info(f"Sending agent message to Telegram - To: {username}, Body: {user_message}")
-                    telegram_bot.send_message(chat_id=username, text=user_message)
+                    send_telegram_message(username, user_message)
                     logger.info("✅ Agent message sent to Telegram: " + user_message)
                 except Exception as e:
                     logger.error(f"❌ Telegram error sending agent message: {str(e)}")
@@ -318,7 +333,7 @@ def chat():
             if channel == "telegram":
                 try:
                     logger.info(f"Sending AI message to Telegram - To: {username}, Body: {ai_reply}")
-                    telegram_bot.send_message(chat_id=username, text=ai_reply)
+                    send_telegram_message(username, ai_reply)
                     logger.info("✅ AI message sent to Telegram: " + ai_reply)
                 except Exception as e:
                     logger.error(f"❌ Telegram error sending AI message: {str(e)}")
@@ -360,10 +375,15 @@ def telegram():
     if "message" not in update:
         logger.info("✅ Not a message update, returning OK")
         return "OK", 200
-    chat_id = update["message"]["chat"]["id"]
-    incoming_msg = update["message"]["text"]
-    from_number = str(chat_id)
-    logger.info(f"✅ Received Telegram message: {incoming_msg}, from: {from_number}")
+    
+    try:
+        chat_id = update["message"]["chat"]["id"]
+        incoming_msg = update["message"]["text"]
+        from_number = str(chat_id)
+        logger.info(f"✅ Received Telegram message: {incoming_msg}, from: {from_number}")
+    except KeyError as e:
+        logger.error(f"❌ Invalid Telegram update format: {str(e)}")
+        return "OK", 200
 
     try:
         logger.info("✅ Connecting to database")
@@ -378,7 +398,7 @@ def telegram():
         logger.info(f"✅ Is new conversation: {is_new_conversation}")
         if is_new_conversation:
             logger.info("✅ Creating new conversation")
-            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled) VALUES (?, ?, ?, 1)", 
+            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 1)", 
                       (from_number, incoming_msg, "telegram"))
             convo_id = c.lastrowid
             handoff_notified = 0
@@ -415,8 +435,7 @@ def telegram():
             welcome_message = "Welcome to Sunshine Hotel! I'm here to assist with your bookings. How can I help you today?"
             try:
                 logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
-                telegram_bot.send_message(chat_id=from_number, text=welcome_message)
-                logger.info("✅ Sent welcome message to Telegram")
+                send_telegram_message(from_number, welcome_message)
             except Exception as e:
                 logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
@@ -460,7 +479,7 @@ def telegram():
         logger.info("✅ Sending AI response to Telegram")
         try:
             logger.info(f"Sending AI message to Telegram - To: {from_number}, Body: {ai_reply}")
-            telegram_bot.send_message(chat_id=from_number, text=ai_reply)
+            send_telegram_message(from_number, ai_reply)
             logger.info("✅ AI message sent to Telegram: " + ai_reply)
         except Exception as e:
             logger.error(f"❌ Telegram error sending AI message: {str(e)}")
@@ -493,6 +512,7 @@ def telegram():
         return "OK", 200
     except Exception as e:
         logger.error(f"❌ Error in /telegram endpoint: {str(e)}")
+        logger.error(f"❌ Error type: {type(e).__name__}")
         return "OK", 200
 
 @app.route("/instagram", methods=["POST"])
@@ -598,7 +618,7 @@ def send_welcome():
     try:
         logger.info(f"✅ Sending welcome message to Telegram chat {to_number}")
         welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
-        telegram_bot.send_message(chat_id=to_number, text=welcome_message)
+        send_telegram_message(to_number, welcome_message)
         logger.info("✅ Logging welcome message in /send-welcome")
         log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
         logger.info("✅ Emitting new_message event in /send-welcome")
