@@ -1,10 +1,8 @@
-Flask==3.1.0
-Flask-Cors==5.0.0
-Flask-SocketIO==5.5.1
-Flask-Login==0.6.3
+flask
+Flask-CORS
+flask-socketio
+flask-login
+gevent
 openai==1.45.0
-httpx==0.27.0
 python-telegram-bot==20.8
-gunicorn==23.0.0
-gevent==24.2.1  # Switch to gevent
-requests==2.32.3
+requests
