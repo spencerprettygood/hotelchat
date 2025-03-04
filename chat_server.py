@@ -1,5 +1,5 @@
 import gevent.monkey
-gevent.monkey.patch_all()  # Must be at the top, before any other imports
+gevent.monkey.patch_all()
 
 from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
@@ -17,22 +17,18 @@ app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
-# Setup Login Manager
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# OpenAI Setup
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     print("⚠️ OPENAI_API_KEY not set in environment variables")
 
-# Twilio Setup
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Instagram Setup
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 
@@ -189,10 +185,23 @@ def chat():
         return jsonify({"error": "Missing required fields"}), 400
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT username FROM conversations WHERE id = ?", (convo_id,))
-    username = c.fetchone()[0]
+    c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+    result = c.fetchone()
+    username, channel, assigned_agent = result if result else (None, None, None)
     conn.close()
-    log_message(convo_id, username, user_message, "user")
+    if not username:
+        return jsonify({"error": "Conversation not found"}), 404
+    
+    # Determine sender: "user" for client, "agent" if sent by logged-in agent
+    sender = "agent" if current_user.is_authenticated else "user"
+    log_message(convo_id, username, user_message, sender)
+
+    # If message is from an agent, emit it and return (no AI response needed)
+    if sender == "agent":
+        socketio.emit("new_message", {"convo_id": convo_id, "message": user_message, "sender": "agent", "channel": channel})
+        return jsonify({"reply": "Message sent by agent"})
+
+    # Otherwise, process as a client message and get AI response
     try:
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
@@ -207,9 +216,9 @@ def chat():
         ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
         print(f"OpenAI error: {e}")
     log_message(convo_id, "AI", ai_reply, "ai")
-    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "dashboard"})
+    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
-        socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": "dashboard"})
+        socketio.emit("handoff", {"conversation_id": convo_id, "agent": "unassigned", "user": username, "channel": channel})
     return jsonify({"reply": ai_reply})
 
 @app.route("/whatsapp", methods=["POST"])
