@@ -282,8 +282,8 @@ def chat():
         if ai_enabled:
             try:
                 print("AI processing message:", user_message)
-                response = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",  # Try gpt-4o-mini with older library
+                response = openai.chat.completions.create(
+                    model="gpt-4o-mini",  # Use gpt-4o-mini with latest library
                     messages=[
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                         {"role": "user", "content": user_message}
@@ -393,8 +393,8 @@ def whatsapp():
         # Process the message with AI
         try:
             print(f"Processing message with AI for convo_id {convo_id}: {incoming_msg}")
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",  # Try gpt-4o-mini with older library
+            response = openai.chat.completions.create(
+                model="gpt-4o-mini",  # Use gpt-4o-mini with latest library
                 messages=[
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                     {"role": "user", "content": incoming_msg}
@@ -478,7 +478,7 @@ def instagram():
                 conn.close()
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
-                    response = openai.ChatCompletion.create(
+                    response = openai.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
