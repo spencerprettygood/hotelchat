@@ -35,31 +35,14 @@ INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 
 DB_NAME = "chatbot.db"
 
-TRAINING_DOCUMENT = """
-Hotel Chatbot Training Document
-
-Welcome to our hotel! Here are some key details to assist guests:
-
-- **Check-in Time**: 3:00 PM
-- **Check-out Time**: 11:00 AM
-- **Room Rates**:
-  - Standard Room: $100/night
-  - Deluxe Room: $150/night
-  - Suite: $200/night
-- **Amenities**:
-  - Free Wi-Fi
-  - Outdoor pool (open 8 AM to 8 PM)
-  - On-site restaurant (open 7 AM to 10 PM)
-  - 24/7 gym access
-- **Booking Policy**:
-  - Reservations require a credit card.
-  - Cancellations must be made 48 hours in advance for a full refund.
-- **Contact**:
-  - Phone: +1-555-123-4567
-  - Email: reservations@hotel.com
-
-For complex queries (e.g., group bookings, special requests), escalate to a human agent.
-"""
+# Load the Q&A reference document
+try:
+    with open("qa_reference.txt", "r") as file:
+        TRAINING_DOCUMENT = file.read()
+    print("✅ Loaded Q&A reference document")
+except FileNotFoundError:
+    TRAINING_DOCUMENT = ""
+    print("⚠️ qa_reference.txt not found, using empty training document")
 
 def initialize_database():
     try:
@@ -78,7 +61,7 @@ def initialize_database():
             channel TEXT DEFAULT 'dashboard',
             opted_in INTEGER DEFAULT 0,
             ai_enabled INTEGER DEFAULT 1,
-            handoff_notified INTEGER DEFAULT 0  -- New column to track handoff notification
+            handoff_notified INTEGER DEFAULT 0
         )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
@@ -254,7 +237,7 @@ def chat():
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot. Answer guest questions and escalate to a human if the query is complex or requires personal assistance."},
+                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                     {"role": "user", "content": user_message}
                 ],
                 max_tokens=150
@@ -295,6 +278,7 @@ def chat():
 def whatsapp():
     incoming_msg = request.values.get("Body", "").strip().upper()
     from_number = request.values.get("From", "").replace("whatsapp:", "")
+    print("Received WhatsApp message:", incoming_msg, "from:", from_number)
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT id, opted_in, last_updated, handoff_notified FROM conversations WHERE username = ?", (from_number,))
@@ -346,7 +330,7 @@ def whatsapp():
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot. Answer guest questions and escalate to a human if the query is complex or requires personal assistance."},
+                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                 {"role": "user", "content": incoming_msg}
             ],
             max_tokens=150
@@ -396,7 +380,7 @@ def instagram():
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot. Answer guest questions and escalate to a human if the query is complex or requires personal assistance."},
+                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                         {"role": "user", "content": incoming_msg}
                     ],
                     max_tokens=150
