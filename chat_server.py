@@ -306,7 +306,7 @@ def whatsapp():
     c.execute("SELECT id, opted_in, last_updated, handoff_notified, ai_enabled FROM conversations WHERE username = ?", (from_number,))
     convo = c.fetchone()
     if not convo:
-        c.execute("INSERT INTO conversations (username, latest_message, channel) VALUES (?, ?, ?)", 
+        c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled) VALUES (?, ?, ?, 1)", 
                   (from_number, incoming_msg, "whatsapp"))
         convo_id = c.lastrowid
         opted_in = 0
@@ -322,8 +322,10 @@ def whatsapp():
             print("Reset ai_enabled and handoff_notified for convo_id:", convo_id)
             ai_enabled = 1
     conn.close()
+
+    # Log and emit the client message
     log_message(convo_id, from_number, incoming_msg, "user")
-    print("Emitting new_message for convo_id:", convo_id, "Message:", incoming_msg)
+    print("Emitting new_message for client message, convo_id:", convo_id, "Message:", incoming_msg)
     socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "whatsapp", "user": from_number})
 
     # Only proceed with AI response if ai_enabled is True
@@ -332,6 +334,8 @@ def whatsapp():
         resp = MessagingResponse()
         return str(resp)
 
+    # Handle opt-in flow
+    ai_reply = None
     if not opted_in:
         if incoming_msg.upper() == "YES":
             try:
@@ -349,10 +353,10 @@ def whatsapp():
             c.execute("UPDATE conversations SET opted_in = 1 WHERE id = ?", (convo_id,))
             conn.commit()
             conn.close()
-            opted_in = 1  # Update the local variable
-            log_message(convo_id, "AI", "Thank you for opting in!", "ai")
-            print("Emitting new_message for convo_id:", convo_id)
-            socketio.emit("new_message", {"convo_id": convo_id, "message": "Thank you for opting in!", "sender": "ai", "channel": "whatsapp"})
+            ai_reply = "Thank you for opting in!"
+            log_message(convo_id, "AI", ai_reply, "ai")
+            print("Emitting new_message for opt-in response, convo_id:", convo_id)
+            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
             resp = MessagingResponse()
             return str(resp)
         else:
@@ -366,37 +370,55 @@ def whatsapp():
             except Exception as e:
                 print(f"Twilio error sending opt-in prompt: {str(e)}")
                 print(f"Twilio error details: {e.__dict__}")
-            log_message(convo_id, "AI", "Would you like to receive updates? Reply YES to opt in.", "ai")
-            print("Emitting new_message for convo_id:", convo_id)
-            socketio.emit("new_message", {"convo_id": convo_id, "message": "Would you like to receive updates? Reply YES to opt in.", "sender": "ai", "channel": "whatsapp"})
+            ai_reply = "Would you like to receive updates? Reply YES to opt in."
+            log_message(convo_id, "AI", ai_reply, "ai")
+            print("Emitting new_message for opt-in prompt, convo_id:", convo_id)
+            socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
             resp = MessagingResponse()
             return str(resp)
 
-    # Process the message with AI
-    try:
-        print(f"Processing message with AI for convo_id {convo_id}")
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                {"role": "user", "content": incoming_msg}
-            ],
-            max_tokens=150
-        )
-        ai_reply = response.choices[0].message.content.strip()
-        print("AI reply:", ai_reply)
-    except Exception as e:
-        ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
-        print(f"OpenAI error: {e}")
+    # Process the message with AI if no opt-in response was sent
+    if ai_reply is None:
+        try:
+            print(f"Processing message with AI for convo_id {convo_id}")
+            response = openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
+                    {"role": "user", "content": incoming_msg}
+                ],
+                max_tokens=150
+            )
+            ai_reply = response.choices[0].message.content.strip()
+            print("AI reply:", ai_reply)
+        except Exception as e:
+            ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+            print(f"OpenAI error: {e}")
 
-    # Fallback: Force handoff for specific keywords like "HELP"
-    if "HELP" in incoming_msg.upper():
-        ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
-        print("Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
+        # Fallback: Force handoff for specific keywords like "HELP"
+        if "HELP" in incoming_msg.upper():
+            ai_reply = "Sorry, I couldn’t process that. Let me get a human to assist you."
+            print("Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
 
-    log_message(convo_id, "AI", ai_reply, "ai")
-    print("Emitting new_message for convo_id:", convo_id)
-    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+        # Log and emit the AI response
+        log_message(convo_id, "AI", ai_reply, "ai")
+        print("Emitting new_message for AI response, convo_id:", convo_id)
+        socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+
+        # Send AI response to WhatsApp
+        try:
+            print("Sending AI message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{from_number}", "Body:", ai_reply)
+            twilio_client.messages.create(
+                body=ai_reply,
+                from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                to=f"whatsapp:{from_number}"
+            )
+            print("AI message sent to WhatsApp:", ai_reply)
+        except Exception as e:
+            print(f"Twilio error sending AI message: {str(e)}")
+            print(f"Twilio error details: {e.__dict__}")
+
+    # Handle handoff if needed
     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
@@ -408,6 +430,7 @@ def whatsapp():
             conn.commit()
             print(f"Handoff triggered for convo_id {convo_id}, chat now visible in Conversations")
         conn.close()
+
     resp = MessagingResponse()
     return str(resp)
 
