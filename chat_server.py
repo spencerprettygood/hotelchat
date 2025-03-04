@@ -6,6 +6,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import openai
+import httpx  # Required for custom HTTP client with OpenAI
 import sqlite3
 import os
 from twilio.rest import Client
@@ -22,16 +23,17 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# Initialize OpenAI client without proxies
+# Initialize OpenAI client with a custom HTTP client to disable proxies
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     print("⚠️ OPENAI_API_KEY not set in environment variables")
 
-# Explicitly set proxies to None to avoid proxy-related errors
-try:
-    openai.proxy = None  # Ensure no proxy is used
-except AttributeError:
-    print("⚠️ OpenAI library does not support proxy attribute, proceeding without proxy configuration")
+# Create an httpx client with proxies explicitly disabled
+http_client = httpx.Client(proxies=None)
+openai_client = openai.OpenAI(
+    api_key=openai.api_key,
+    http_client=http_client
+)
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -252,7 +254,7 @@ def chat():
     convo_id = data.get("conversation_id")
     user_message = data.get("message")
     if not convo_id or not user_message:
-        print("�ungg Missing required fields in /chat request")
+        print("❌ Missing required fields in /chat request")
         return jsonify({"error": "Missing required fields"}), 400
     try:
         print("✅ Entering /chat endpoint")
@@ -298,7 +300,7 @@ def chat():
             print("✅ AI is enabled, proceeding with AI response")
             try:
                 print("AI processing message with gpt-4o-mini:", user_message)
-                response = openai.chat.completions.create(
+                response = openai_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
@@ -313,7 +315,7 @@ def chat():
                 print(f"❌ OpenAI error type: {type(e).__name__}")
                 print("✅ Falling back to gpt-3.5-turbo")
                 try:
-                    response = openai.chat.completions.create(
+                    response = openai_client.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[
                             {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
@@ -356,8 +358,8 @@ def chat():
                         default_agent = "agent1"
                         c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                         conn.commit()
-                        # Add a slight delay to ensure the transaction is committed
-                        time.sleep(0.5)
+                        # Increase delay to ensure the transaction is committed
+                        time.sleep(1.0)
                         socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
                         print(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                     conn.close()
@@ -448,7 +450,7 @@ def whatsapp():
         print("✅ Processing message with AI")
         try:
             print(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
-            response = openai.chat.completions.create(
+            response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
@@ -463,7 +465,7 @@ def whatsapp():
             print(f"❌ OpenAI error type: {type(e).__name__}")
             print("✅ Falling back to gpt-3.5-turbo")
             try:
-                response = openai.chat.completions.create(
+                response = openai_client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
@@ -520,8 +522,8 @@ def whatsapp():
                     default_agent = "agent1"
                     c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                     conn.commit()
-                    # Add a slight delay to ensure the transaction is committed
-                    time.sleep(0.5)
+                    # Increase delay to ensure the transaction is committed
+                    time.sleep(1.0)
                     socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "whatsapp"})
                     print(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                 conn.close()
@@ -564,7 +566,7 @@ def instagram():
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
                     print("Processing Instagram message with AI:", incoming_msg)
-                    response = openai.chat.completions.create(
+                    response = openai_client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
@@ -579,7 +581,7 @@ def instagram():
                     print(f"❌ Instagram OpenAI error type: {type(e).__name__}")
                     print("✅ Falling back to gpt-3.5-turbo for Instagram")
                     try:
-                        response = openai.chat.completions.create(
+                        response = openai_client.chat.completions.create(
                             model="gpt-3.5-turbo",
                             messages=[
                                 {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
@@ -612,8 +614,8 @@ def instagram():
                             default_agent = "agent1"
                             c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                             conn.commit()
-                            # Add a slight delay to ensure the transaction is committed
-                            time.sleep(0.5)
+                            # Increase delay to ensure the transaction is committed
+                            time.sleep(1.0)
                             socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": sender_id, "channel": "instagram"})
                             print(f"✅ Instagram handoff triggered for convo_id {convo_id}, assigned to {default_agent}")
                         conn.close()
