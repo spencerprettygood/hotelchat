@@ -7,3 +7,4 @@ openai==0.27.8
 requests
 gunicorn==22.0.0
 python-socketio==5.11.0
+twilio==8.10.0  # Add this line for Twilio
