@@ -6,19 +6,24 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import openai
-import httpx  # Required for custom HTTP client with OpenAI
+import httpx
 import sqlite3
 import os
-from twilio.rest import Client
-from twilio.twiml.messaging_response import MessagingResponse
+from telegram import Bot
+import asyncio
 import requests
 from datetime import datetime, timedelta
 import time
+import logging
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -26,19 +31,24 @@ login_manager.init_app(app)
 # Initialize OpenAI client with a custom HTTP client to disable proxies
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
-    print("⚠️ OPENAI_API_KEY not set in environment variables")
+    logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
+    raise ValueError("OPENAI_API_KEY not set")
 
-# Create an httpx client with proxies explicitly disabled
+# Log environment variables to debug proxy issues
+logger.info(f"Environment variables: {dict(os.environ)}")
+
 http_client = httpx.Client(proxies=None)
 openai_client = openai.OpenAI(
     api_key=openai.api_key,
     http_client=http_client
 )
 
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("⚠️ TELEGRAM_BOT_TOKEN not set in environment variables")
+    raise ValueError("TELEGRAM_BOT_TOKEN not set")
+
+telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
@@ -49,10 +59,10 @@ DB_NAME = "chatbot.db"
 try:
     with open("qa_reference.txt", "r") as file:
         TRAINING_DOCUMENT = file.read()
-    print("✅ Loaded Q&A reference document")
+    logger.info("✅ Loaded Q&A reference document")
 except FileNotFoundError:
     TRAINING_DOCUMENT = ""
-    print("⚠️ qa_reference.txt not found, using empty training document")
+    logger.warning("⚠️ qa_reference.txt not found, using empty training document")
 
 def initialize_database():
     try:
@@ -86,10 +96,10 @@ def initialize_database():
         c.execute("SELECT COUNT(*) FROM agents")
         if c.fetchone()[0] == 0:
             c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
-            print("✅ Added test agent: agent1/password123")
+            logger.info("✅ Added test agent: agent1/password123")
         conn.commit()
     except sqlite3.Error as e:
-        print(f"⚠️ Database initialization error: {e}")
+        logger.error(f"⚠️ Database initialization error: {e}")
     finally:
         conn.close()
 
@@ -120,9 +130,9 @@ def add_test_conversations():
                 c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
                           (convo_id, user, message, sender))
             conn.commit()
-            print("✅ Test conversations added.")
+            logger.info("✅ Test conversations added.")
     except sqlite3.Error as e:
-        print(f"⚠️ Test conversations error: {e}")
+        logger.error(f"⚠️ Test conversations error: {e}")
     finally:
         conn.close()
 
@@ -150,7 +160,7 @@ def login():
     username = data.get("username")
     password = data.get("password")
     if not username or not password:
-        print("❌ Missing username or password in /login request")
+        logger.error("❌ Missing username or password in /login request")
         return jsonify({"message": "Missing username or password"}), 400
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -160,16 +170,16 @@ def login():
     if agent:
         agent_obj = Agent(agent[0], agent[1])
         login_user(agent_obj)
-        print(f"✅ Login successful for agent: {agent[1]}")
+        logger.info(f"✅ Login successful for agent: {agent[1]}")
         return jsonify({"message": "Login successful", "agent": agent[1]})
-    print("❌ Invalid credentials in /login request")
+    logger.error("❌ Invalid credentials in /login request")
     return jsonify({"message": "Invalid credentials"}), 401
 
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
-    print("✅ Logout successful")
+    logger.info("✅ Logout successful")
     return jsonify({"message": "Logged out successfully"})
 
 @app.route("/conversations", methods=["GET"])
@@ -180,17 +190,17 @@ def get_conversations():
         c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
         conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3], "channel": row[4]} for row in c.fetchall()]
         conn.close()
-        print(f"✅ Fetched conversations: {len(conversations)} conversations")
+        logger.info(f"✅ Fetched conversations: {len(conversations)} conversations")
         return jsonify(conversations)
     except Exception as e:
-        print(f"❌ Error fetching conversations: {e}")
+        logger.error(f"❌ Error fetching conversations: {e}")
         return jsonify({"error": "Failed to fetch conversations"}), 500
 
 @app.route("/check-visibility", methods=["GET"])
 def check_visibility():
     convo_id = request.args.get("conversation_id")
     if not convo_id:
-        print("❌ Missing conversation ID in check-visibility request")
+        logger.error("❌ Missing conversation ID in check-visibility request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -199,19 +209,19 @@ def check_visibility():
         result = c.fetchone()
         conn.close()
         if result:
-            print(f"✅ Visibility check for convo ID {convo_id}: {bool(result[0])}")
+            logger.info(f"✅ Visibility check for convo ID {convo_id}: {bool(result[0])}")
             return jsonify({"visible": bool(result[0])})
-        print(f"❌ Conversation not found: {convo_id}")
+        logger.error(f"❌ Conversation not found: {convo_id}")
         return jsonify({"error": "Conversation not found"}), 404
     except Exception as e:
-        print(f"❌ Error checking visibility for convo ID {convo_id}: {e}")
+        logger.error(f"❌ Error checking visibility for convo ID {convo_id}: {e}")
         return jsonify({"error": "Failed to check visibility"}), 500
 
 @app.route("/messages", methods=["GET"])
 def get_messages():
     convo_id = request.args.get("conversation_id")
     if not convo_id:
-        print("❌ Missing conversation ID in get-messages request")
+        logger.error("❌ Missing conversation ID in get-messages request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -219,10 +229,10 @@ def get_messages():
         c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
         messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
         conn.close()
-        print(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
+        logger.info(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
         return jsonify(messages)
     except Exception as e:
-        print(f"❌ Error fetching messages for convo ID {convo_id}: {e}")
+        logger.error(f"❌ Error fetching messages for convo ID {convo_id}: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
 
 def log_message(convo_id, user, message, sender):
@@ -236,12 +246,12 @@ def log_message(convo_id, user, message, sender):
         # Disable AI if sender is agent
         if sender == "agent":
             c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
-            print(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
+            logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
         conn.commit()
         conn.close()
-        print(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
+        logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
     except Exception as e:
-        print(f"❌ Error logging message for convo_id {convo_id}: {e}")
+        logger.error(f"❌ Error logging message for convo_id {convo_id}: {e}")
         raise  # Re-raise the exception to catch it in the caller
 
 @app.route("/check-auth", methods=["GET"])
@@ -249,16 +259,16 @@ def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated})
 
 @app.route("/chat", methods=["POST"])
-def chat():
+async def chat():
     data = request.get_json()
     convo_id = data.get("conversation_id")
     user_message = data.get("message")
     if not convo_id or not user_message:
-        print("❌ Missing required fields in /chat request")
+        logger.error("❌ Missing required fields in /chat request")
         return jsonify({"error": "Missing required fields"}), 400
     try:
-        print("✅ Entering /chat endpoint")
-        print(f"✅ Fetching conversation details for convo_id {convo_id}")
+        logger.info("✅ Entering /chat endpoint")
+        logger.info(f"✅ Fetching conversation details for convo_id {convo_id}")
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("SELECT username, channel, assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
@@ -266,40 +276,35 @@ def chat():
         username, channel, assigned_agent, ai_enabled = result if result else (None, None, None, None)
         conn.close()
         if not username:
-            print(f"❌ Conversation not found: {convo_id}")
+            logger.error(f"❌ Conversation not found: {convo_id}")
             return jsonify({"error": "Conversation not found"}), 404
         
         # Determine sender: "user" for client, "agent" if sent by logged-in agent
         sender = "agent" if current_user.is_authenticated else "user"
-        print(f"✅ Processing /chat message as sender: {sender}")
+        logger.info(f"✅ Processing /chat message as sender: {sender}")
         log_message(convo_id, username, user_message, sender)
 
-        # If message is from an agent, emit it and send to WhatsApp if channel is whatsapp
+        # If message is from an agent, emit it and send to Telegram if channel is telegram
         if sender == "agent":
-            print("✅ Sender is agent, emitting new_message event")
+            logger.info("✅ Sender is agent, emitting new_message event")
             socketio.emit("new_message", {"convo_id": convo_id, "message": user_message, "sender": "agent", "channel": channel})
-            if channel == "whatsapp":
+            if channel == "telegram":
                 try:
-                    print("Sending agent message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{username}", "Body:", user_message)
-                    twilio_client.messages.create(
-                        body=user_message,
-                        from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                        to=f"whatsapp:{username}"
-                    )
-                    print("✅ Agent message sent to WhatsApp:", user_message)
+                    logger.info(f"Sending agent message to Telegram - To: {username}, Body: {user_message}")
+                    await telegram_bot.send_message(chat_id=username, text=user_message)
+                    logger.info("✅ Agent message sent to Telegram:", user_message)
                 except Exception as e:
-                    print(f"❌ Twilio error sending agent message: {str(e)}")
-                    print(f"Twilio error details: {e.__dict__}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": channel})
-            print("✅ Agent message processed successfully")
+                    logger.error(f"❌ Telegram error sending agent message: {str(e)}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
+            logger.info("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
 
         # Otherwise, process as a client message and get AI response if AI is enabled
-        print(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
+        logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if ai_enabled:
-            print("✅ AI is enabled, proceeding with AI response")
+            logger.info("✅ AI is enabled, proceeding with AI response")
             try:
-                print("AI processing message with gpt-4o-mini:", user_message)
+                logger.info("AI processing message with gpt-4o-mini:", user_message)
                 response = openai_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
@@ -309,11 +314,11 @@ def chat():
                     max_tokens=150
                 )
                 ai_reply = response.choices[0].message.content.strip()
-                print("✅ AI reply:", ai_reply)
+                logger.info("✅ AI reply:", ai_reply)
             except Exception as e:
-                print(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
-                print(f"❌ OpenAI error type: {type(e).__name__}")
-                print("✅ Falling back to gpt-3.5-turbo")
+                logger.error(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
+                logger.error(f"❌ OpenAI error type: {type(e).__name__}")
+                logger.info("✅ Falling back to gpt-3.5-turbo")
                 try:
                     response = openai_client.chat.completions.create(
                         model="gpt-3.5-turbo",
@@ -324,35 +329,30 @@ def chat():
                         max_tokens=150
                     )
                     ai_reply = response.choices[0].message.content.strip()
-                    print("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
+                    logger.info("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
                 except Exception as e:
                     ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                    print(f"❌ Fallback OpenAI error: {str(e)}")
-                    print(f"❌ Fallback OpenAI error type: {type(e).__name__}")
-            print("✅ Logging and emitting AI response")
+                    logger.error(f"❌ Fallback OpenAI error: {str(e)}")
+                    logger.error(f"❌ Fallback OpenAI error type: {type(e).__name__}")
+            logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
-            if channel == "whatsapp":
+            if channel == "telegram":
                 try:
-                    print("Sending AI message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{username}", "Body:", ai_reply)
-                    twilio_client.messages.create(
-                        body=ai_reply,
-                        from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                        to=f"whatsapp:{username}"
-                    )
-                    print("✅ AI message sent to WhatsApp:", ai_reply)
+                    logger.info(f"Sending AI message to Telegram - To: {username}, Body: {ai_reply}")
+                    await telegram_bot.send_message(chat_id=username, text=ai_reply)
+                    logger.info("✅ AI message sent to Telegram:", ai_reply)
                 except Exception as e:
-                    print(f"❌ Twilio error sending AI message: {str(e)}")
-                    print(f"Twilio error details: {e.__dict__}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": channel})
-            print("✅ Checking for handoff condition")
+                    logger.error(f"❌ Telegram error sending AI message: {str(e)}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
+            logger.info("✅ Checking for handoff condition")
             if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                 try:
                     conn = sqlite3.connect(DB_NAME)
                     c = conn.cursor()
                     c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
                     handoff_notified = c.fetchone()[0]
-                    print(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}")
+                    logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}")
                     if not handoff_notified:
                         # Automatically assign to "agent1"
                         default_agent = "agent1"
@@ -361,95 +361,95 @@ def chat():
                         # Increase delay to ensure the transaction is committed
                         time.sleep(1.0)
                         socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": username, "channel": channel})
-                        print(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
+                        logger.info(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                     conn.close()
                 except Exception as e:
-                    print(f"❌ Error during handoff for convo_id {convo_id}: {e}")
-            print("✅ AI response processed successfully")
+                    logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
+            logger.info("✅ AI response processed successfully")
             return jsonify({"reply": ai_reply})
         else:
-            print("❌ AI disabled for convo_id:", convo_id)
+            logger.info("❌ AI disabled for convo_id:", convo_id)
             return jsonify({"status": "Message received, AI disabled"})
     except Exception as e:
-        print(f"❌ Error in /chat endpoint: {e}")
+        logger.error(f"❌ Error in /chat endpoint: {e}")
         return jsonify({"error": "Failed to process chat message"}), 500
 
-@app.route("/whatsapp", methods=["POST"])
-def whatsapp():
-    print("✅ Entering /whatsapp endpoint")
-    incoming_msg = request.values.get("Body", "").strip()
-    from_number = request.values.get("From", "").replace("whatsapp:", "")
-    print("✅ Received WhatsApp message:", incoming_msg, "from:", from_number)
+@app.route("/telegram", methods=["POST"])
+async def telegram():
+    logger.info("✅ Entering /telegram endpoint")
+    update = request.get_json()
+    if "message" not in update:
+        logger.info("✅ Not a message update, returning OK")
+        return "OK", 200
+    chat_id = update["message"]["chat"]["id"]
+    incoming_msg = update["message"]["text"]
+    from_number = str(chat_id)
+    logger.info(f"✅ Received Telegram message: {incoming_msg}, from: {from_number}")
+
     try:
-        print("✅ Connecting to database")
+        logger.info("✅ Connecting to database")
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        print("✅ Querying conversations for username:", from_number)
+        logger.info(f"✅ Querying conversations for username: {from_number}")
         c.execute("SELECT id, last_updated, handoff_notified, ai_enabled FROM conversations WHERE username = ?", (from_number,))
         convo = c.fetchone()
 
         # Check if this is a new conversation
         is_new_conversation = not convo
-        print(f"✅ Is new conversation: {is_new_conversation}")
+        logger.info(f"✅ Is new conversation: {is_new_conversation}")
         if is_new_conversation:
-            print("✅ Creating new conversation")
+            logger.info("✅ Creating new conversation")
             c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled) VALUES (?, ?, ?, 1)", 
-                      (from_number, incoming_msg, "whatsapp"))
+                      (from_number, incoming_msg, "telegram"))
             convo_id = c.lastrowid
             handoff_notified = 0
             ai_enabled = 1
-            print(f"✅ Created new conversation for {from_number}: convo_id {convo_id}")
+            logger.info(f"✅ Created new conversation for {from_number}: convo_id {convo_id}")
         else:
             convo_id, last_updated, handoff_notified, ai_enabled = convo
-            print(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}")
+            logger.info(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}")
             # Check if last message was more than 24 hours ago to reset ai_enabled and handoff_notified
             last_updated_dt = datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - last_updated_dt) > timedelta(hours=24):
-                print("✅ Last message was >24 hours ago, resetting ai_enabled and handoff_notified")
+                logger.info("✅ Last message was >24 hours ago, resetting ai_enabled and handoff_notified")
                 c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
                 conn.commit()
-                print("✅ Reset ai_enabled and handoff_notified for convo_id:", convo_id)
+                logger.info("✅ Reset ai_enabled and handoff_notified for convo_id:", convo_id)
                 ai_enabled = 1
         conn.close()
 
         # Log and emit the client message
-        print("✅ Logging client message")
+        logger.info("✅ Logging client message")
         log_message(convo_id, from_number, incoming_msg, "user")
-        print("✅ Emitting new_message event for client message")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "whatsapp", "user": from_number})
+        logger.info("✅ Emitting new_message event for client message")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "telegram", "user": from_number})
 
         # Only proceed with AI response if ai_enabled is True
-        print(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
+        logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if not ai_enabled:
-            print("❌ AI disabled for convo_id:", convo_id, "Skipping AI response")
-            resp = MessagingResponse()
-            return str(resp)
+            logger.info("❌ AI disabled for convo_id:", convo_id, "Skipping AI response")
+            return "OK", 200
 
         # Send welcome message for new conversations
         if is_new_conversation:
-            print("✅ Sending welcome message for new conversation")
+            logger.info("✅ Sending welcome message for new conversation")
             welcome_message = "Welcome to Sunshine Hotel! I'm here to assist with your bookings. How can I help you today?"
             try:
-                print("Sending welcome message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{from_number}", "Body:", welcome_message)
-                twilio_client.messages.create(
-                    body=welcome_message,
-                    from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                    to=f"whatsapp:{from_number}"
-                )
-                print("✅ Sent welcome message to WhatsApp")
+                logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
+                await telegram_bot.send_message(chat_id=from_number, text=welcome_message)
+                logger.info("✅ Sent welcome message to Telegram")
             except Exception as e:
-                print(f"❌ Twilio error sending welcome message: {str(e)}")
-                print(f"Twilio error details: {e.__dict__}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to WhatsApp: {str(e)}", "channel": "whatsapp"})
-            print("✅ Logging welcome message")
+                logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
+            logger.info("✅ Logging welcome message")
             log_message(convo_id, "AI", welcome_message, "ai")
-            print("✅ Emitting new_message event for welcome message")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "whatsapp"})
+            logger.info("✅ Emitting new_message event for welcome message")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
 
         # Process the message with AI
-        print("✅ Processing message with AI")
+        logger.info("✅ Processing message with AI")
         try:
-            print(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
+            logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
             response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -459,11 +459,11 @@ def whatsapp():
                 max_tokens=150
             )
             ai_reply = response.choices[0].message.content.strip()
-            print("✅ AI reply:", ai_reply)
+            logger.info("✅ AI reply:", ai_reply)
         except Exception as e:
-            print(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
-            print(f"❌ OpenAI error type: {type(e).__name__}")
-            print("✅ Falling back to gpt-3.5-turbo")
+            logger.error(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
+            logger.error(f"❌ OpenAI error type: {type(e).__name__}")
+            logger.info("✅ Falling back to gpt-3.5-turbo")
             try:
                 response = openai_client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -474,41 +474,36 @@ def whatsapp():
                     max_tokens=150
                 )
                 ai_reply = response.choices[0].message.content.strip()
-                print("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
+                logger.info("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
             except Exception as e:
                 ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                print(f"❌ Fallback OpenAI error: {str(e)}")
-                print(f"❌ Fallback OpenAI error type: {type(e).__name__}")
+                logger.error(f"❌ Fallback OpenAI error: {str(e)}")
+                logger.error(f"❌ Fallback OpenAI error type: {type(e).__name__}")
 
         # Fallback: Force handoff for specific keywords like "HELP"
-        print("✅ Checking for HELP keyword")
+        logger.info("✅ Checking for HELP keyword")
         if "HELP" in incoming_msg.upper():
             ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-            print("✅ Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
+            logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to:", ai_reply)
 
         # Log and emit the AI response
-        print("✅ Logging AI response")
+        logger.info("✅ Logging AI response")
         log_message(convo_id, "AI", ai_reply, "ai")
-        print("✅ Emitting new_message event for AI response")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "whatsapp"})
+        logger.info("✅ Emitting new_message event for AI response")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "telegram"})
 
-        # Send AI response to WhatsApp
-        print("✅ Sending AI response to WhatsApp")
+        # Send AI response to Telegram
+        logger.info("✅ Sending AI response to Telegram")
         try:
-            print("Sending AI message to WhatsApp - From:", f"whatsapp:{TWILIO_PHONE_NUMBER}", "To:", f"whatsapp:{from_number}", "Body:", ai_reply)
-            twilio_client.messages.create(
-                body=ai_reply,
-                from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                to=f"whatsapp:{from_number}"
-            )
-            print("✅ AI message sent to WhatsApp:", ai_reply)
+            logger.info(f"Sending AI message to Telegram - To: {from_number}, Body: {ai_reply}")
+            await telegram_bot.send_message(chat_id=from_number, text=ai_reply)
+            logger.info("✅ AI message sent to Telegram:", ai_reply)
         except Exception as e:
-            print(f"❌ Twilio error sending AI message: {str(e)}")
-            print(f"Twilio error details: {e.__dict__}")
-            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to WhatsApp: {str(e)}", "channel": "whatsapp"})
+            logger.error(f"❌ Telegram error sending AI message: {str(e)}")
+            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
 
         # Handle handoff if needed
-        print("✅ Checking for handoff condition")
+        logger.info("✅ Checking for handoff condition")
         if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
             try:
                 conn = sqlite3.connect(DB_NAME)
@@ -516,7 +511,7 @@ def whatsapp():
                 c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
                 result = c.fetchone()
                 handoff_notified, visible_in_conversations = result if result else (0, 0)
-                print(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
+                logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                 if not handoff_notified:
                     # Automatically assign to "agent1"
                     default_agent = "agent1"
@@ -524,33 +519,30 @@ def whatsapp():
                     conn.commit()
                     # Increase delay to ensure the transaction is committed
                     time.sleep(1.0)
-                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "whatsapp"})
-                    print(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
+                    socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": from_number, "channel": "telegram"})
+                    logger.info(f"✅ Handoff triggered for convo_id {convo_id}, assigned to {default_agent}, chat now visible in Conversations")
                 conn.close()
             except Exception as e:
-                print(f"❌ Error during handoff for convo_id {convo_id}: {e}")
+                logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
 
-        print("✅ Preparing response for WhatsApp")
-        resp = MessagingResponse()
-        print("✅ Returning response")
-        return str(resp)
+        logger.info("✅ Returning OK for Telegram")
+        return "OK", 200
     except Exception as e:
-        print(f"❌ Error in /whatsapp endpoint: {e}")
-        resp = MessagingResponse()
-        return str(resp)
+        logger.error(f"❌ Error in /telegram endpoint: {e}")
+        return "OK", 200
 
 @app.route("/instagram", methods=["POST"])
 def instagram():
-    print("✅ Entering /instagram endpoint")
+    logger.info("✅ Entering /instagram endpoint")
     data = request.get_json()
     if "object" not in data or data["object"] != "instagram":
-        print("✅ Not an Instagram event, returning OK")
+        logger.info("✅ Not an Instagram event, returning OK")
         return "OK", 200
     for entry in data.get("entry", []):
         for messaging in entry.get("messaging", []):
             sender_id = messaging["sender"]["id"]
             incoming_msg = messaging["message"].get("text", "")
-            print("✅ Received Instagram message:", incoming_msg, "from:", sender_id)
+            logger.info(f"✅ Received Instagram message: {incoming_msg}, from: {sender_id}")
             try:
                 conn = sqlite3.connect(DB_NAME)
                 c = conn.cursor()
@@ -562,10 +554,10 @@ def instagram():
                 else:
                     convo_id = convo[0]
                 conn.close()
-                print(f"✅ Conversation ID for Instagram: {convo_id}")
+                logger.info(f"✅ Conversation ID for Instagram: {convo_id}")
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
-                    print("Processing Instagram message with AI:", incoming_msg)
+                    logger.info(f"Processing Instagram message with AI: {incoming_msg}")
                     response = openai_client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
@@ -575,11 +567,11 @@ def instagram():
                         max_tokens=150
                     )
                     ai_reply = response.choices[0].message.content.strip()
-                    print("✅ Instagram AI reply:", ai_reply)
+                    logger.info("✅ Instagram AI reply:", ai_reply)
                 except Exception as e:
-                    print(f"❌ Instagram OpenAI error with gpt-4o-mini: {str(e)}")
-                    print(f"❌ Instagram OpenAI error type: {type(e).__name__}")
-                    print("✅ Falling back to gpt-3.5-turbo for Instagram")
+                    logger.error(f"❌ Instagram OpenAI error with gpt-4o-mini: {str(e)}")
+                    logger.error(f"❌ Instagram OpenAI error type: {type(e).__name__}")
+                    logger.info("✅ Falling back to gpt-3.5-turbo for Instagram")
                     try:
                         response = openai_client.chat.completions.create(
                             model="gpt-3.5-turbo",
@@ -590,19 +582,19 @@ def instagram():
                             max_tokens=150
                         )
                         ai_reply = response.choices[0].message.content.strip()
-                        print("✅ Fallback Instagram AI reply with gpt-3.5-turbo:", ai_reply)
+                        logger.info("✅ Fallback Instagram AI reply with gpt-3.5-turbo:", ai_reply)
                     except Exception as e:
                         ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                        print(f"❌ Fallback Instagram OpenAI error: {str(e)}")
-                        print(f"❌ Fallback Instagram OpenAI error type: {type(e).__name__}")
-                print("✅ Logging Instagram AI response")
+                        logger.error(f"❌ Fallback Instagram OpenAI error: {str(e)}")
+                        logger.error(f"❌ Fallback Instagram OpenAI error type: {type(e).__name__}")
+                logger.info("✅ Logging Instagram AI response")
                 log_message(convo_id, "AI", ai_reply, "ai")
-                print("✅ Sending Instagram AI response")
+                logger.info("✅ Sending Instagram AI response")
                 requests.post(
                     f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
                     json={"recipient": {"id": sender_id}, "message": {"text": ai_reply}}
                 )
-                print("✅ Emitting new_message event for Instagram")
+                logger.info("✅ Emitting new_message event for Instagram")
                 socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "instagram"})
                 if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                     try:
@@ -614,16 +606,15 @@ def instagram():
                             default_agent = "agent1"
                             c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (default_agent, convo_id))
                             conn.commit()
-                            # Increase delay to ensure the transaction is committed
                             time.sleep(1.0)
                             socketio.emit("handoff", {"conversation_id": convo_id, "agent": default_agent, "user": sender_id, "channel": "instagram"})
-                            print(f"✅ Instagram handoff triggered for convo_id {convo_id}, assigned to {default_agent}")
+                            logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, assigned to {default_agent}")
                         conn.close()
                     except Exception as e:
-                        print(f"❌ Error during Instagram handoff for convo_id {convo_id}: {e}")
+                        logger.error(f"❌ Error during Instagram handoff for convo_id {convo_id}: {e}")
             except Exception as e:
-                print(f"❌ Error in /instagram endpoint: {e}")
-    print("✅ Returning EVENT_RECEIVED for Instagram")
+                logger.error(f"❌ Error in /instagram endpoint: {e}")
+    logger.info("✅ Returning EVENT_RECEIVED for Instagram")
     return "EVENT_RECEIVED", 200
 
 @app.route("/instagram", methods=["GET"])
@@ -632,45 +623,42 @@ def instagram_verify():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
     if mode == "subscribe" and token == os.getenv("VERIFY_TOKEN", "mysecretverifytoken"):
-        print("✅ Instagram verification successful")
+        logger.info("✅ Instagram verification successful")
         return challenge, 200
-    print("❌ Instagram verification failed")
+    logger.error("❌ Instagram verification failed")
     return "Verification failed", 403
 
 @app.route("/send-welcome", methods=["POST"])
-def send_welcome():
+async def send_welcome():
     data = request.get_json()
     to_number = data.get("to_number")
     user_name = data.get("user_name", "Guest")
     if not to_number:
-        print("❌ Missing to_number in /send-welcome request")
+        logger.error("❌ Missing to_number in /send-welcome request")
         return jsonify({"error": "Missing to_number"}), 400
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "whatsapp"))
+    c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "telegram"))
     convo = c.fetchone()
     if not convo:
         conn.close()
-        print("❌ Conversation not found in /send-welcome")
+        logger.error("❌ Conversation not found in /send-welcome")
         return jsonify({"error": "Conversation not found"}), 404
     convo_id = convo[0]
     conn.close()
     try:
-        print(f"✅ Sending welcome message to {to_number}")
-        twilio_client.messages.create(
-            body=f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance.",
-            from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-            to=to_number
-        )
-        print("✅ Logging welcome message in /send-welcome")
+        logger.info(f"✅ Sending welcome message to Telegram chat {to_number}")
+        welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
+        await telegram_bot.send_message(chat_id=to_number, text=welcome_message)
+        logger.info("✅ Logging welcome message in /send-welcome")
         log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
-        print("✅ Emitting new_message event in /send-welcome")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!", "sender": "ai", "channel": "whatsapp"})
-        print("✅ Welcome message sent successfully")
+        logger.info("✅ Emitting new_message event in /send-welcome")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!", "sender": "ai", "channel": "telegram"})
+        logger.info("✅ Welcome message sent successfully")
         return jsonify({"message": "Welcome message sent"}), 200
     except Exception as e:
-        print(f"❌ Twilio error in send-welcome: {str(e)}")
-        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to WhatsApp: {str(e)}", "channel": "whatsapp"})
+        logger.error(f"❌ Telegram error in send-welcome: {str(e)}")
+        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
         return jsonify({"error": "Failed to send message"}), 500
 
 @app.route("/handoff", methods=["POST"])
@@ -679,7 +667,7 @@ def handoff():
     data = request.get_json()
     convo_id = data.get("conversation_id")
     if not convo_id:
-        print("❌ Missing conversation ID in /handoff request")
+        logger.error("❌ Missing conversation ID in /handoff request")
         return jsonify({"message": "Missing conversation ID"}), 400
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -690,10 +678,10 @@ def handoff():
         conn.commit()
         conn.close()
         socketio.emit("handoff", {"conversation_id": convo_id, "agent": current_user.username, "user": username, "channel": channel})
-        print(f"✅ Chat {convo_id} assigned to {current_user.username}")
+        logger.info(f"✅ Chat {convo_id} assigned to {current_user.username}")
         return jsonify({"message": f"Chat assigned to {current_user.username}"})
     except Exception as e:
-        print(f"❌ Error in /handoff endpoint: {e}")
+        logger.error(f"❌ Error in /handoff endpoint: {e}")
         return jsonify({"error": "Failed to assign chat"}), 500
 
 @app.route("/")
