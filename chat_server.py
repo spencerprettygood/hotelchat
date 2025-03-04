@@ -6,7 +6,6 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import openai
-import httpx
 import sqlite3
 import os
 from telegram import Bot
@@ -27,20 +26,14 @@ logger = logging.getLogger(__name__)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# Initialize OpenAI client with a custom HTTP client to disable proxies
+# Initialize OpenAI with API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
     raise ValueError("OPENAI_API_KEY not set")
 
-# Log environment variables to debug proxy issues
+# Log environment variables to debug
 logger.info(f"Environment variables: {dict(os.environ)}")
-
-http_client = httpx.Client(proxies=None)
-openai_client = openai.OpenAI(
-    api_key=openai.api_key,
-    http_client=http_client
-)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
@@ -291,7 +284,7 @@ def chat():
                 try:
                     logger.info(f"Sending agent message to Telegram - To: {username}, Body: {user_message}")
                     telegram_bot.send_message(chat_id=username, text=user_message)
-                    logger.info("✅ Agent message sent to Telegram:", user_message)
+                    logger.info("✅ Agent message sent to Telegram: " + user_message)
                 except Exception as e:
                     logger.error(f"❌ Telegram error sending agent message: {str(e)}")
                     socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
@@ -303,9 +296,9 @@ def chat():
         if ai_enabled:
             logger.info("✅ AI is enabled, proceeding with AI response")
             try:
-                logger.info("AI processing message with gpt-4o-mini:", user_message)
-                response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                logger.info(f"Processing message with AI: {user_message}")
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                         {"role": "user", "content": user_message}
@@ -313,26 +306,12 @@ def chat():
                     max_tokens=150
                 )
                 ai_reply = response.choices[0].message.content.strip()
-                logger.info("✅ AI reply:", ai_reply)
+                logger.info("✅ AI reply: " + ai_reply)
             except Exception as e:
-                logger.error(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
+                ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                logger.error(f"❌ OpenAI error: {str(e)}")
                 logger.error(f"❌ OpenAI error type: {type(e).__name__}")
-                logger.info("✅ Falling back to gpt-3.5-turbo")
-                try:
-                    response = openai_client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                            {"role": "user", "content": user_message}
-                        ],
-                        max_tokens=150
-                    )
-                    ai_reply = response.choices[0].message.content.strip()
-                    logger.info("✅ Fallback AI reply with gpt-3.5-turbo:", ai_reply)
-                except Exception as e:
-                    ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                    logger.error(f"❌ Fallback OpenAI error: {str(e)}")
-                    logger.error(f"❌ Fallback OpenAI error type: {type(e).__name__}")
+
             logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
@@ -340,7 +319,7 @@ def chat():
                 try:
                     logger.info(f"Sending AI message to Telegram - To: {username}, Body: {ai_reply}")
                     telegram_bot.send_message(chat_id=username, text=ai_reply)
-                    logger.info("✅ AI message sent to Telegram:", ai_reply)
+                    logger.info("✅ AI message sent to Telegram: " + ai_reply)
                 except Exception as e:
                     logger.error(f"❌ Telegram error sending AI message: {str(e)}")
                     socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
@@ -367,10 +346,10 @@ def chat():
             logger.info("✅ AI response processed successfully")
             return jsonify({"reply": ai_reply})
         else:
-            logger.info("❌ AI disabled for convo_id:", convo_id)
+            logger.info("❌ AI disabled for convo_id: " + str(convo_id))
             return jsonify({"status": "Message received, AI disabled"})
     except Exception as e:
-        logger.error(f"❌ Error in /chat endpoint: {e}")
+        logger.error(f"❌ Error in /chat endpoint: {str(e)}")
         return jsonify({"error": "Failed to process chat message"}), 500
 
 @app.route("/telegram", methods=["POST"])
@@ -414,7 +393,7 @@ def telegram():
                 logger.info("✅ Last message was >24 hours ago, resetting ai_enabled and handoff_notified")
                 c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
                 conn.commit()
-                logger.info("✅ Reset ai_enabled and handoff_notified for convo_id:", convo_id)
+                logger.info("✅ Reset ai_enabled and handoff_notified for convo_id: " + str(convo_id))
                 ai_enabled = 1
         conn.close()
 
@@ -427,7 +406,7 @@ def telegram():
         # Only proceed with AI response if ai_enabled is True
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if not ai_enabled:
-            logger.info("❌ AI disabled for convo_id:", convo_id, "Skipping AI response")
+            logger.info("❌ AI disabled for convo_id: " + str(convo_id) + ", Skipping AI response")
             return "OK", 200
 
         # Send welcome message for new conversations
@@ -449,9 +428,9 @@ def telegram():
         # Process the message with AI
         logger.info("✅ Processing message with AI")
         try:
-            logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
-            response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+            logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-3.5-turbo: {incoming_msg}")
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                     {"role": "user", "content": incoming_msg}
@@ -461,24 +440,9 @@ def telegram():
             ai_reply = response.choices[0].message.content.strip()
             logger.info("✅ AI reply: " + ai_reply)
         except Exception as e:
-            logger.error(f"❌ OpenAI error with gpt-4o-mini: {str(e)}")
+            ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+            logger.error(f"❌ OpenAI error: {str(e)}")
             logger.error(f"❌ OpenAI error type: {type(e).__name__}")
-            logger.info("✅ Falling back to gpt-3.5-turbo")
-            try:
-                response = openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                        {"role": "user", "content": incoming_msg}
-                    ],
-                    max_tokens=150
-                )
-                ai_reply = response.choices[0].message.content.strip()
-                logger.info("✅ Fallback AI reply with gpt-3.5-turbo: " + ai_reply)
-            except Exception as e:
-                ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                logger.error(f"❌ Fallback OpenAI error: {str(e)}")
-                logger.error(f"❌ Fallback OpenAI error type: {type(e).__name__}")
 
         # Fallback: Force handoff for specific keywords like "HELP"
         logger.info("✅ Checking for HELP keyword")
@@ -558,8 +522,8 @@ def instagram():
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
                     logger.info(f"Processing Instagram message with AI: {incoming_msg}")
-                    response = openai_client.chat.completions.create(
-                        model="gpt-4o-mini",
+                    response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
                         messages=[
                             {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
                             {"role": "user", "content": incoming_msg}
@@ -569,24 +533,9 @@ def instagram():
                     ai_reply = response.choices[0].message.content.strip()
                     logger.info("✅ Instagram AI reply: " + ai_reply)
                 except Exception as e:
-                    logger.error(f"❌ Instagram OpenAI error with gpt-4o-mini: {str(e)}")
+                    ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                    logger.error(f"❌ Instagram OpenAI error: {str(e)}")
                     logger.error(f"❌ Instagram OpenAI error type: {type(e).__name__}")
-                    logger.info("✅ Falling back to gpt-3.5-turbo for Instagram")
-                    try:
-                        response = openai_client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[
-                                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                                {"role": "user", "content": incoming_msg}
-                            ],
-                            max_tokens=150
-                        )
-                        ai_reply = response.choices[0].message.content.strip()
-                        logger.info("✅ Fallback Instagram AI reply with gpt-3.5-turbo: " + ai_reply)
-                    except Exception as e:
-                        ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-                        logger.error(f"❌ Fallback Instagram OpenAI error: {str(e)}")
-                        logger.error(f"❌ Fallback Instagram OpenAI error type: {type(e).__name__}")
                 logger.info("✅ Logging Instagram AI response")
                 log_message(convo_id, "AI", ai_reply, "ai")
                 logger.info("✅ Sending Instagram AI response")
