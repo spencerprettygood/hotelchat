@@ -1,420 +1,246 @@
-const chatBox = document.getElementById("chatBox");
-const conversationList = document.getElementById("conversationList");
-const notificationSound = new Audio('/static/notification.mp3');
-let socket = null;
-let isLoading = false;
-let pollingInterval = null;
-let isLoggedIn = false;
-let lastUpdate = 0;
-let currentConvoId = null;
+// dashboard.js
+const socket = io();
 
-document.addEventListener("DOMContentLoaded", function () {
-    console.log("✅ Page loaded at:", new Date().toLocaleTimeString());
-    document.getElementById("loginPage").style.display = "flex";
-    document.getElementById("dashboard").style.display = "none";
-    checkLogin();
+let currentConversationId = null;
+
+// Check authentication status on page load
+document.addEventListener('DOMContentLoaded', () => {
+    checkAuthStatus();
+    fetchConversations();
+    setInterval(fetchConversations, 5000); // Poll every 5 seconds
 });
 
-async function checkLogin() {
-    const agent = localStorage.getItem("agent");
-    console.log("🔄 Checking login state at:", new Date().toLocaleTimeString());
-    
-    if (agent) {
-        try {
-            console.log("🔄 Verifying session for agent:", agent);
-            const response = await fetch("/conversations", { 
-                method: "GET",
-                credentials: 'include'
-            });
-            if (response.ok) {
-                console.log("✅ Session valid, loading dashboard");
-                isLoggedIn = true;
-                document.getElementById("loginPage").style.display = "none";
-                document.getElementById("dashboard").style.display = "block";
-                if (!socket) {
-                    console.log("🔌 Initializing WebSocket");
-                    listenForNewMessages();
+// Check if user is authenticated
+function checkAuthStatus() {
+    fetch('/check-auth')
+        .then(response => response.json())
+        .then(data => {
+            if (data.is_authenticated) {
+                document.getElementById('login-section').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+            } else {
+                document.getElementById('login-section').style.display = 'block';
+                document.getElementById('dashboard').style.display = 'none';
+            }
+        })
+        .catch(error => console.error('Error checking auth status:', error));
+}
+
+// Login form submission
+document.getElementById('login-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+
+    fetch('/login', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.message === 'Login successful') {
+                document.getElementById('login-section').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+                fetchConversations();
+            } else {
+                alert('Login failed: ' + data.message);
+            }
+        })
+        .catch(error => console.error('Error during login:', error));
+});
+
+// Logout button
+document.getElementById('logout-button').addEventListener('click', () => {
+    fetch('/logout', {
+        method: 'POST',
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.message === 'Logged out successfully') {
+                document.getElementById('login-section').style.display = 'block';
+                document.getElementById('dashboard').style.display = 'none';
+            }
+        })
+        .catch(error => console.error('Error during logout:', error));
+});
+
+// Fetch conversations
+function fetchConversations() {
+    fetch('/conversations')
+        .then(response => response.json())
+        .then(conversations => {
+            const unassignedList = document.getElementById('unassigned-conversations');
+            const yourList = document.getElementById('your-conversations');
+            unassignedList.innerHTML = '';
+            yourList.innerHTML = '';
+
+            conversations.forEach(convo => {
+                const li = document.createElement('li');
+                li.textContent = `${convo.username} (${convo.channel}): ${convo.latest_message}`;
+                li.dataset.convoId = convo.id;
+                li.onclick = () => loadConversation(convo.id);
+
+                if (convo.assigned_agent) {
+                    yourList.appendChild(li);
                 } else {
-                    console.log("🔌 WebSocket already exists");
+                    unassignedList.appendChild(li);
                 }
-                loadConversations();
-                startPolling();
-            } else {
-                console.log("❌ Session invalid, clearing agent and showing login");
-                localStorage.removeItem("agent");
-                showLoginPage();
-            }
-        } catch (error) {
-            console.error("❌ Error verifying session:", error);
-            localStorage.removeItem("agent");
-            showLoginPage();
-        }
-    } else {
-        console.log("🔒 No agent in localStorage, showing login");
-        showLoginPage();
-    }
+            });
+        })
+        .catch(error => console.error('Error fetching conversations:', error));
 }
 
-function showLoginPage() {
-    isLoggedIn = false;
-    document.getElementById("loginPage").style.display = "flex";
-    document.getElementById("dashboard").style.display = "none";
-    if (socket) {
-        console.log("🔌 Disconnecting WebSocket");
-        socket.disconnect();
-        socket = null;
-    }
-    stopPolling();
-    chatBox.innerHTML = "";
-    conversationList.innerHTML = "";
-    currentConvoId = null;
+// Load a conversation into the active panel
+function loadConversation(convoId) {
+    currentConversationId = convoId;
+    fetch(`/messages?conversation_id=${convoId}`)
+        .then(response => response.json())
+        .then(messages => {
+            const chatWindow = document.getElementById('chat-window');
+            chatWindow.innerHTML = '';
+
+            messages.forEach(msg => {
+                const div = document.createElement('div');
+                div.className = msg.sender === 'user' ? 'user-message' : 'ai-message';
+                div.textContent = `${msg.sender}: ${msg.message} (${msg.timestamp})`;
+                chatWindow.appendChild(div);
+            });
+
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+
+            // Show handoff button if unassigned
+            fetch(`/conversations`)
+                .then(response => response.json())
+                .then(conversations => {
+                    const convo = conversations.find(c => c.id === convoId);
+                    if (convo && !convo.assigned_agent) {
+                        document.getElementById('handoff-button').style.display = 'block';
+                    } else {
+                        document.getElementById('handoff-button').style.display = 'none';
+                    }
+                });
+        })
+        .catch(error => console.error('Error loading messages:', error));
 }
 
-async function login() {
-    const username = document.getElementById("username").value;
-    const password = document.getElementById("password").value;
-    if (!username || !password) {
-        alert("Please enter both username and password.");
+// Send a message
+document.getElementById('send-message').addEventListener('click', () => {
+    if (!currentConversationId) {
+        alert('Please select a conversation.');
         return;
     }
-    try {
-        console.log("🔄 Attempting login...");
-        const response = await fetch("/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, password }),
-            credentials: 'include'
-        });
-        const data = await response.json();
-        if (response.ok) {
-            localStorage.setItem("agent", data.agent);
-            console.log("✅ Login successful, agent:", data.agent);
-            checkLogin();
-        } else {
-            console.error("❌ Login failed:", data.message);
-            alert(data.message || "Login failed.");
-        }
-    } catch (error) {
-        console.error("❌ ERROR: Login failed", error);
-        alert("Error connecting to server.");
-    }
-}
 
-function logout() {
-    fetch("/logout", { 
-        method: "POST",
-        credentials: 'include',
-        headers: { "Content-Type": "application/json" }
-    })
-    .then(response => {
-        if (response.ok) {
-            console.log("✅ Logout successful");
-            localStorage.removeItem("agent");
-            showLoginPage();
-            window.location.reload();
-        } else {
-            console.error("❌ Logout failed:", response.status);
-            alert("Logout failed, please try again.");
-        }
-    })
-    .catch(error => {
-        console.error("❌ Error during logout:", error);
-        localStorage.removeItem("agent");
-        showLoginPage();
-    });
-}
-
-async function loadConversations(filter = 'all') {
-    if (isLoading) {
-        console.log("🔄 Skipping loadConversations, already in progress");
-        return;
-    }
-    isLoading = true;
-    try {
-        console.log("🔄 Loading conversations with filter:", filter);
-        const response = await fetch("/conversations", { credentials: 'include' });
-        if (!response.ok) throw new Error("Failed to fetch conversations: " + response.status);
-        const conversations = await response.json();
-        console.log("✅ Conversations fetched:", conversations);
-        conversationList.innerHTML = "";
-        let unassignedCount = 0, yourCount = 0, teamCount = 0;
-
-        conversations.forEach(convo => {
-            const currentAgent = localStorage.getItem("agent");
-            if (filter === 'unassigned' && convo.assigned_agent) return;
-            if (filter === 'you' && convo.assigned_agent !== currentAgent) return;
-            if (filter === 'team' && (!convo.assigned_agent || convo.assigned_agent === currentAgent)) return;
-
-            const convoItem = document.createElement("div");
-            convoItem.classList.add("conversation-item");
-            const avatar = document.createElement("div");
-            avatar.classList.add("conversation-avatar");
-            avatar.textContent = convo.username.charAt(0).toUpperCase();
-            const details = document.createElement("div");
-            details.classList.add("conversation-details");
-            const name = document.createElement("div");
-            name.classList.add("name");
-            name.textContent = `${convo.username} (${convo.channel})` + (convo.assigned_agent ? ` (${convo.assigned_agent})` : '');
-            const preview = document.createElement("div");
-            preview.classList.add("preview");
-            preview.textContent = convo.latest_message || "No messages yet";
-            details.appendChild(name);
-            details.appendChild(preview);
-            convoItem.appendChild(avatar);
-            convoItem.appendChild(details);
-
-            // All chats are clickable to load into Live Conversation panel
-            convoItem.onclick = () => loadChat(convo.id, convo.username);
-
-            conversationList.appendChild(convoItem);
-
-            if (!convo.assigned_agent) unassignedCount++;
-            else if (convo.assigned_agent === currentAgent) yourCount++;
-            else teamCount++;
-        });
-
-        document.getElementById("unassignedCount").textContent = unassignedCount;
-        document.getElementById("yourCount").textContent = yourCount;
-        document.getElementById("teamCount").textContent = teamCount;
-        document.getElementById("allCount").textContent = conversations.length;
-        console.log("✅ Conversations loaded, count:", conversations.length);
-    } catch (error) {
-        console.error("❌ Error loading conversations:", error);
-    } finally {
-        isLoading = false;
-    }
-}
-
-async function loadChat(convoId, username) {
-    if (isLoading) {
-        console.log("🔄 Skipping loadChat, already in progress");
-        return;
-    }
-    isLoading = true;
-    try {
-        console.log("🔄 Loading chat for convo ID:", convoId);
-        // Poll for visibility before loading the chat
-        const isVisible = await pollVisibility(convoId);
-        if (!isVisible) {
-            console.log(`Conversation ${convoId} is not visible after polling, skipping load into Live Conversation`);
-            chatBox.innerHTML = "";
-            document.getElementById("clientName").textContent = "";
-            currentConvoId = null;
-            return;
-        }
-        const response = await fetch(`/messages?conversation_id=${convoId}`, { credentials: 'include' });
-        if (!response.ok) throw new Error("Failed to load messages: " + response.status);
-        const messages = await response.json();
-        chatBox.innerHTML = "";
-        messages.forEach(msg => {
-            console.log("Message sender:", msg.sender);
-            const messageElement = document.createElement("div");
-            messageElement.classList.add("message", msg.sender === "user" ? "user-message" : "agent-message");
-            messageElement.innerHTML = `<p>${msg.message}</p><span class="message-timestamp">${new Date(msg.timestamp).toLocaleTimeString()}</span>`;
-            chatBox.appendChild(messageElement);
-        });
-        chatBox.scrollTop = chatBox.scrollHeight;
-        document.getElementById("clientName").textContent = username;
-        currentConvoId = convoId;
-        console.log("✅ Chat loaded, message count:", messages.length);
-    } catch (error) {
-        console.error("❌ Error loading chat:", error);
-    } finally {
-        isLoading = false;
-    }
-}
-
-async function pollVisibility(convoId, maxAttempts = 5, interval = 1000) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            const response = await fetch(`/check-visibility?conversation_id=${convoId}`, { credentials: 'include' });
-            const data = await response.json();
-            console.log(`✅ Visibility check attempt ${attempt} for convo ID ${convoId}:`, data.visible);
-            if (data.visible) {
-                return true;
-            }
-            if (!response.ok) {
-                console.error(`❌ Visibility check failed on attempt ${attempt}:`, data.error);
-                return false;
-            }
-        } catch (error) {
-            console.error(`❌ Error checking visibility on attempt ${attempt}:`, error);
-            return false;
-        }
-        // Wait before the next attempt
-        await new Promise(resolve => setTimeout(resolve, interval));
-    }
-    console.error(`❌ Conversation ${convoId} not visible after ${maxAttempts} attempts`);
-    return false;
-}
-
-async function isAuthenticated() {
-    try {
-        const response = await fetch("/check-auth", { credentials: 'include' });
-        const data = await response.json();
-        return data.is_authenticated;
-    } catch (error) {
-        console.error("❌ Error checking auth:", error);
-        return false;
-    }
-}
-
-async function sendMessage() {
-    const messageInput = document.getElementById("messageInput");
+    const messageInput = document.getElementById('message-input');
     const message = messageInput.value.trim();
-    if (!message || !currentConvoId) {
-        console.log("⚠️ No message or convo ID, skipping send");
-        return;
-    }
-    messageInput.value = "";
-    
-    const isAgent = await isAuthenticated();
-    const sender = isAgent ? "agent" : "user";
-    console.log("🔄 Sending message as:", sender);
+    if (!message) return;
 
-    try {
-        const response = await fetch("/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ conversation_id: currentConvoId, message }),
-            credentials: 'include'
-        });
-        const data = await response.json();
-        console.log("Response from /chat:", data);
-        if (sender !== "agent" && data.reply) {
-            addMessage(data.reply, "ai");
-        }
-    } catch (error) {
-        console.error("❌ Error sending message:", error);
-    }
-}
-
-function addMessage(content, sender) {
-    const messageElement = document.createElement("div");
-    messageElement.classList.add("message", sender === "user" ? "user-message" : sender === "agent" ? "agent-message" : "system-message");
-    messageElement.innerHTML = `<p>${content}</p><span class="message-timestamp">${new Date().toLocaleTimeString()}</span>`;
-    chatBox.appendChild(messageElement);
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-async function checkVisibility(convoId) {
-    try {
-        const response = await fetch(`/check-visibility?conversation_id=${convoId}`, { credentials: 'include' });
-        const data = await response.json();
-        console.log(`✅ Visibility check for convo ID ${convoId}:`, data.visible);
-        return data.visible;
-    } catch (error) {
-        console.error("❌ Error checking visibility:", error);
-        return false;
-    }
-}
-
-function listenForNewMessages() {
-    if (socket) {
-        console.log("🔄 WebSocket already connected, skipping");
-        return;
-    }
-    socket = io('https://hotel-chatbot-1qj5.onrender.com', { 
-        transports: ["websocket"],
-        reconnection: false
-    });
-    socket.on("connect", () => {
-        console.log("✅ WebSocket connected at:", new Date().toLocaleTimeString());
-    });
-    socket.on("connect_error", (error) => {
-        console.error("❌ WebSocket connection error:", error);
-    });
-    socket.on("new_message", async (data) => {
-        console.log("📩 New message received:", data);
-        console.log("Current convoId:", currentConvoId, "Data convo_id:", data.convo_id);
-        
-        // Check if the conversation is visible before displaying in Live Conversation panel
-        const isVisible = await pollVisibility(data.convo_id);
-        if (isVisible) {
-            if (data.convo_id === currentConvoId) {
-                console.log("Adding message to current conversation:", data.message);
-                addMessage(data.message, data.sender);
+    fetch('/chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            conversation_id: currentConversationId,
+            message: message,
+        }),
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.reply) {
+                // If AI responds, it will be handled via Socket.IO
+            } else if (data.status === 'success') {
+                // Agent message sent successfully
+                messageInput.value = '';
             } else {
-                console.log("Loading chat into Live Conversation:", data.convo_id);
-                loadChat(data.convo_id, data.user || "Unknown");
+                console.error('Error sending message:', data.error);
             }
-        } else {
-            console.log(`Conversation ${data.convo_id} is not visible after polling, skipping display in Live Conversation`);
-        }
+        })
+        .catch(error => console.error('Error sending message:', error));
+});
 
-        const now = Date.now();
-        if (now - lastUpdate > 2000) {
-            console.log("🔄 Refreshing conversations after new message");
-            loadConversations();
-            lastUpdate = now;
-        }
-    });
-    socket.on("handoff", (data) => {
-        console.log("🔔 Handoff event:", data);
-        alert(`Chat with ${data.user} (ID: ${data.conversation_id}) has been assigned to ${data.agent}`);
-        console.log("🔄 Refreshing conversations after handoff");
-        loadConversations();
-    });
-    socket.on("error", (data) => {
-        console.log("❌ Error event:", data);
-        alert(`Error in conversation ${data.convo_id} (${data.channel}): ${data.message}`);
-        if (data.convo_id === currentConvoId) {
-            addMessage(`Error: ${data.message}`, "system");
-        }
-    });
-}
-
-const messageInput = document.getElementById("messageInput");
-messageInput.removeEventListener("keypress", handleKeypress);
-messageInput.addEventListener("keypress", handleKeypress);
-function handleKeypress(event) {
-    if (event.key === "Enter") sendMessage();
-}
-
-async function handoff(convoId) {
-    try {
-        console.log("🔄 Attempting handoff for convo ID:", convoId);
-        const response = await fetch("/handoff", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ conversation_id: convoId }),
-            credentials: 'include'
-        });
-        const data = await response.json();
-        alert(data.message);
-        loadConversations();
-        console.log("✅ Handoff successful");
-    } catch (error) {
-        console.error("❌ Error during handoff:", error);
-        alert("Failed to assign chat.");
-    }
-}
-
-function filterByChannel(channel) {
-    console.log(`Filtering by ${channel} - not implemented yet`);
-}
-
-function startPolling() {
-    if (pollingInterval) {
-        console.log("🔄 Polling already active");
+// Handoff button
+document.getElementById('handoff-button').addEventListener('click', () => {
+    if (!currentConversationId) {
+        alert('Please select a conversation.');
         return;
     }
-    pollingInterval = setInterval(() => {
-        if (!isLoading && isLoggedIn) {
-            const now = Date.now();
-            if (now - lastUpdate > 10000) {
-                console.log("🔄 Polling conversations");
-                loadConversations();
-                lastUpdate = now;
-            }
-        }
-    }, 10000);
-}
 
-function stopPolling() {
-    if (pollingInterval) {
-        console.log("🔄 Stopping polling");
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+    fetch('/handoff', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            conversation_id: currentConversationId,
+        }),
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.message) {
+                alert(data.message);
+                fetchConversations();
+                document.getElementById('handoff-button').style.display = 'none';
+            } else {
+                alert('Error assigning chat: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error during handoff:', error));
+});
+
+// Socket.IO event listeners
+socket.on('new_message', (data) => {
+    console.log('New message received:', data);
+    if (data.convo_id === currentConversationId) {
+        const chatWindow = document.getElementById('chat-window');
+        const div = document.createElement('div');
+        div.className = data.sender === 'user' ? 'user-message' : 'ai-message';
+        div.textContent = `${data.sender}: ${data.message}`;
+        chatWindow.appendChild(div);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
     }
+    fetchConversations(); // Refresh the conversation list
+});
+
+socket.on('error', (data) => {
+    console.error('Error received:', data);
+    alert(data.message);
+});
+
+socket.on('handoff', (data) => {
+    console.log('Handoff event received:', data);
+    const conversationId = data.conversation_id;
+    const agent = data.agent;
+    const user = data.user;
+    const channel = data.channel;
+
+    // Show notification
+    alert(`Conversation ${conversationId} from ${user} (${channel}) needs attention.`);
+
+    // Check visibility of the conversation
+    pollVisibility(conversationId);
+
+    // Refresh the conversation list immediately
+    fetchConversations();
+});
+
+// Poll visibility of a conversation
+function pollVisibility(conversationId) {
+    fetch(`/check-visibility?conversation_id=${conversationId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.visible) {
+                console.log(`Conversation ${conversationId} is now visible`);
+                fetchConversations(); // Refresh the list again to be sure
+            } else {
+                console.log(`Conversation ${conversationId} is not yet visible, polling again...`);
+                setTimeout(() => pollVisibility(conversationId), 1000);
+            }
+        })
+        .catch(error => {
+            console.error('Error polling visibility:', error);
+            setTimeout(() => pollVisibility(conversationId), 1000);
+        });
 }
