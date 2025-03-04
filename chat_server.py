@@ -653,21 +653,6 @@ def handoff():
         logger.error(f"❌ Error in /handoff endpoint: {e}")
         return jsonify({"error": "Failed to assign chat"}), 500
 
-@app.route("/clear-database", methods=["POST"])
-def clear_database():
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("DELETE FROM conversations")
-        c.execute("DELETE FROM messages")
-        conn.commit()
-        conn.close()
-        logger.info("✅ Database cleared successfully")
-        return jsonify({"message": "Database cleared successfully"}), 200
-    except Exception as e:
-        logger.error(f"❌ Error clearing database: {str(e)}")
-        return jsonify({"error": "Failed to clear database"}), 500
-
 @app.route("/")
 def index():
     return render_template("dashboard.html")
