@@ -4,103 +4,53 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hotel Chatbot Dashboard</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-        }
-        #login-section, #dashboard {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        #dashboard {
-            display: none;
-        }
-        .chat-container {
-            display: flex;
-            margin-top: 20px;
-        }
-        .conversation-list {
-            width: 30%;
-            border-right: 1px solid #ccc;
-            padding-right: 10px;
-        }
-        .chat-window {
-            width: 70%;
-            padding-left: 10px;
-        }
-        ul {
-            list-style: none;
-            padding: 0;
-        }
-        li {
-            padding: 5px;
-            cursor: pointer;
-        }
-        li:hover {
-            background-color: #f0f0f0;
-        }
-        #chat-window {
-            height: 300px;
-            overflow-y: auto;
-            border: 1px solid #ccc;
-            padding: 10px;
-            margin-bottom: 10px;
-        }
-        .user-message {
-            text-align: right;
-            color: blue;
-        }
-        .ai-message {
-            text-align: left;
-            color: green;
-        }
-        #message-input {
-            width: 80%;
-            padding: 5px;
-        }
-        #handoff-button {
-            display: none;
-            margin-top: 10px;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-    <!-- Login Section -->
-    <div id="login-section">
+    <div id="loginPage" class="login-container" style="display: flex;">
         <h2>Agent Login</h2>
-        <form id="login-form">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" required><br><br>
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required><br><br>
-            <button type="submit">Login</button>
-        </form>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
     </div>
 
-    <!-- Dashboard Section -->
-    <div id="dashboard">
-        <h2>Hotel Chatbot Dashboard</h2>
-        <button id="logout-button">Logout</button>
-        <div class="chat-container">
-            <div class="conversation-list">
-                <h3>Unassigned Conversations</h3>
-                <ul id="unassigned-conversations"></ul>
-                <h3>Your Conversations</h3>
-                <ul id="your-conversations"></ul>
+    <div id="dashboard" style="display: none;">
+        <div class="header">
+            <h2>Hotel Chatbot Dashboard</h2>
+            <button onclick="logout()">Logout</button>
+        </div>
+        <div class="container">
+            <div class="sidebar">
+                <h3>Live Chat</h3>
+                <p><strong>Conversations</strong></p>
+                <ul>
+                    <li onclick="loadConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
+                    <li onclick="loadConversations('you')">You <span id="yourCount">0</span></li>
+                    <li onclick="loadConversations('team')">Team <span id="teamCount">0</span></li>
+                    <li onclick="loadConversations('all')">All <span id="allCount">0</span></li>
+                </ul>
+                <p><strong>Channels</strong></p>
+                <ul>
+                    <li onclick="filterByChannel('whatsapp')">WhatsApp</li>
+                    <li onclick="filterByChannel('instagram')">Instagram</li>
+                </ul>
             </div>
-            <div class="chat-window">
-                <div id="chat-window"></div>
-                <input type="text" id="message-input" placeholder="Type a message...">
-                <button id="send-message">Send</button>
-                <button id="handoff-button">Assign to Me</button>
+            <div class="conversation-panel">
+                <h3>Conversations</h3>
+                <ul id="conversationList" class="conversation-list"></ul>
+            </div>
+            <div class="chat-panel">
+                <h3>Live Conversation</h3>
+                <div id="clientName">-</div>
+                <div class="chat-messages" id="chatBox"></div>
+                <div class="chat-input">
+                    <input type="text" id="messageInput" placeholder="Type a message...">
+                    <button onclick="sendMessage()">Send</button>
+                </div>
             </div>
         </div>
     </div>
-
-    <!-- Include Socket.IO and dashboard.js -->
-    <script src="/socket.io/socket.io.js"></script>
     <script src="/static/dashboard.js"></script>
 </body>
 </html>
