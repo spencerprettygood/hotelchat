@@ -5,6 +5,10 @@ let currentConversationId = null;
 let currentFilter = 'unassigned'; // Default filter
 let currentChannel = null; // Default: no channel filter
 
+// Audio elements for notifications
+const handoffSound = new Audio('/static/handoff.mp3');
+const messageSound = new Audio('/static/message.mp3');
+
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
     const loginPage = document.getElementById('loginPage');
@@ -150,9 +154,12 @@ function fetchConversations() {
                 convoContainer.style.justifyContent = 'space-between';
                 convoContainer.style.alignItems = 'center';
 
-                // Conversation info
+                // Conversation info with assigned agent
                 const convoInfo = document.createElement('span');
-                convoInfo.textContent = `${convo.username} (${convo.channel})`;
+                const assignedAgent = convo.assigned_agent ? convo.assigned_agent : 'Unassigned';
+                convoInfo.textContent = `${convo.username} (${convo.channel}) - ${assignedAgent}`;
+                convoInfo.className = 'conversation-info'; // Base class
+                convoInfo.classList.add(convo.assigned_agent ? 'assigned' : 'unassigned'); // Add assigned/unassigned class
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
@@ -360,6 +367,11 @@ socket.on('new_message', (data) => {
 
             chatBox.appendChild(div);
             chatBox.scrollTop = chatBox.scrollHeight;
+
+            // Play message sound for new messages
+            messageSound.play().catch(error => {
+                console.error('Error playing message sound:', error);
+            });
         }
     }
     fetchConversations();
@@ -375,6 +387,11 @@ socket.on('refresh_conversations', (data) => {
     const conversationId = data.conversation_id;
     pollVisibility(conversationId);
     fetchConversations();
+
+    // Play handoff sound when a new conversation becomes visible
+    handoffSound.play().catch(error => {
+        console.error('Error playing handoff sound:', error);
+    });
 });
 
 // Poll visibility of a conversation
