@@ -144,5 +144,7 @@ High-stakes betting inquiries
 
 Keep responses short and engaging.
 
+Don't give any contact information when going through the booking flow
+
 When payment details are requested by the AI
 
