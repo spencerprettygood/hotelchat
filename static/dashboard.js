@@ -4,6 +4,7 @@ const socket = io();
 let currentConversationId = null;
 let currentFilter = 'unassigned'; // Default filter
 let currentChannel = null; // Default: no channel filter
+let currentAgent = null; // Store the current agent's username
 
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -32,8 +33,10 @@ function checkAuthStatus() {
             const loginPage = document.getElementById('loginPage');
             const dashboardSection = document.getElementById('dashboard');
             if (data.is_authenticated) {
+                currentAgent = data.agent; // Assuming /check-auth returns the agent's username
                 loginPage.style.display = 'none';
                 dashboardSection.style.display = 'block';
+                fetchConversations();
             } else {
                 loginPage.style.display = 'flex';
                 dashboardSection.style.display = 'none';
@@ -69,6 +72,7 @@ function login() {
         })
         .then(data => {
             if (data.message === 'Login successful') {
+                currentAgent = data.agent; // Assuming /login returns the agent's username
                 document.getElementById('loginPage').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
                 fetchConversations();
@@ -94,6 +98,7 @@ if (logoutButton) {
             })
             .then(data => {
                 if (data.message === 'Logged out successfully') {
+                    currentAgent = null; // Clear the current agent
                     document.getElementById('loginPage').style.display = 'flex';
                     document.getElementById('dashboard').style.display = 'none';
                 }
@@ -132,9 +137,9 @@ function fetchConversations() {
                 if (currentFilter === 'unassigned') {
                     return !convo.assigned_agent;
                 } else if (currentFilter === 'you') {
-                    return convo.assigned_agent === 'agent1'; // Replace with current user's username if needed
+                    return convo.assigned_agent === currentAgent;
                 } else if (currentFilter === 'team') {
-                    return convo.assigned_agent && convo.assigned_agent !== 'agent1';
+                    return convo.assigned_agent && convo.assigned_agent !== currentAgent;
                 }
                 return true; // 'all' filter
             });
@@ -152,16 +157,19 @@ function fetchConversations() {
 
                 // Conversation info
                 const convoInfo = document.createElement('span');
-                convoInfo.textContent = `${convo.username} (${convo.channel})`;
+                convoInfo.textContent = `${convo.username} (${convo.channel}): ${convo.latest_message}`;
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
 
                 // Add "Take Over" button for unassigned conversations
-                if (!convo.assigned_agent) {
+                if (currentFilter === 'unassigned' && !convo.assigned_agent) {
                     const takeOverButton = document.createElement('button');
                     takeOverButton.textContent = 'Take Over';
-                    takeOverButton.onclick = () => takeOverConversation(convo.id);
+                    takeOverButton.onclick = (e) => {
+                        e.stopPropagation(); // Prevent triggering loadConversation
+                        takeOverConversation(convo.id);
+                    };
                     takeOverButton.style.marginLeft = '10px';
                     takeOverButton.style.padding = '5px 10px';
                     takeOverButton.style.backgroundColor = '#007bff';
@@ -170,6 +178,18 @@ function fetchConversations() {
                     takeOverButton.style.borderRadius = '3px';
                     takeOverButton.style.cursor = 'pointer';
                     convoContainer.appendChild(takeOverButton);
+                }
+
+                // Add "Hand Back to AI" button for conversations assigned to the current agent
+                if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
+                    const handBackButton = document.createElement('button');
+                    handBackButton.textContent = 'Hand Back to AI';
+                    handBackButton.onclick = (e) => {
+                        e.stopPropagation(); // Prevent triggering loadConversation
+                        handBackToAI(convo.id);
+                    };
+                    handBackButton.className = 'handback-button'; // Use the CSS class from dashboard.html
+                    convoContainer.appendChild(handBackButton);
                 }
 
                 li.appendChild(convoContainer);
@@ -188,8 +208,8 @@ function updateCounts(conversations) {
 
     if (unassignedCount && yourCount && teamCount && allCount) {
         unassignedCount.textContent = conversations.filter(c => !c.assigned_agent).length;
-        yourCount.textContent = conversations.filter(c => c.assigned_agent === 'agent1').length;
-        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== 'agent1').length;
+        yourCount.textContent = conversations.filter(c => c.assigned_agent === currentAgent).length;
+        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== currentAgent).length;
         allCount.textContent = conversations.length;
     }
 }
@@ -335,6 +355,35 @@ function sendMessage() {
             }
         })
         .catch(error => console.error('Error sending message:', error));
+}
+
+// Hand back to AI
+function handBackToAI(convoId) {
+    fetch('/handback-to-ai', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ conversation_id: convoId }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.message) {
+                alert(data.message); // Temporary feedback; consider a better UI solution
+                socket.emit('refresh_conversations', { conversation_id: convoId });
+                if (currentConversationId === convoId) {
+                    loadConversation(convoId); // Refresh the chat panel
+                }
+            } else {
+                alert('Failed to hand back to AI: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error handing back to AI:', error));
 }
 
 // Socket.IO event listeners
