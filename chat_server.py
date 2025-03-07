@@ -332,6 +332,9 @@ def get_messages():
 
 def log_message(convo_id, user, message, sender):
     try:
+        if message is None:
+            logger.error(f"❌ Attempted to log a None message for convo_id {convo_id}, user {user}, sender {sender}")
+            message = "Error: Message content unavailable"
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
@@ -561,7 +564,6 @@ def telegram():
                     c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
                     conn.commit()
                 ai_enabled = 1
-        conn.close()
 
         logger.info("✅ Logging client message")
         log_message(convo_id, from_number, incoming_msg, "user")
@@ -729,6 +731,15 @@ def telegram():
                             logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
                     return "OK", 200
 
+                # If no booking flow matched, fall back to OpenAI
+                response = openai.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=conversation_history,
+                    max_tokens=150
+                )
+                ai_reply = response.choices[0].message.content.strip()
+                model_used = response.model
+                logger.info(f"✅ AI reply from OpenAI: {ai_reply}, Model: {model_used}")
                 break
             except Exception as e:
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
@@ -744,6 +755,11 @@ def telegram():
         if "HELP" in incoming_msg.upper():
             ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
+
+        # Ensure ai_reply is set before logging
+        if ai_reply is None:
+            ai_reply = "I’m sorry, I couldn’t process your request. Let me get a human to assist you."
+            logger.warning(f"✅ ai_reply was None for convo_id {convo_id}, set to default: {ai_reply}")
 
         logger.info("✅ Logging AI response")
         log_message(convo_id, "AI", ai_reply, "ai")
@@ -814,7 +830,6 @@ def instagram():
                         c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
                                   (sender_id, incoming_msg, "instagram"))
                         convo_id = c.lastrowid
-                    conn.close()
                 else:
                     convo_id = convo[0]
                 logger.info(f"✅ Conversation ID for Instagram: {convo_id}")
