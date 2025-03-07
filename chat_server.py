@@ -390,7 +390,7 @@ def chat():
                 # Fetch conversation history (limit to last 10 messages)
                 conn = sqlite3.connect(DB_NAME)
                 c = conn.cursor()
-                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT 10 OFFSET (SELECT COUNT(*) - 10 FROM messages WHERE conversation_id = ? AND COUNT(*) > 10)", (convo_id, convo_id))
+                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
                 messages = c.fetchall()
                 conversation_history = [
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
@@ -525,7 +525,23 @@ def telegram():
             logger.info("❌ AI disabled for convo_id: " + str(convo_id) + ", Skipping AI response")
             return "OK", 200
 
-        # Send welcome message for new conversations
+        # Handle the /start command explicitly
+        if incoming_msg.lower() == "/start":
+            logger.info("✅ Handling /start command")
+            welcome_message = "Thank you for contacting us. How can I assist you today?"
+            try:
+                logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
+                send_telegram_message(from_number, welcome_message)
+            except Exception as e:
+                logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
+            logger.info("✅ Logging welcome message for /start")
+            log_message(convo_id, "AI", welcome_message, "ai")
+            logger.info("✅ Emitting new_message event for /start welcome message")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
+            return "OK", 200
+
+        # Send welcome message for new conversations (excluding /start, which is handled above)
         if is_new_conversation:
             logger.info("✅ Sending welcome message for new conversation")
             welcome_message = "Thank you for contacting us."
@@ -543,88 +559,94 @@ def telegram():
         # Process the message with AI
         logger.info("✅ Processing message with AI")
         ai_reply = None
-        try:
-            logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
-            # Fetch conversation history (limit to last 10 messages)
-            conn = sqlite3.connect(DB_NAME)
-            c = conn.cursor()
-            c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT 10 OFFSET (SELECT COUNT(*) - 10 FROM messages WHERE conversation_id = ? AND COUNT(*) > 10)", (convo_id, convo_id))
-            messages = c.fetchall()
-            conversation_history = [
-                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
-            ]
-            for msg in messages:
-                user, message_text, sender = msg
-                role = "user" if sender == "user" else "assistant"
-                conversation_history.append({"role": role, "content": message_text})
-            conversation_history.append({"role": "user", "content": incoming_msg})
-            logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
-            conn.close()
+        retry_attempts = 2  # Retry OpenAI API call up to 2 times
+        for attempt in range(retry_attempts):
+            try:
+                logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini (Attempt {attempt + 1}): {incoming_msg}")
+                # Fetch conversation history (corrected to get last 10 messages)
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
+                messages = c.fetchall()
+                conversation_history = [
+                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+                ]
+                for msg in messages:
+                    user, message_text, sender = msg
+                    role = "user" if sender == "user" else "assistant"
+                    conversation_history.append({"role": role, "content": message_text})
+                conversation_history.append({"role": "user", "content": incoming_msg})
+                logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
+                conn.close()
 
-            # Check booking state and guide the conversation
-            if "book" in incoming_msg.lower() and not booking_state:
-                booking_state = "awaiting_dates"
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_dates", convo_id))
-                conn.commit()
-                conn.close()
-                ai_reply = "I can help you start the booking process! Please let me know your preferred dates (e.g., check-in and check-out dates)."
-            elif booking_state == "awaiting_dates":
-                # Assume the user provided dates (in a real scenario, you'd parse the dates)
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_guests", convo_id))
-                conn.commit()
-                conn.close()
-                ai_reply = "Thanks for providing your dates! How many guests will be staying?"
-            elif booking_state == "awaiting_guests":
-                # Assume the user provided the number of guests
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_room_type", convo_id))
-                conn.commit()
-                conn.close()
-                ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
-            elif booking_state == "awaiting_room_type":
-                # Assume the user chose a room type
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("confirming", convo_id))
-                conn.commit()
-                conn.close()
-                ai_reply = "Great choice! Let me check availability for your dates. Assuming everything is available, your total will be [calculated total]. Would you like to proceed with the booking?"
-            elif booking_state == "confirming":
-                if "yes" in incoming_msg.lower():
+                # Check booking state and guide the conversation
+                if "book" in incoming_msg.lower() and not booking_state:
+                    booking_state = "awaiting_dates"
                     conn = sqlite3.connect(DB_NAME)
                     c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_dates", convo_id))
                     conn.commit()
                     conn.close()
-                    ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
+                    ai_reply = "I can help you start the booking process! Please let me know your preferred dates (e.g., check-in and check-out dates)."
+                elif booking_state == "awaiting_dates":
+                    # Assume the user provided dates (in a real scenario, you'd parse the dates)
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_guests", convo_id))
+                    conn.commit()
+                    conn.close()
+                    ai_reply = "Thanks for providing your dates! How many guests will be staying?"
+                elif booking_state == "awaiting_guests":
+                    # Assume the user provided the number of guests
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_room_type", convo_id))
+                    conn.commit()
+                    conn.close()
+                    ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
+                elif booking_state == "awaiting_room_type":
+                    # Assume the user chose a room type
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("confirming", convo_id))
+                    conn.commit()
+                    conn.close()
+                    ai_reply = "Great choice! Let me check availability for your dates. Assuming everything is available, your total will be [calculated total]. Would you like to proceed with the booking?"
+                elif booking_state == "confirming":
+                    if "yes" in incoming_msg.lower():
+                        conn = sqlite3.connect(DB_NAME)
+                        c = conn.cursor()
+                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                        conn.commit()
+                        conn.close()
+                        ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
+                    else:
+                        conn = sqlite3.connect(DB_NAME)
+                        c = conn.cursor()
+                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                        conn.commit()
+                        conn.close()
+                        ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
+
+                if not ai_reply:  # If no booking state logic applied, use OpenAI
+                    response = openai.ChatCompletion.create(
+                        model="gpt-4o-mini",
+                        messages=conversation_history,
+                        max_tokens=150
+                    )
+                    ai_reply = response.choices[0].message.content.strip()
+                    model_used = response.model
+                    logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
+                    break  # Successful response, exit retry loop
+            except Exception as e:
+                logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
+                logger.error(f"❌ OpenAI error type: {type(e).__name__}")
+                if attempt == retry_attempts - 1:  # Last attempt
+                    ai_reply = "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+                    logger.info("✅ Set default AI reply due to repeated errors: " + ai_reply)
                 else:
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                    conn.commit()
-                    conn.close()
-                    ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
-
-            if not ai_reply:  # If no booking state logic applied, use OpenAI
-                response = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",
-                    messages=conversation_history,
-                    max_tokens=150
-                )
-                ai_reply = response.choices[0].message.content.strip()
-                model_used = response.model
-                logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
-
-        except Exception as e:
-            logger.error(f"❌ OpenAI error: {str(e)}")
-            logger.error(f"❌ OpenAI error type: {type(e).__name__}")
-            ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
-            logger.info("✅ Set default AI reply due to error: " + ai_reply)
+                    time.sleep(1)  # Wait before retrying
+                    continue
 
         # Fallback: Force handoff for specific keywords like "HELP"
         logger.info("✅ Checking for HELP keyword")
@@ -647,7 +669,8 @@ def telegram():
         except Exception as e:
             logger.error(f"❌ Telegram error sending AI message: {str(e)}")
             socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
-        # Handle handoff if needed
+
+        # Handle handoff if needed (only if explicitly required)
         logger.info("✅ Checking for handoff condition")
         if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
             try:
@@ -708,7 +731,7 @@ def instagram():
                     # Fetch conversation history (limit to last 10 messages)
                     conn = sqlite3.connect(DB_NAME)
                     c = conn.cursor()
-                    c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT 10 OFFSET (SELECT COUNT(*) - 10 FROM messages WHERE conversation_id = ? AND COUNT(*) > 10)", (convo_id, convo_id))
+                    c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
                     messages = c.fetchall()
                     conversation_history = [
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
