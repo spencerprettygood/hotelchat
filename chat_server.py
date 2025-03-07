@@ -320,12 +320,18 @@ def get_messages():
         logger.error("❌ Missing conversation ID in get-messages request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
-            messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        # Fetch messages
+        c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
+        messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
+        # Fetch username
+        c.execute("SELECT username FROM conversations WHERE id = ?", (convo_id,))
+        username_result = c.fetchone()
+        username = username_result[0] if username_result else "Unknown"
+        conn.close()
         logger.info(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
-        return jsonify(messages)
+        return jsonify({"messages": messages, "username": username})
     except Exception as e:
         logger.error(f"❌ Error fetching messages for convo ID {convo_id}: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
