@@ -239,7 +239,6 @@ body {
     background-color: #0056b3;
 }
 
-<style>
     /* Add spacing between conversation items */
     .conversation-item {
         margin-bottom: 20px; /* Adjust this value for more or less spacing */
@@ -277,4 +276,3 @@ body {
     .handback-button:hover {
         background-color: #c82333;
     }
-</style>
