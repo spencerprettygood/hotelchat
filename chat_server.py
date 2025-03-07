@@ -967,6 +967,55 @@ def handoff():
         logger.error(f"❌ Error in /handoff endpoint: {e}")
         return jsonify({"error": "Failed to assign chat"}), 500
 
+@app.route("/handback-to-ai", methods=["POST"])
+@login_required
+def handback_to_ai():
+    data = request.get_json()
+    convo_id = data.get("conversation_id")
+    if not convo_id:
+        logger.error("❌ Missing conversation ID in /handback-to-ai request")
+        return jsonify({"message": "Missing conversation ID"}), 400
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Fetch conversation details
+            c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+            result = c.fetchone()
+            if not result:
+                logger.error(f"❌ Conversation not found: {convo_id}")
+                return jsonify({"error": "Conversation not found"}), 404
+            username, channel, assigned_agent = result
+
+            # Check if the current agent is assigned to this conversation
+            if assigned_agent != current_user.username:
+                logger.error(f"❌ Agent {current_user.username} is not assigned to convo_id {convo_id}")
+                return jsonify({"error": "You are not assigned to this conversation"}), 403
+
+            # Re-enable AI and clear the assigned agent
+            c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
+            conn.commit()
+
+        # Notify the user that the AI has taken over
+        handback_message = "The agent has handed the conversation back to me. I’m here to assist you now! How can I help?"
+        log_message(convo_id, "AI", handback_message, "ai")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": handback_message, "sender": "ai", "channel": channel})
+        if channel == "telegram":
+            try:
+                logger.info(f"Sending handback message to Telegram - To: {username}, Body: {handback_message}")
+                send_telegram_message(username, handback_message)
+                logger.info("✅ Handback message sent to Telegram: " + handback_message)
+            except Exception as e:
+                logger.error(f"❌ Telegram error sending handback message: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Telegram: {str(e)}", "channel": channel})
+
+        # Emit a refresh event to update the conversation list in the dashboard
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+        logger.info(f"✅ Chat {convo_id} handed back to AI by {current_user.username}")
+        return jsonify({"message": "Chat handed back to AI successfully"})
+    except Exception as e:
+        logger.error(f"❌ Error in /handback-to-ai endpoint: {e}")
+        return jsonify({"error": "Failed to hand back to AI"}), 500
+
 @app.route("/test-openai", methods=["GET"])
 def test_openai():
     try:
