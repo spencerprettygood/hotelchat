@@ -773,10 +773,6 @@ def telegram():
         
         logger.info("✅ Returning OK for Telegram")
         return "OK", 200
-    except Exception as e:
-        logger.error(f"❌ Error in /telegram endpoint: {str(e)}")
-        logger.error(f"❌ Error type: {type(e).__name__}")
-        return "OK", 200
 
 @app.route("/instagram", methods=["POST"])
 def instagram():
