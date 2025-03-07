@@ -144,3 +144,5 @@ High-stakes betting inquiries
 
 Keep responses short and engaging.
 
+When payment details are requested by the AI
+
