@@ -16,6 +16,7 @@ import logging
 import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from contextlib import contextmanager
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -147,9 +148,17 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-def initialize_database():
+@contextmanager
+def get_db_connection():
+    """Context manager for SQLite database connection to ensure proper handling."""
+    conn = sqlite3.connect(DB_NAME, check_same_thread=False)  # Allow connection from any thread
     try:
-        conn = sqlite3.connect(DB_NAME)
+        yield conn
+    finally:
+        conn.close()
+
+def initialize_database():
+    with get_db_connection() as conn:
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS agents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,16 +201,12 @@ def initialize_database():
             c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
             logger.info("✅ Added test agent: agent1/password123")
         conn.commit()
-    except sqlite3.Error as e:
-        logger.error(f"⚠️ Database initialization error: {e}")
-    finally:
-        conn.close()
+    logger.info("✅ Database initialized")
 
 initialize_database()
 
 def add_test_conversations():
-    try:
-        conn = sqlite3.connect(DB_NAME)
+    with get_db_connection() as conn:
         c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM conversations")
         if c.fetchone()[0] == 0:
@@ -227,10 +232,6 @@ def add_test_conversations():
             c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_ids[0],))
             conn.commit()
             logger.info("✅ Test conversations added.")
-    except sqlite3.Error as e:
-        logger.error(f"⚠️ Test conversations error: {e}")
-    finally:
-        conn.close()
 
 add_test_conversations()
 
@@ -241,13 +242,12 @@ class Agent(UserMixin):
 
 @login_manager.user_loader
 def load_user(agent_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM agents WHERE id = ?", (agent_id,))
-    agent = c.fetchone()
-    conn.close()
-    if agent:
-        return Agent(agent[0], agent[1])
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, username FROM agents WHERE id = ?", (agent_id,))
+        agent = c.fetchone()
+        if agent:
+            return Agent(agent[0], agent[1])
     return None
 
 @app.route("/login", methods=["POST"])
@@ -258,16 +258,15 @@ def login():
     if not username or not password:
         logger.error("❌ Missing username or password in /login request")
         return jsonify({"message": "Missing username or password"}), 400
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM agents WHERE username = ? AND password = ?", (username, password))
-    agent = c.fetchone()
-    conn.close()
-    if agent:
-        agent_obj = Agent(agent[0], agent[1])
-        login_user(agent_obj)
-        logger.info(f"✅ Login successful for agent: {agent[1]}")
-        return jsonify({"message": "Login successful", "agent": agent[1]})
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, username FROM agents WHERE username = ? AND password = ?", (username, password))
+        agent = c.fetchone()
+        if agent:
+            agent_obj = Agent(agent[0], agent[1])
+            login_user(agent_obj)
+            logger.info(f"✅ Login successful for agent: {agent[1]}")
+            return jsonify({"message": "Login successful", "agent": agent[1]})
     logger.error("❌ Invalid credentials in /login request")
     return jsonify({"message": "Invalid credentials"}), 401
 
@@ -281,14 +280,13 @@ def logout():
 @app.route("/conversations", methods=["GET"])
 def get_conversations():
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
-        raw_conversions = c.fetchall()
-        logger.info(f"✅ Raw conversations from database: {raw_conversions}")
-        c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
-        conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3], "channel": row[4]} for row in c.fetchall()]
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
+            raw_conversions = c.fetchall()
+            logger.info(f"✅ Raw conversations from database: {raw_conversions}")
+            c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
+            conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3], "channel": row[4]} for row in c.fetchall()]
         logger.info(f"✅ Fetched conversations: {len(conversations)} conversations")
         return jsonify(conversations)
     except Exception as e:
@@ -302,11 +300,10 @@ def check_visibility():
         logger.error("❌ Missing conversation ID in check-visibility request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
-        result = c.fetchone()
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+            result = c.fetchone()
         if result:
             logger.info(f"✅ Visibility check for convo ID {convo_id}: {bool(result[0])}")
             return jsonify({"visible": bool(result[0])})
@@ -323,11 +320,10 @@ def get_messages():
         logger.error("❌ Missing conversation ID in get-messages request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
-        messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
+            messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
         logger.info(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
         return jsonify(messages)
     except Exception as e:
@@ -336,17 +332,16 @@ def get_messages():
 
 def log_message(convo_id, user, message, sender):
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
-                  (convo_id, user, message, sender))
-        c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
-                  (message, convo_id))
-        if sender == "agent":
-            c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
-            logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
-        conn.commit()
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+                      (convo_id, user, message, sender))
+            c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
+                      (message, convo_id))
+            if sender == "agent":
+                c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
+                logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
+            conn.commit()
         logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
     except Exception as e:
         logger.error(f"❌ Error logging message for convo_id {convo_id}: {e}")
@@ -410,12 +405,11 @@ def chat():
     try:
         logger.info("✅ Entering /chat endpoint")
         logger.info(f"✅ Fetching conversation details for convo_id {convo_id}")
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT username, channel, assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
-        result = c.fetchone()
-        username, channel, assigned_agent, ai_enabled = result if result else (None, None, None, None)
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT username, channel, assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
+            result = c.fetchone()
+            username, channel, assigned_agent, ai_enabled = result if result else (None, None, None, None)
         if not username:
             logger.error(f"❌ Conversation not found: {convo_id}")
             return jsonify({"error": "Conversation not found"}), 404
@@ -443,10 +437,10 @@ def chat():
             logger.info("✅ AI is enabled, proceeding with AI response")
             try:
                 logger.info(f"Processing message with AI for convo_id {convo_id}: {user_message}")
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
-                messages = c.fetchall()
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
+                    messages = c.fetchall()
                 conversation_history = [
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
                 ]
@@ -456,7 +450,6 @@ def chat():
                     conversation_history.append({"role": role, "content": message_text})
                 conversation_history.append({"role": "user", "content": user_message})
                 logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
-                conn.close()
 
                 response = openai.ChatCompletion.create(
                     model="gpt-4o-mini",
@@ -485,22 +478,25 @@ def chat():
             logger.info("✅ Checking for handoff condition")
             if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                 try:
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
-                    result = c.fetchone()
-                    handoff_notified, visible_in_conversations = result if result else (0, 0)
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                        result = c.fetchone()
+                        handoff_notified, visible_in_conversations = result if result else (0, 0)
                     logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                     if not handoff_notified:
-                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                        conn.commit()
+                        with get_db_connection() as conn:
+                            c = conn.cursor()
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            conn.commit()
                         time.sleep(3.0)
-                        c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-                        updated_result = c.fetchone()
+                        with get_db_connection() as conn:
+                            c = conn.cursor()
+                            c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                            updated_result = c.fetchone()
                         logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
                         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
                         logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
-                    conn.close()
                 except Exception as e:
                     logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
             logger.info("✅ AI response processed successfully")
@@ -532,22 +528,24 @@ def telegram():
 
     try:
         logger.info("✅ Connecting to database")
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        logger.info(f"✅ Querying conversations for username: {from_number}")
-        c.execute("SELECT id, last_updated, handoff_notified, ai_enabled, booking_state FROM conversations WHERE username = ?", (from_number,))
-        convo = c.fetchone()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            logger.info(f"✅ Querying conversations for username: {from_number}")
+            c.execute("SELECT id, last_updated, handoff_notified, ai_enabled, booking_state FROM conversations WHERE username = ?", (from_number,))
+            convo = c.fetchone()
 
         is_new_conversation = not convo
         logger.info(f"✅ Is new conversation: {is_new_conversation}")
         if is_new_conversation:
             logger.info("✅ Creating new conversation")
-            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
-                      (from_number, incoming_msg, "telegram"))
-            convo_id = c.lastrowid
-            conn.commit()
-            c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
-            insert_result = c.fetchone()
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                          (from_number, incoming_msg, "telegram"))
+                convo_id = c.lastrowid
+                conn.commit()
+                c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                insert_result = c.fetchone()
             logger.info(f"✅ After creating convo_id {convo_id}: visible_in_conversations={insert_result[0]}")
             handoff_notified = 0
             ai_enabled = 1
@@ -558,8 +556,10 @@ def telegram():
             logger.info(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}, booking_state={booking_state}")
             if (datetime.now() - datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")) > timedelta(hours=24):
                 logger.info("✅ Last message was >24 hours ago, resetting ai_enabled and handoff_notified")
-                c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
-                conn.commit()
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
+                    conn.commit()
                 ai_enabled = 1
         conn.close()
 
@@ -602,10 +602,10 @@ def telegram():
         for attempt in range(retry_attempts):
             try:
                 logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini (Attempt {attempt + 1}): {incoming_msg}")
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
-                messages = c.fetchall()
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
+                    messages = c.fetchall()
                 conversation_history = [
                     {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Extract dates (e.g., 'March 10 to March 15') and numbers (e.g., '4 guests') from user messages. Escalate to a human if the query is complex or requires personal assistance."}
                 ]
@@ -615,7 +615,6 @@ def telegram():
                     conversation_history.append({"role": role, "content": message_text})
                 conversation_history.append({"role": "user", "content": incoming_msg})
                 logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
-                conn.close()
 
                 # Parse dates and numbers using regex as a fallback
                 date_match = re.search(r'(\w+\s+\d+\s+to\s+\w+\s+\d+)', incoming_msg, re.IGNORECASE)
@@ -641,12 +640,11 @@ def telegram():
                             check_in = datetime(2025, check_in_month, check_in_day)
                             check_out = datetime(2025, check_out_month, check_out_day)
                             booking_state_dict = {"status": "awaiting_guests", "check_in": check_in.strftime("%Y-%m-%d"), "check_out": check_out.strftime("%Y-%m-%d")}
-                            conn = sqlite3.connect(DB_NAME)
-                            c = conn.cursor()
-                            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                            c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
-                            conn.commit()
-                            conn.close()
+                            with get_db_connection() as conn:
+                                c = conn.cursor()
+                                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                                c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
+                                conn.commit()
                             ai_reply = "Thanks for providing your dates! How many guests will be staying?"
                         except (ValueError, KeyError) as e:
                             ai_reply = "I couldn’t parse your dates. Please use the format 'March 10 to March 15'."
@@ -654,14 +652,13 @@ def telegram():
                     if not guests:
                         ai_reply = "Please tell me how many guests will be staying (e.g., '4 guests')."
                     else:
-                        conn = sqlite3.connect(DB_NAME)
-                        c = conn.cursor()
-                        booking_state_dict["guests"] = guests
-                        booking_state_dict["status"] = "awaiting_room_type"
-                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                        c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
-                        conn.commit()
-                        conn.close()
+                        with get_db_connection() as conn:
+                            c = conn.cursor()
+                            booking_state_dict["guests"] = guests
+                            booking_state_dict["status"] = "awaiting_room_type"
+                            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                            c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
+                            conn.commit()
                         ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
                 elif booking_state_dict.get("status") == "awaiting_room_type":
                     room_type = incoming_msg.lower()
@@ -677,40 +674,36 @@ def telegram():
                         send_telegram_message(from_number, ai_reply)
                         return "OK", 200
 
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
-                    check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-                    nights = (check_out - check_in).days
-                    total_cost = nights * rate_per_night * booking_state_dict["guests"]  # Adjust for per-room pricing if needed
-                    is_fully_booked = check_availability(check_in, check_out)
-                    if is_fully_booked:
-                        ai_reply = f"Sorry, it looks like we’re fully booked for your dates ({booking_state_dict['check_in']} to {booking_state_dict['check_out']}). Please choose different dates."
-                    else:
-                        booking_state_dict["room_type"] = room_type
-                        booking_state_dict["total_cost"] = total_cost
-                        booking_state_dict["status"] = "confirming"
-                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                        c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
-                        conn.commit()
-                        conn.close()
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+                        check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+                        nights = (check_out - check_in).days
+                        total_cost = nights * rate_per_night * booking_state_dict["guests"]  # Adjust for per-room pricing if needed
+                        is_fully_booked = check_availability(check_in, check_out)
+                        if is_fully_booked:
+                            ai_reply = f"Sorry, it looks like we’re fully booked for your dates ({booking_state_dict['check_in']} to {booking_state_dict['check_out']}). Please choose different dates."
+                        else:
+                            booking_state_dict["room_type"] = room_type
+                            booking_state_dict["total_cost"] = total_cost
+                            booking_state_dict["status"] = "confirming"
+                            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                            c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
+                            conn.commit()
                         ai_reply = f"Great choice! Let me check availability for your dates. Assuming everything is available, your total will be ${total_cost}. Would you like to proceed with the booking?"
                 elif booking_state_dict.get("status") == "confirming":
                     if "yes" in incoming_msg.lower():
                         ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
-                        # Ensure handoff is triggered
-                        conn = sqlite3.connect(DB_NAME)
-                        c = conn.cursor()
-                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                        conn.commit()
-                        conn.close()
+                        with get_db_connection() as conn:
+                            c = conn.cursor()
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            conn.commit()
                     else:
-                        conn = sqlite3.connect(DB_NAME)
-                        c = conn.cursor()
-                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                        c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
-                        conn.commit()
-                        conn.close()
+                        with get_db_connection() as conn:
+                            c = conn.cursor()
+                            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                            c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+                            conn.commit()
                         ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
 
                 # Prevent fallback to OpenAI if ai_reply is set
@@ -720,17 +713,18 @@ def telegram():
                     socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "telegram"})
                     if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                         try:
-                            conn = sqlite3.connect(DB_NAME)
-                            c = conn.cursor()
-                            c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
-                            result = c.fetchone()
-                            handoff_notified, visible_in_conversations = result if result else (0, 0)
+                            with get_db_connection() as conn:
+                                c = conn.cursor()
+                                c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                                result = c.fetchone()
+                                handoff_notified, visible_in_conversations = result if result else (0, 0)
                             if not handoff_notified:
-                                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                                conn.commit()
+                                with get_db_connection() as conn:
+                                    c = conn.cursor()
+                                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                                    conn.commit()
                                 time.sleep(3.0)
                                 socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "telegram"})
-                            conn.close()
                         except Exception as e:
                             logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
                     return "OK", 200
@@ -767,22 +761,25 @@ def telegram():
         logger.info("✅ Checking for handoff condition")
         if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
             try:
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
-                result = c.fetchone()
-                handoff_notified, visible_in_conversations = result if result else (0, 0)
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                    result = c.fetchone()
+                    handoff_notified, visible_in_conversations = result if result else (0, 0)
                 logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                 if not handoff_notified:
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                    conn.commit()
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                        conn.commit()
                     time.sleep(3.0)
-                    c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-                    updated_result = c.fetchone()
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                        updated_result = c.fetchone()
                     logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
                     socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "telegram"})
                     logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
-                conn.close()
             except Exception as e:
                 logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
         
@@ -807,25 +804,27 @@ def instagram():
             incoming_msg = messaging["message"].get("text", "")
             logger.info(f"✅ Received Instagram message: {incoming_msg}, from: {sender_id}")
             try:
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                c.execute("SELECT id FROM conversations WHERE username = ?", (sender_id,))
-                convo = c.fetchone()
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT id FROM conversations WHERE username = ?", (sender_id,))
+                    convo = c.fetchone()
                 if not convo:
-                    c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
-                              (sender_id, incoming_msg, "instagram"))
-                    convo_id = c.lastrowid
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                                  (sender_id, incoming_msg, "instagram"))
+                        convo_id = c.lastrowid
+                    conn.close()
                 else:
                     convo_id = convo[0]
-                conn.close()
                 logger.info(f"✅ Conversation ID for Instagram: {convo_id}")
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
                     logger.info(f"Processing Instagram message with AI: {incoming_msg}")
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
-                    messages = c.fetchall()
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
+                        messages = c.fetchall()
                     conversation_history = [
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
                     ]
@@ -835,7 +834,6 @@ def instagram():
                         conversation_history.append({"role": role, "content": message_text})
                     conversation_history.append({"role": "user", "content": incoming_msg})
                     logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
-                    conn.close()
 
                     response = openai.ChatCompletion.create(
                         model="gpt-4o-mini",
@@ -860,20 +858,23 @@ def instagram():
                 socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "instagram"})
                 if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
                     try:
-                        conn = sqlite3.connect(DB_NAME)
-                        c = conn.cursor()
-                        c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
-                        handoff_notified = c.fetchone()[0]
+                        with get_db_connection() as conn:
+                            c = conn.cursor()
+                            c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
+                            handoff_notified = c.fetchone()[0]
                         if not handoff_notified:
-                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                            conn.commit()
+                            with get_db_connection() as conn:
+                                c = conn.cursor()
+                                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                                conn.commit()
                             time.sleep(3.0)
-                            c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-                            updated_result = c.fetchone()
+                            with get_db_connection() as conn:
+                                c = conn.cursor()
+                                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                                updated_result = c.fetchone()
                             logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
                             socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": sender_id, "channel": "instagram"})
                             logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
-                        conn.close()
                     except Exception as e:
                         logger.error(f"❌ Error during Instagram handoff for convo_id {convo_id}: {e}")
             except Exception as e:
@@ -906,16 +907,14 @@ def send_welcome():
     if not to_number:
         logger.error("❌ Missing to_number in /send-welcome request")
         return jsonify({"error": "Missing to_number"}), 400
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "telegram"))
-    convo = c.fetchone()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "telegram"))
+        convo = c.fetchone()
     if not convo:
-        conn.close()
         logger.error("❌ Conversation not found in /send-welcome")
         return jsonify({"error": "Conversation not found"}), 404
     convo_id = convo[0]
-    conn.close()
     try:
         logger.info(f"✅ Sending welcome message to Telegram chat {to_number}")
         welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
@@ -940,13 +939,12 @@ def handoff():
         logger.error("❌ Missing conversation ID in /handoff request")
         return jsonify({"message": "Missing conversation ID"}), 400
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 0 WHERE id = ?", (current_user.username, convo_id))
-        c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
-        username, channel = c.fetchone()
-        conn.commit()
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 0 WHERE id = ?", (current_user.username, convo_id))
+            c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
+            username, channel = c.fetchone()
+            conn.commit()
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
         logger.info(f"✅ Chat {convo_id} assigned to {current_user.username}")
         return jsonify({"message": f"Chat assigned to {current_user.username}"})
@@ -974,13 +972,12 @@ def test_openai():
 @app.route("/clear-database", methods=["POST"])
 def clear_database():
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("DELETE FROM conversations")
-        c.execute("DELETE FROM messages")
-        c.execute("DELETE FROM bookings")
-        conn.commit()
-        conn.close()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM conversations")
+            c.execute("DELETE FROM messages")
+            c.execute("DELETE FROM bookings")
+            conn.commit()
         logger.info("✅ Database cleared successfully")
         return jsonify({"message": "Database cleared successfully"}), 200
     except Exception as e:
