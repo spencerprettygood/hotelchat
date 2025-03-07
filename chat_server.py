@@ -9,14 +9,13 @@ import openai
 import sqlite3
 import os
 import requests
+import json
 from datetime import datetime, timedelta
 import time
 import logging
 import re
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -30,31 +29,30 @@ logger = logging.getLogger(__name__)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# Initialize OpenAI and Google Calendar
+# Initialize OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
     raise ValueError("OPENAI_API_KEY not set")
 
-GOOGLE_CALENDAR_API_KEY = os.getenv("GOOGLE_CALENDAR_API_KEY")
-if not GOOGLE_CALENDAR_API_KEY:
-    logger.error("⚠️ GOOGLE_CALENDAR_API_KEY not set in environment variables")
-    raise ValueError("GOOGLE_CALENDAR_API_KEY not set")
+# Google Calendar setup with Service Account
+GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+if not GOOGLE_SERVICE_ACCOUNT_KEY:
+    logger.error("⚠️ GOOGLE_SERVICE_ACCOUNT_KEY not set in environment variables")
+    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
 
-# Google Calendar setup
+# Parse the service account key from the environment variable
+try:
+    service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
+except json.JSONDecodeError as e:
+    logger.error(f"⚠️ Invalid GOOGLE_SERVICE_ACCOUNT_KEY format: {e}")
+    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY must be a valid JSON string")
+
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-creds = None
-if os.path.exists('token.json'):
-    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-        creds = flow.run_local_server(port=0)
-    with open('token.json', 'w') as token:
-        token.write(creds.to_json())
-service = build('calendar', 'v3', credentials=creds)
+credentials = service_account.Credentials.from_service_account_info(
+    service_account_info, scopes=SCOPES
+)
+service = build('calendar', 'v3', credentials=credentials)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
