@@ -12,6 +12,11 @@ import requests
 from datetime import datetime, timedelta
 import time
 import logging
+import re
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -25,14 +30,31 @@ logger = logging.getLogger(__name__)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# Initialize OpenAI with API key
+# Initialize OpenAI and Google Calendar
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
     raise ValueError("OPENAI_API_KEY not set")
 
-# Log environment variables to debug
-logger.info(f"Environment variables: {dict(os.environ)}")
+GOOGLE_CALENDAR_API_KEY = os.getenv("GOOGLE_CALENDAR_API_KEY")
+if not GOOGLE_CALENDAR_API_KEY:
+    logger.error("⚠️ GOOGLE_CALENDAR_API_KEY not set in environment variables")
+    raise ValueError("GOOGLE_CALENDAR_API_KEY not set")
+
+# Google Calendar setup
+SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+creds = None
+if os.path.exists('token.json'):
+    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+if not creds or not creds.valid:
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+        creds = flow.run_local_server(port=0)
+    with open('token.json', 'w') as token:
+        token.write(creds.to_json())
+service = build('calendar', 'v3', credentials=creds)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
@@ -43,6 +65,10 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
+
+# Placeholder for WhatsApp API (to be configured later)
+WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", None)
+WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
 
 DB_NAME = "chatbot.db"
 
@@ -142,7 +168,17 @@ def initialize_database():
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
             visible_in_conversations INTEGER DEFAULT 0,
-            booking_state TEXT DEFAULT NULL  -- New column for tracking booking state
+            booking_state TEXT DEFAULT NULL
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            check_in DATE,
+            check_out DATE,
+            guests INTEGER,
+            room_type TEXT,
+            total_cost REAL,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
@@ -190,7 +226,6 @@ def add_test_conversations():
             for convo_id, user, message, sender in test_messages:
                 c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
                           (convo_id, user, message, sender))
-            # Simulate a handoff for guest1 to make it visible
             c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_ids[0],))
             conn.commit()
             logger.info("✅ Test conversations added.")
@@ -309,7 +344,6 @@ def log_message(convo_id, user, message, sender):
                   (convo_id, user, message, sender))
         c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
                   (message, convo_id))
-        # Disable AI if sender is agent
         if sender == "agent":
             c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
             logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
@@ -318,23 +352,50 @@ def log_message(convo_id, user, message, sender):
         logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
     except Exception as e:
         logger.error(f"❌ Error logging message for convo_id {convo_id}: {e}")
-        raise  # Re-raise the exception to catch it in the caller
+        raise
 
 def send_telegram_message(chat_id, text):
     try:
         url = f"{TELEGRAM_API_URL}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": text
-        }
+        payload = {"chat_id": chat_id, "text": text}
         response = requests.post(url, json=payload)
         response.raise_for_status()
         logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
-        # Add a small delay to avoid rate limiting
         time.sleep(0.5)
     except Exception as e:
         logger.error(f"❌ Failed to send Telegram message to {chat_id}: {str(e)}")
         raise
+
+# Placeholder for WhatsApp message sending (to be implemented later)
+def send_whatsapp_message(phone_number, text):
+    raise NotImplementedError("WhatsApp messaging not yet implemented")
+
+# Placeholder for Instagram message sending (to be implemented later)
+def send_instagram_message(user_id, text):
+    raise NotImplementedError("Instagram messaging not yet implemented")
+
+def check_availability(check_in, check_out):
+    """Check Google Calendar for 'Fully Booked' events between check_in and check_out."""
+    try:
+        start_date = check_in.strftime("%Y-%m-%dT00:00:00Z")
+        end_date = check_out.strftime("%Y-%m-%dT23:59:59Z")
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=start_date,
+            timeMax=end_date,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        events = events_result.get('items', [])
+        for event in events:
+            if event.get('summary') == "Fully Booked":
+                logger.info(f"✅ Found 'Fully Booked' event for {check_in} to {check_out}")
+                return True
+        logger.info(f"✅ No 'Fully Booked' event found for {check_in} to {check_out}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Google Calendar API error: {str(e)}")
+        return True  # Assume unavailable on error to be safe
 
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
@@ -361,12 +422,10 @@ def chat():
             logger.error(f"❌ Conversation not found: {convo_id}")
             return jsonify({"error": "Conversation not found"}), 404
         
-        # Determine sender: "user" for client, "agent" if sent by logged-in agent
         sender = "agent" if current_user.is_authenticated else "user"
         logger.info(f"✅ Processing /chat message as sender: {sender}")
         log_message(convo_id, username, user_message, sender)
 
-        # If message is from an agent, emit it and send to Telegram if channel is telegram
         if sender == "agent":
             logger.info("✅ Sender is agent, emitting new_message event")
             socketio.emit("new_message", {"convo_id": convo_id, "message": user_message, "sender": "agent", "channel": channel})
@@ -381,13 +440,11 @@ def chat():
             logger.info("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
 
-        # Otherwise, process as a client message and get AI response if AI is enabled
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if ai_enabled:
             logger.info("✅ AI is enabled, proceeding with AI response")
             try:
                 logger.info(f"Processing message with AI for convo_id {convo_id}: {user_message}")
-                # Fetch conversation history (limit to last 10 messages)
                 conn = sqlite3.connect(DB_NAME)
                 c = conn.cursor()
                 c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
@@ -483,7 +540,6 @@ def telegram():
         c.execute("SELECT id, last_updated, handoff_notified, ai_enabled, booking_state FROM conversations WHERE username = ?", (from_number,))
         convo = c.fetchone()
 
-        # Check if this is a new conversation
         is_new_conversation = not convo
         logger.info(f"✅ Is new conversation: {is_new_conversation}")
         if is_new_conversation:
@@ -491,8 +547,7 @@ def telegram():
             c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
                       (from_number, incoming_msg, "telegram"))
             convo_id = c.lastrowid
-            conn.commit()  # Explicit commit after insert
-            # Debug: Verify the insert
+            conn.commit()
             c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
             insert_result = c.fetchone()
             logger.info(f"✅ After creating convo_id {convo_id}: visible_in_conversations={insert_result[0]}")
@@ -503,73 +558,58 @@ def telegram():
         else:
             convo_id, last_updated, handoff_notified, ai_enabled, booking_state = convo
             logger.info(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}, booking_state={booking_state}")
-            # Check if last message was more than 24 hours ago to reset ai_enabled and handoff_notified
-            last_updated_dt = datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")
-            if (datetime.now() - last_updated_dt) > timedelta(hours=24):
+            if (datetime.now() - datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")) > timedelta(hours=24):
                 logger.info("✅ Last message was >24 hours ago, resetting ai_enabled and handoff_notified")
                 c.execute("UPDATE conversations SET ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
                 conn.commit()
-                logger.info("✅ Reset ai_enabled and handoff_notified for convo_id: " + str(convo_id))
                 ai_enabled = 1
         conn.close()
 
-        # Log and emit the client message
         logger.info("✅ Logging client message")
         log_message(convo_id, from_number, incoming_msg, "user")
         logger.info("✅ Emitting new_message event for client message")
         socketio.emit("new_message", {"convo_id": convo_id, "message": incoming_msg, "sender": "user", "channel": "telegram", "user": from_number})
 
-        # Only proceed with AI response if ai_enabled is True
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if not ai_enabled:
             logger.info("❌ AI disabled for convo_id: " + str(convo_id) + ", Skipping AI response")
             return "OK", 200
 
-        # Handle the /start command explicitly
         if incoming_msg.lower() == "/start":
             logger.info("✅ Handling /start command")
             welcome_message = "Thank you for contacting us. How can I assist you today?"
             try:
-                logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
                 send_telegram_message(from_number, welcome_message)
             except Exception as e:
                 logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
-            logger.info("✅ Logging welcome message for /start")
             log_message(convo_id, "AI", welcome_message, "ai")
-            logger.info("✅ Emitting new_message event for /start welcome message")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
             return "OK", 200
 
-        # Send welcome message for new conversations (excluding /start, which is handled above)
         if is_new_conversation:
             logger.info("✅ Sending welcome message for new conversation")
             welcome_message = "Thank you for contacting us."
             try:
-                logger.info(f"Sending welcome message to Telegram - To: {from_number}, Body: {welcome_message}")
                 send_telegram_message(from_number, welcome_message)
             except Exception as e:
                 logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
-            logger.info("✅ Logging welcome message")
             log_message(convo_id, "AI", welcome_message, "ai")
-            logger.info("✅ Emitting new_message event for welcome message")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
 
-        # Process the message with AI
         logger.info("✅ Processing message with AI")
         ai_reply = None
-        retry_attempts = 2  # Retry OpenAI API call up to 2 times
+        retry_attempts = 2
         for attempt in range(retry_attempts):
             try:
                 logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini (Attempt {attempt + 1}): {incoming_msg}")
-                # Fetch conversation history (corrected to get last 10 messages)
                 conn = sqlite3.connect(DB_NAME)
                 c = conn.cursor()
                 c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
                 messages = c.fetchall()
                 conversation_history = [
-                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Extract dates (e.g., 'March 10 to March 15') and numbers (e.g., '4 guests') from user messages. Escalate to a human if the query is complex or requires personal assistance."}
                 ]
                 for msg in messages:
                     user, message_text, sender = msg
@@ -579,56 +619,97 @@ def telegram():
                 logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
                 conn.close()
 
-                # Check booking state and guide the conversation
-                if "book" in incoming_msg.lower() and not booking_state:
-                    booking_state = "awaiting_dates"
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_dates", convo_id))
-                    conn.commit()
-                    conn.close()
-                    ai_reply = "I can help you start the booking process! Please let me know your preferred dates (e.g., check-in and check-out dates)."
-                elif booking_state == "awaiting_dates":
-                    # Assume the user provided dates (in a real scenario, you'd parse the dates)
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_guests", convo_id))
-                    conn.commit()
-                    conn.close()
-                    ai_reply = "Thanks for providing your dates! How many guests will be staying?"
-                elif booking_state == "awaiting_guests":
-                    # Assume the user provided the number of guests
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_room_type", convo_id))
-                    conn.commit()
-                    conn.close()
-                    ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
-                elif booking_state == "awaiting_room_type":
-                    # Assume the user chose a room type
-                    conn = sqlite3.connect(DB_NAME)
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("confirming", convo_id))
-                    conn.commit()
-                    conn.close()
-                    ai_reply = "Great choice! Let me check availability for your dates. Assuming everything is available, your total will be [calculated total]. Would you like to proceed with the booking?"
-                elif booking_state == "confirming":
-                    if "yes" in incoming_msg.lower():
+                # Parse dates and numbers using regex as a fallback
+                date_match = re.search(r'(\w+\s+\d+\s+to\s+\w+\s+\d+)', incoming_msg, re.IGNORECASE)
+                number_match = re.search(r'(\d+)\s*(guests)?', incoming_msg, re.IGNORECASE)
+                dates = date_match.group(0) if date_match else None
+                guests = int(number_match.group(1)) if number_match else None
+
+                # Evaluate booking_state if it exists
+                booking_state_dict = eval(booking_state) if booking_state else {}
+
+                # Booking flow
+                if "book" in incoming_msg.lower() and not booking_state_dict.get("status"):
+                    if not dates:
+                        ai_reply = "I’d love to help you book! Please provide your preferred dates (e.g., 'March 10 to March 15')."
+                    else:
+                        try:
+                            date_parts = re.split(r'\s+to\s+', dates.lower())
+                            months = {'march': 3, 'april': 4, 'may': 5}  # Add more months as needed
+                            check_in_day = int(date_parts[1])
+                            check_out_day = int(date_parts[3])
+                            check_in_month = months[date_parts[0].split()[0]]
+                            check_out_month = months[date_parts[2].split()[0]]
+                            check_in = datetime(2025, check_in_month, check_in_day)
+                            check_out = datetime(2025, check_out_month, check_out_day)
+                            booking_state_dict = {"status": "awaiting_guests", "check_in": check_in.strftime("%Y-%m-%d"), "check_out": check_out.strftime("%Y-%m-%d")}
+                            conn = sqlite3.connect(DB_NAME)
+                            c = conn.cursor()
+                            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                            c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
+                            conn.commit()
+                            conn.close()
+                            ai_reply = "Thanks for providing your dates! How many guests will be staying?"
+                        except (ValueError, KeyError) as e:
+                            ai_reply = "I couldn’t parse your dates. Please use the format 'March 10 to March 15'."
+                elif booking_state_dict.get("status") == "awaiting_guests":
+                    if not guests:
+                        ai_reply = "Please tell me how many guests will be staying (e.g., '4 guests')."
+                    else:
                         conn = sqlite3.connect(DB_NAME)
                         c = conn.cursor()
-                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                        booking_state_dict["guests"] = guests
+                        booking_state_dict["status"] = "awaiting_room_type"
+                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                        c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
                         conn.commit()
                         conn.close()
+                        ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
+                elif booking_state_dict.get("status") == "awaiting_room_type":
+                    room_type = incoming_msg.lower()
+                    if "standard" in room_type:
+                        rate_per_night = 150
+                    elif "deluxe" in room_type:
+                        rate_per_night = 250
+                    elif "suite" in room_type:
+                        rate_per_night = 400
+                    else:
+                        ai_reply = "Please choose a valid room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
+                        log_message(convo_id, "AI", ai_reply, "ai")
+                        send_telegram_message(from_number, ai_reply)
+                        return "OK", 200
+
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+                    check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+                    nights = (check_out - check_in).days
+                    total_cost = nights * rate_per_night * booking_state_dict["guests"]  # Adjust for per-room pricing if needed
+                    is_fully_booked = check_availability(check_in, check_out)
+                    if is_fully_booked:
+                        ai_reply = f"Sorry, it looks like we’re fully booked for your dates ({booking_state_dict['check_in']} to {booking_state_dict['check_out']}). Please choose different dates."
+                    else:
+                        booking_state_dict["room_type"] = room_type
+                        booking_state_dict["total_cost"] = total_cost
+                        booking_state_dict["status"] = "confirming"
+                        c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                        c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
+                        conn.commit()
+                        conn.close()
+                        ai_reply = f"Great choice! Let me check availability for your dates. Assuming everything is available, your total will be ${total_cost}. Would you like to proceed with the booking?"
+                elif booking_state_dict.get("status") == "confirming":
+                    if "yes" in incoming_msg.lower():
                         ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
                     else:
                         conn = sqlite3.connect(DB_NAME)
                         c = conn.cursor()
                         c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                        c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
                         conn.commit()
                         conn.close()
                         ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
 
-                if not ai_reply:  # If no booking state logic applied, use OpenAI
+                if not ai_reply:
                     response = openai.ChatCompletion.create(
                         model="gpt-4o-mini",
                         messages=conversation_history,
@@ -637,40 +718,36 @@ def telegram():
                     ai_reply = response.choices[0].message.content.strip()
                     model_used = response.model
                     logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
-                    break  # Successful response, exit retry loop
+
+                break
             except Exception as e:
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 logger.error(f"❌ OpenAI error type: {type(e).__name__}")
-                if attempt == retry_attempts - 1:  # Last attempt
+                if attempt == retry_attempts - 1:
                     ai_reply = "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
                     logger.info("✅ Set default AI reply due to repeated errors: " + ai_reply)
                 else:
-                    time.sleep(1)  # Wait before retrying
+                    time.sleep(1)
                     continue
 
-        # Fallback: Force handoff for specific keywords like "HELP"
         logger.info("✅ Checking for HELP keyword")
         if "HELP" in incoming_msg.upper():
             ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
 
-        # Log and emit the AI response
         logger.info("✅ Logging AI response")
         log_message(convo_id, "AI", ai_reply, "ai")
         logger.info("✅ Emitting new_message event for AI response")
         socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "telegram"})
 
-        # Send AI response to Telegram
         logger.info("✅ Sending AI response to Telegram")
         try:
-            logger.info(f"Sending AI message to Telegram - To: {from_number}, Body: {ai_reply}")
             send_telegram_message(from_number, ai_reply)
             logger.info("✅ AI message sent to Telegram: " + ai_reply)
         except Exception as e:
             logger.error(f"❌ Telegram error sending AI message: {str(e)}")
             socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
 
-        # Handle handoff if needed (only if explicitly required)
         logger.info("✅ Checking for handoff condition")
         if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
             try:
@@ -702,7 +779,8 @@ def telegram():
 
 @app.route("/instagram", methods=["POST"])
 def instagram():
-    logger.info("✅ Entering /instagram endpoint")
+    logger.info("✅ Entering /instagram endpoint (placeholder)")
+    # TODO: Implement IG-specific logic with bookings table, parsing, and Google Calendar
     data = request.get_json()
     if "object" not in data or data["object"] != "instagram":
         logger.info("✅ Not an Instagram event, returning OK")
@@ -728,7 +806,6 @@ def instagram():
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
                     logger.info(f"Processing Instagram message with AI: {incoming_msg}")
-                    # Fetch conversation history (limit to last 10 messages)
                     conn = sqlite3.connect(DB_NAME)
                     c = conn.cursor()
                     c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
@@ -798,6 +875,12 @@ def instagram_verify():
         return challenge, 200
     logger.error("❌ Instagram verification failed")
     return "Verification failed", 403
+
+@app.route("/whatsapp", methods=["POST"])
+def whatsapp():
+    logger.info("✅ Entering /whatsapp endpoint (placeholder)")
+    # TODO: Implement WhatsApp-specific logic with bookings table, parsing, and Google Calendar
+    return "OK", 200
 
 @app.route("/send-welcome", methods=["POST"])
 def send_welcome():
@@ -879,6 +962,7 @@ def clear_database():
         c = conn.cursor()
         c.execute("DELETE FROM conversations")
         c.execute("DELETE FROM messages")
+        c.execute("DELETE FROM bookings")
         conn.commit()
         conn.close()
         logger.info("✅ Database cleared successfully")
