@@ -273,7 +273,9 @@ function loadConversation(convoId) {
             }
             return response.json();
         })
-        .then(messages => {
+        .then(data => {
+            const messages = data.messages;
+            const username = data.username;
             chatBox.innerHTML = '';
 
             messages.forEach(msg => {
@@ -299,15 +301,8 @@ function loadConversation(convoId) {
 
             chatBox.scrollTop = chatBox.scrollHeight;
 
-            // Update client name (username)
-            fetch('/conversations')
-                .then(response => response.json())
-                .then(conversations => {
-                    const convo = conversations.find(c => c.id === convoId);
-                    if (convo) {
-                        clientName.textContent = convo.username;
-                    }
-                });
+            // Update client name
+            clientName.textContent = username;
         })
         .catch(error => console.error('Error loading messages:', error));
 }
