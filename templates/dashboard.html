@@ -4,69 +4,102 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hotel Chatbot Dashboard</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <style>
-        /* Add styling for the Hand Back to AI button */
+     
         .handback-button {
+            margin-left: 10px;
             padding: 5px 10px;
-            background-color: #ff9800;
+            background-color: #dc3545;
             color: white;
             border: none;
             border-radius: 3px;
             cursor: pointer;
-            margin-left: 10px;
-            font-size: 12px;
         }
         .handback-button:hover {
-            background-color: #e68900;
+            background-color: #c82333;
+        }
+        .promotions-section {
+            padding: 20px;
+        }
+        .promotions-section textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            resize: vertical;
+        }
+        .promotions-section button {
+            padding: 5px 10px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .promotions-section button:hover {
+            background-color: #218838;
+        }
+        #currentPromotions {
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
         }
     </style>
 </head>
 <body>
-    <div id="loginPage" class="login-container" style="display: flex;">
-        <h2>Agent Login</h2>
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="login()">Login</button>
-    </div>
-
-    <div id="dashboard" style="display: none;">
-        <div class="header">
-            <h2>Hotel Chatbot Dashboard</h2>
-            <button onclick="logout()">Logout</button>
+    <header>
+        <h1>Hotel Chatbot Dashboard</h1>
+        <button class="logout-btn" onclick="logout()">Logout</button>
+    </header>
+    <div class="container">
+        <div class="sidebar">
+            <h3>Live Chat</h3>
+            <h4>Conversations</h4>
+            <p>Unassigned: <span id="unassignedCount">0</span></p>
+            <p>You: <span id="yourCount">0</span></p>
+            <p>Team: <span id="teamCount">0</span></p>
+            <p>All: <span id="allCount">0</span></p>
+            <h4>Channels</h4>
+            <p><a href="#" onclick="filterByChannel('')">All</a></p>
+            <p><a href="#" onclick="filterByChannel('whatsapp')">WhatsApp</a></p>
+            <p><a href="#" onclick="filterByChannel('instagram')">Instagram</a></p>
         </div>
-        <div class="container">
-            <div class="sidebar">
-                <h3>Live Chat</h3>
-                <p><strong>Conversations</strong></p>
-                <ul>
-                    <li onclick="loadConversations('unassigned')">Unassigned <span id="unassignedCount">0</span></li>
-                    <li onclick="loadConversations('you')">You <span id="yourCount">0</span></li>
-                    <li onclick="loadConversations('team')">Team <span id="teamCount">0</span></li>
-                    <li onclick="loadConversations('all')">All <span id="allCount">0</span></li>
-                </ul>
-                <p><strong>Channels</strong></p>
-                <ul>
-                    <li onclick="filterByChannel('whatsapp')">WhatsApp</li>
-                    <li onclick="filterByChannel('instagram')">Instagram</li>
-                </ul>
+        <div class="main-content">
+            <div class="tabs">
+                <div class="tab active" onclick="showTab('liveChat')">Live Chat</div>
+                <div class="tab" onclick="showTab('promotions')">Promotions</div>
             </div>
-            <div class="conversation-panel">
+            <div id="liveChat" class="tab-content active">
                 <h3>Conversations</h3>
-                <ul id="conversationList" class="conversation-list"></ul>
+                <ul id="conversationList"></ul>
             </div>
-            <div class="chat-panel">
+            <div id="promotions" class="tab-content">
+                <div class="promotions-section">
+                    <h3>Promotions Configuration</h3>
+                    <textarea id="promotionsInput" placeholder="Enter current promotions..."></textarea>
+                    <button onclick="savePromotions()">Save Promotions</button>
+                    <div>
+                        <h4>Current Promotions</h4>
+                        <div id="currentPromotions">No promotions set.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="chat-section">
                 <h3>Live Conversation</h3>
                 <div id="clientName">-</div>
-                <div class="chat-messages" id="chatBox"></div>
-                <div class="chat-input">
+                <div id="chatBox"></div>
+                <div class="input-section">
                     <input type="text" id="messageInput" placeholder="Type a message...">
-                    <button onclick="sendMessage()">Send</button>
+                    <button id="sendMessage" onclick="sendMessage()">Send</button>
                 </div>
             </div>
         </div>
     </div>
-    <script src="/static/dashboard.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="dashboard.js"></script>
 </body>
 </html>
