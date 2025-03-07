@@ -698,6 +698,12 @@ def telegram():
                 elif booking_state_dict.get("status") == "confirming":
                     if "yes" in incoming_msg.lower():
                         ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
+                        # Ensure handoff is triggered
+                        conn = sqlite3.connect(DB_NAME)
+                        c = conn.cursor()
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                        conn.commit()
+                        conn.close()
                     else:
                         conn = sqlite3.connect(DB_NAME)
                         c = conn.cursor()
@@ -707,15 +713,27 @@ def telegram():
                         conn.close()
                         ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
 
-                if not ai_reply:
-                    response = openai.ChatCompletion.create(
-                        model="gpt-4o-mini",
-                        messages=conversation_history,
-                        max_tokens=150
-                    )
-                    ai_reply = response.choices[0].message.content.strip()
-                    model_used = response.model
-                    logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
+                # Prevent fallback to OpenAI if ai_reply is set
+                if ai_reply:
+                    log_message(convo_id, "AI", ai_reply, "ai")
+                    send_telegram_message(from_number, ai_reply)
+                    socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "telegram"})
+                    if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
+                        try:
+                            conn = sqlite3.connect(DB_NAME)
+                            c = conn.cursor()
+                            c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                            result = c.fetchone()
+                            handoff_notified, visible_in_conversations = result if result else (0, 0)
+                            if not handoff_notified:
+                                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                                conn.commit()
+                                time.sleep(3.0)
+                                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "telegram"})
+                            conn.close()
+                        except Exception as e:
+                            logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
+                    return "OK", 200
 
                 break
             except Exception as e:
