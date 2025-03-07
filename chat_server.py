@@ -991,8 +991,8 @@ def handback_to_ai():
                 logger.error(f"❌ Agent {current_user.username} is not assigned to convo_id {convo_id}")
                 return jsonify({"error": "You are not assigned to this conversation"}), 403
 
-            # Re-enable AI and clear the assigned agent
-            c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0 WHERE id = ?", (convo_id,))
+            # Re-enable AI and clear the assigned agent, ensure visible_in_conversations remains 0
+            c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0, visible_in_conversations = 0 WHERE id = ?", (convo_id,))
             conn.commit()
 
         # Notify the user that the AI has taken over
@@ -1015,7 +1015,7 @@ def handback_to_ai():
     except Exception as e:
         logger.error(f"❌ Error in /handback-to-ai endpoint: {e}")
         return jsonify({"error": "Failed to hand back to AI"}), 500
-
+        
 @app.route("/test-openai", methods=["GET"])
 def test_openai():
     try:
