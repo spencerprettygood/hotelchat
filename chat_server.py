@@ -46,14 +46,82 @@ INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 
 DB_NAME = "chatbot.db"
 
-# Load the Q&A reference document
+# Load or define the Q&A reference document
 try:
     with open("qa_reference.txt", "r") as file:
         TRAINING_DOCUMENT = file.read()
     logger.info("✅ Loaded Q&A reference document")
 except FileNotFoundError:
-    TRAINING_DOCUMENT = ""
-    logger.warning("⚠️ qa_reference.txt not found, using empty training document")
+    TRAINING_DOCUMENT = """
+    **Amapola Resort Chatbot Training Document**
+
+    You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I’m sorry, that’s a bit complex for me to handle. Let me get a human to assist you."
+
+    **Business Information**
+    - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
+    - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
+    - **Room Types**:
+      - Standard Room: $150/night, 2 guests, 1 queen bed
+      - Deluxe Room: $250/night, 4 guests, 2 queen beds, ocean view
+      - Suite: $400/night, 4 guests, 1 king bed, living area, oceanfront balcony
+    - **Amenities**:
+      - Beachfront access, outdoor pool, spa, gym, on-site restaurant (Amapola Bistro), free Wi-Fi, parking ($20/day)
+    - **Activities**:
+      - Snorkeling ($50/person), kayak rentals ($30/hour), sunset cruises ($100/person)
+    - **Policies**:
+      - Cancellation: Free cancellation up to 48 hours before arrival
+      - Pets: Not allowed
+      - Children: Kids under 12 stay free with an adult
+
+    **Common Q&A**
+
+    Q: What are your room rates?
+    A: We offer several room types:
+    - Standard Room: $150/night for 2 guests
+    - Deluxe Room: $250/night for 4 guests, with an ocean view
+    - Suite: $400/night for 4 guests, with an oceanfront balcony
+    Would you like to book a room, or do you have questions about a specific room type?
+
+    Q: How do I book a room?
+    A: I can help you start the booking process! Please let me know:
+    1. Your preferred dates (e.g., check-in and check-out dates)
+    2. The number of guests
+    3. Your preferred room type (Standard, Deluxe, or Suite)
+    For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer to speak with a human to finalize your booking, let me know!
+
+    Q: What is the check-in time?
+    A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
+
+    Q: Do you have a pool?
+    A: Yes, we have a beautiful outdoor pool with beachfront views! It’s open from 8:00 AM to 8:00 PM daily. We also have a spa and gym if you’re interested in other amenities. Would you like to know more?
+
+    Q: Can I bring my pet?
+    A: I’m sorry, but pets are not allowed at Amapola Resort. If you need recommendations for pet-friendly accommodations nearby, I can help you find some options!
+
+    Q: What activities do you offer?
+    A: We have a variety of activities for our guests:
+    - Snorkeling: $50 per person
+    - Kayak rentals: $30 per hour
+    - Sunset cruises: $100 per person
+    Would you like to book an activity, or do you have questions about any of these?
+
+    Q: What are the cancellation policies?
+    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
+
+    Q: Do you have a restaurant?
+    A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It’s open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
+
+    **Conversational Guidelines**
+    - Always greet new users with: "Thank you for contacting us." (Note: This is handled in the code for new conversations.)
+    - For follow-up messages, do not repeat the greeting. Instead, respond based on the context of the conversation.
+    - Ask clarifying questions if the user’s intent is unclear (e.g., "Could you tell me your preferred dates for booking?").
+    - Use a friendly and professional tone, and keep responses concise (under 150 tokens, as set by max_tokens).
+    - If the user asks multiple questions in one message, address each question systematically.
+    - If the user provides partial information (e.g., "I want to book a room"), ask for missing details (e.g., dates, number of guests, room type).
+    - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").
+    - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
+    """
+    logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
 def initialize_database():
     try:
@@ -73,7 +141,8 @@ def initialize_database():
             opted_in INTEGER DEFAULT 0,
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
-            visible_in_conversations INTEGER DEFAULT 0
+            visible_in_conversations INTEGER DEFAULT 0,
+            booking_state TEXT DEFAULT NULL  -- New column for tracking booking state
         )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
@@ -317,13 +386,26 @@ def chat():
         if ai_enabled:
             logger.info("✅ AI is enabled, proceeding with AI response")
             try:
-                logger.info(f"Processing message with AI: {user_message}")
+                logger.info(f"Processing message with AI for convo_id {convo_id}: {user_message}")
+                # Fetch conversation history (limit to last 10 messages)
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT 10 OFFSET (SELECT COUNT(*) - 10 FROM messages WHERE conversation_id = ? AND COUNT(*) > 10)", (convo_id, convo_id))
+                messages = c.fetchall()
+                conversation_history = [
+                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+                ]
+                for msg in messages:
+                    user, message_text, sender = msg
+                    role = "user" if sender == "user" else "assistant"
+                    conversation_history.append({"role": role, "content": message_text})
+                conversation_history.append({"role": "user", "content": user_message})
+                logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
+                conn.close()
+
                 response = openai.ChatCompletion.create(
                     model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                        {"role": "user", "content": user_message}
-                    ],
+                    messages=conversation_history,
                     max_tokens=150
                 )
                 ai_reply = response.choices[0].message.content.strip()
@@ -398,7 +480,7 @@ def telegram():
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         logger.info(f"✅ Querying conversations for username: {from_number}")
-        c.execute("SELECT id, last_updated, handoff_notified, ai_enabled FROM conversations WHERE username = ?", (from_number,))
+        c.execute("SELECT id, last_updated, handoff_notified, ai_enabled, booking_state FROM conversations WHERE username = ?", (from_number,))
         convo = c.fetchone()
 
         # Check if this is a new conversation
@@ -416,10 +498,11 @@ def telegram():
             logger.info(f"✅ After creating convo_id {convo_id}: visible_in_conversations={insert_result[0]}")
             handoff_notified = 0
             ai_enabled = 1
+            booking_state = None
             logger.info(f"✅ Created new conversation for {from_number}: convo_id {convo_id}")
         else:
-            convo_id, last_updated, handoff_notified, ai_enabled = convo
-            logger.info(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}")
+            convo_id, last_updated, handoff_notified, ai_enabled, booking_state = convo
+            logger.info(f"✅ Existing conversation found: convo_id={convo_id}, last_updated={last_updated}, handoff_notified={handoff_notified}, ai_enabled={ai_enabled}, booking_state={booking_state}")
             # Check if last message was more than 24 hours ago to reset ai_enabled and handoff_notified
             last_updated_dt = datetime.strptime(last_updated, "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - last_updated_dt) > timedelta(hours=24):
@@ -462,17 +545,81 @@ def telegram():
         ai_reply = None
         try:
             logger.info(f"Processing message with AI for convo_id {convo_id} with gpt-4o-mini: {incoming_msg}")
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                    {"role": "user", "content": incoming_msg}
-                ],
-                max_tokens=150
-            )
-            ai_reply = response.choices[0].message.content.strip()
-            model_used = response.model
-            logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
+            # Fetch conversation history (limit to last 10 messages)
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT 10 OFFSET (SELECT COUNT(*) - 10 FROM messages WHERE conversation_id = ? AND COUNT(*) > 10)", (convo_id, convo_id))
+            messages = c.fetchall()
+            conversation_history = [
+                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+            ]
+            for msg in messages:
+                user, message_text, sender = msg
+                role = "user" if sender == "user" else "assistant"
+                conversation_history.append({"role": role, "content": message_text})
+            conversation_history.append({"role": "user", "content": incoming_msg})
+            logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
+            conn.close()
+
+            # Check booking state and guide the conversation
+            if "book" in incoming_msg.lower() and not booking_state:
+                booking_state = "awaiting_dates"
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_dates", convo_id))
+                conn.commit()
+                conn.close()
+                ai_reply = "I can help you start the booking process! Please let me know your preferred dates (e.g., check-in and check-out dates)."
+            elif booking_state == "awaiting_dates":
+                # Assume the user provided dates (in a real scenario, you'd parse the dates)
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_guests", convo_id))
+                conn.commit()
+                conn.close()
+                ai_reply = "Thanks for providing your dates! How many guests will be staying?"
+            elif booking_state == "awaiting_guests":
+                # Assume the user provided the number of guests
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("awaiting_room_type", convo_id))
+                conn.commit()
+                conn.close()
+                ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
+            elif booking_state == "awaiting_room_type":
+                # Assume the user chose a room type
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", ("confirming", convo_id))
+                conn.commit()
+                conn.close()
+                ai_reply = "Great choice! Let me check availability for your dates. Assuming everything is available, your total will be [calculated total]. Would you like to proceed with the booking?"
+            elif booking_state == "confirming":
+                if "yes" in incoming_msg.lower():
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                    conn.commit()
+                    conn.close()
+                    ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
+                else:
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                    conn.commit()
+                    conn.close()
+                    ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
+
+            if not ai_reply:  # If no booking state logic applied, use OpenAI
+                response = openai.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=conversation_history,
+                    max_tokens=150
+                )
+                ai_reply = response.choices[0].message.content.strip()
+                model_used = response.model
+                logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
+
         except Exception as e:
             logger.error(f"❌ OpenAI error: {str(e)}")
             logger.error(f"❌ OpenAI error type: {type(e).__name__}")
@@ -558,12 +705,25 @@ def instagram():
                 log_message(convo_id, sender_id, incoming_msg, "user")
                 try:
                     logger.info(f"Processing Instagram message with AI: {incoming_msg}")
+                    # Fetch conversation history (limit to last 10 messages)
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT 10 OFFSET (SELECT COUNT(*) - 10 FROM messages WHERE conversation_id = ? AND COUNT(*) > 10)", (convo_id, convo_id))
+                    messages = c.fetchall()
+                    conversation_history = [
+                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+                    ]
+                    for msg in messages:
+                        user, message_text, sender = msg
+                        role = "user" if sender == "user" else "assistant"
+                        conversation_history.append({"role": role, "content": message_text})
+                    conversation_history.append({"role": "user", "content": incoming_msg})
+                    logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
+                    conn.close()
+
                     response = openai.ChatCompletion.create(
                         model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Escalate to a human if the query is complex or requires personal assistance."},
-                            {"role": "user", "content": incoming_msg}
-                        ],
+                        messages=conversation_history,
                         max_tokens=150
                     )
                     ai_reply = response.choices[0].message.content.strip()
