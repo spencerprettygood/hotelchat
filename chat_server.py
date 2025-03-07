@@ -417,18 +417,152 @@ def ai_respond(message, convo_id):
             conversation_history.append({"role": role, "content": message_text})
         conversation_history.append({"role": "user", "content": message})
 
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=conversation_history,
-            max_tokens=150
-        )
-        ai_reply = response.choices[0].message.content.strip()
-        model_used = response.model
-        logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
-        return ai_reply
+        retry_attempts = 2
+        for attempt in range(retry_attempts):
+            try:
+                response = openai.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=conversation_history,
+                    max_tokens=150
+                )
+                ai_reply = response.choices[0].message.content.strip()
+                model_used = response.model
+                logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
+                return ai_reply
+            except Exception as e:
+                logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
+                if attempt == retry_attempts - 1:
+                    logger.info("✅ Set default AI reply due to repeated errors")
+                    return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+                time.sleep(1)
+                continue
     except Exception as e:
-        logger.error(f"❌ OpenAI error in ai_respond for convo_id {convo_id}: {str(e)}")
+        logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
         return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+
+def handle_booking_flow(message, convo_id, chat_id, channel):
+    """
+    Handle the booking flow for a conversation.
+    Args:
+        message (str): The user's message.
+        convo_id (int): The conversation ID.
+        chat_id (str): The chat ID or username.
+        channel (str): The communication channel (e.g., 'telegram').
+    Returns:
+        tuple: (bool, str) - (whether to continue with AI response, AI reply if any)
+    """
+    logger.info(f"Handling booking flow for convo_id {convo_id}: {message}")
+
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
+        booking_state = c.fetchone()[0]
+
+    # Parse dates and numbers using regex as a fallback
+    date_match = re.search(r'(\w+\s+\d+\s+to\s+\w+\s+\d+)', message, re.IGNORECASE)
+    number_match = re.search(r'(\d+)\s*(guests)?', message, re.IGNORECASE)
+    dates = date_match.group(0) if date_match else None
+    guests = int(number_match.group(1)) if number_match else None
+
+    # Evaluate booking_state if it exists
+    booking_state_dict = eval(booking_state) if booking_state else {}
+
+    # Booking flow
+    if "book" in message.lower() and not booking_state_dict.get("status"):
+        if not dates:
+            ai_reply = "I’d love to help you book! Please provide your preferred dates (e.g., 'March 10 to March 15')."
+            return (False, ai_reply)
+        else:
+            try:
+                date_parts = re.split(r'\s+to\s+', dates.lower())
+                months = {'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+                          'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12}
+                check_in_day = int(date_parts[1])
+                check_out_day = int(date_parts[3])
+                check_in_month = months[date_parts[0].split()[0]]
+                check_out_month = months[date_parts[2].split()[0]]
+                check_in = datetime(2025, check_in_month, check_in_day)
+                check_out = datetime(2025, check_out_month, check_out_day)
+                booking_state_dict = {"status": "awaiting_guests", "check_in": check_in.strftime("%Y-%m-%d"), "check_out": check_out.strftime("%Y-%m-%d")}
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                    c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
+                    conn.commit()
+                ai_reply = "Thanks for providing your dates! How many guests will be staying?"
+                return (False, ai_reply)
+            except (ValueError, KeyError) as e:
+                ai_reply = "I couldn’t parse your dates. Please use the format 'March 10 to March 15'."
+                return (False, ai_reply)
+    elif booking_state_dict.get("status") == "awaiting_guests":
+        if not guests:
+            ai_reply = "Please tell me how many guests will be staying (e.g., '4 guests')."
+            return (False, ai_reply)
+        else:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                booking_state_dict["guests"] = guests
+                booking_state_dict["status"] = "awaiting_room_type"
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
+                conn.commit()
+            ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
+            return (False, ai_reply)
+    elif booking_state_dict.get("status") == "awaiting_room_type":
+        room_type = message.lower()
+        if "standard" in room_type:
+            rate_per_night = 150
+            room_type = "standard"
+        elif "deluxe" in room_type:
+            rate_per_night = 250
+            room_type = "deluxe"
+        elif "suite" in room_type:
+            rate_per_night = 400
+            room_type = "suite"
+        else:
+            ai_reply = "Please choose a valid room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
+            return (False, ai_reply)
+
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+            check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+            nights = (check_out - check_in).days
+            total_cost = nights * rate_per_night * booking_state_dict["guests"]  # Adjust for per-room pricing if needed
+            is_fully_booked = check_availability(check_in, check_out)
+            if is_fully_booked:
+                ai_reply = f"Sorry, it looks like we’re fully booked for your dates ({booking_state_dict['check_in']} to {booking_state_dict['check_out']}). Please choose different dates."
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+                conn.commit()
+                return (False, ai_reply)
+            else:
+                booking_state_dict["room_type"] = room_type
+                booking_state_dict["total_cost"] = total_cost
+                booking_state_dict["status"] = "confirming"
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
+                conn.commit()
+                ai_reply = f"Great choice! Let me check availability for your dates. Assuming everything is available, your total will be ${total_cost}. Would you like to proceed with the booking?"
+                return (False, ai_reply)
+    elif booking_state_dict.get("status") == "confirming":
+        if "yes" in message.lower():
+            ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                conn.commit()
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
+            return (False, ai_reply)
+        else:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+                conn.commit()
+            ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
+            return (False, ai_reply)
+    return (True, None)
 
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
@@ -475,7 +609,18 @@ def chat():
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if ai_enabled:
             logger.info("✅ AI is enabled, proceeding with AI response")
-            ai_reply = ai_respond(user_message, convo_id)
+            # Check for HELP keyword
+            if "HELP" in user_message.upper():
+                ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
+            else:
+                # Check booking flow
+                continue_with_ai, ai_reply = handle_booking_flow(user_message, convo_id, username, channel)
+                if not continue_with_ai:
+                    logger.info("✅ Booking flow handled, using booking flow reply")
+                else:
+                    ai_reply = ai_respond(user_message, convo_id)
+
             logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
@@ -499,7 +644,7 @@ def chat():
                     if not handoff_notified:
                         with get_db_connection() as conn:
                             c = conn.cursor()
-                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                             conn.commit()
                         time.sleep(3.0)
                         with get_db_connection() as conn:
@@ -560,14 +705,31 @@ def telegram():
             logger.info(f"❌ AI disabled for convo_id: {convo_id}, Skipping AI response")
             return jsonify({}), 200
 
-        response = ai_respond(message, convo_id)
+        # Check for HELP keyword
+        if "HELP" in message.upper():
+            response = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+            logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + response)
+        else:
+            # Check booking flow
+            continue_with_ai, response = handle_booking_flow(message, convo_id, chat_id, "telegram")
+            if not continue_with_ai:
+                logger.info("✅ Booking flow handled, using booking flow reply")
+            else:
+                response = ai_respond(message, convo_id)
+
         log_message(convo_id, "AI", response, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
 
-        if "Let me get a human to assist you" in response and not handoff_notified:
-            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-            conn.commit()
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
+        if "human" in response.lower() or "sorry" in response.lower() or "HELP" in message.upper():
+            if not handoff_notified:
+                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                conn.commit()
+                # Verify the update
+                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                updated_result = c.fetchone()
+                logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
+                logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
 
         try:
             send_telegram_message(chat_id, response)
