@@ -109,7 +109,6 @@ if (logoutButton) {
     console.error('Logout button not found.');
 }
 
-// Fetch conversations
 function fetchConversations() {
     const conversationList = document.getElementById('conversationList');
     if (!conversationList) {
@@ -160,7 +159,7 @@ function fetchConversations() {
 
                 // Conversation info
                 const convoInfo = document.createElement('span');
-                convoInfo.textContent = `${convo.id} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
+                convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
