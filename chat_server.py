@@ -285,9 +285,9 @@ def get_conversations():
             c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
             raw_conversions = c.fetchall()
             logger.info(f"✅ Raw conversations from database: {raw_conversions}")
-            c.execute("SELECT id, username, latest_message, assigned_agent, channel FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
-            conversations = [{"id": row[0], "username": row[1], "latest_message": row[2], "assigned_agent": row[3], "channel": row[4]} for row in c.fetchall()]
-        logger.info(f"✅ Fetched conversations: {len(conversations)} conversations")
+            c.execute("SELECT id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
+            conversations = [{"id": row[0], "channel": row[1], "assigned_agent": row[2]} for row in c.fetchall()]
+            logger.info(f"✅ Fetched conversations for dashboard: {conversations}")
         return jsonify(conversations)
     except Exception as e:
         logger.error(f"❌ Error fetching conversations: {e}")
