@@ -995,6 +995,15 @@ def handback_to_ai():
             c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0, visible_in_conversations = 0 WHERE id = ?", (convo_id,))
             conn.commit()
 
+            # Verify the update
+            c.execute("SELECT ai_enabled FROM conversations WHERE id = ?", (convo_id,))
+            updated_result = c.fetchone()
+            if updated_result:
+                ai_enabled = updated_result[0]
+                logger.info(f"✅ After handback, ai_enabled for convo_id {convo_id} is {ai_enabled}")
+            else:
+                logger.error(f"❌ Failed to verify ai_enabled for convo_id {convo_id} after handback")
+
         # Notify the user that the AI has taken over
         handback_message = "The agent has handed the conversation back to me. I’m here to assist you now! How can I help?"
         log_message(convo_id, "AI", handback_message, "ai")
