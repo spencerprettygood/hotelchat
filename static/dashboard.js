@@ -149,6 +149,9 @@ function fetchConversations() {
 
             filteredConversations.forEach(convo => {
                 const li = document.createElement('li');
+                // Add spacing via CSS class
+                li.className = 'conversation-item'; // Add a class for styling
+
                 // Create a container for the conversation info and button
                 const convoContainer = document.createElement('div');
                 convoContainer.style.display = 'flex';
@@ -157,7 +160,7 @@ function fetchConversations() {
 
                 // Conversation info
                 const convoInfo = document.createElement('span');
-                convoInfo.textContent = `${convo.username} (${convo.channel}): ${convo.latest_message}`;
+                convoInfo.textContent = `${convo.id} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
@@ -170,13 +173,7 @@ function fetchConversations() {
                         e.stopPropagation(); // Prevent triggering loadConversation
                         takeOverConversation(convo.id);
                     };
-                    takeOverButton.style.marginLeft = '10px';
-                    takeOverButton.style.padding = '5px 10px';
-                    takeOverButton.style.backgroundColor = '#007bff';
-                    takeOverButton.style.color = 'white';
-                    takeOverButton.style.border = 'none';
-                    takeOverButton.style.borderRadius = '3px';
-                    takeOverButton.style.cursor = 'pointer';
+                    takeOverButton.className = 'take-over-btn'; // Use a CSS class for consistency
                     convoContainer.appendChild(takeOverButton);
                 }
 
