@@ -71,11 +71,11 @@ WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", None)
 WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
 
 # PostgreSQL configuration (update with your Render PostgreSQL credentials)
-DB_HOST = os.getenv("DB_HOST", "your-render-postgres-host")
+DB_HOST = os.getenv("DB_HOST", "dpg-cv9hoqlrie7s73djgiqg-a")
 DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "your_db_name")
-DB_USER = os.getenv("DB_USER", "your_db_user")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "your_db_password")
+DB_NAME = os.getenv("DB_NAME", "amapola_chatbot_sql")
+DB_USER = os.getenv("DB_USER", "amapola_chatbot_sql_user")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "oWokKS1br3DVc5TqlxVRZA1jJUlMZtkj")
 db_pool = None
 
 # Load or define the Q&A reference document
@@ -170,59 +170,56 @@ def initialize_db_pool():
 
 @contextmanager
 def get_db_connection():
-    """Context manager for PostgreSQL database connection to ensure proper handling."""
-    conn = db_pool.getconn()
+    """Context manager for PostgreSQL database connection with connection pool."""
+    conn = DB_POOL.getconn()
     try:
         yield conn
     finally:
-        db_pool.putconn(conn)
+        DB_POOL.putconn(conn)
 
 def initialize_database():
     with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS agents (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
-            id SERIAL PRIMARY KEY,
-            username TEXT NOT NULL,
-            latest_message TEXT,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            assigned_agent TEXT DEFAULT NULL,
-            channel TEXT DEFAULT 'dashboard',
-            opted_in INTEGER DEFAULT 0,
-            ai_enabled INTEGER DEFAULT 1,
-            handoff_notified INTEGER DEFAULT 0,
-            visible_in_conversations INTEGER DEFAULT 0,
-            booking_state TEXT DEFAULT NULL
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS bookings (
-            id SERIAL PRIMARY KEY,
-            conversation_id INTEGER NOT NULL,
-            check_in DATE,
-            check_out DATE,
-            guests INTEGER,
-            room_type TEXT,
-            total_cost REAL,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            conversation_id INTEGER NOT NULL,
-            user TEXT NOT NULL,
-            message TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_conversations_visible ON conversations (visible_in_conversations, last_updated)''')
-        c.execute("SELECT COUNT(*) FROM agents")
-        if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO agents (username, password) VALUES (%s, %s)", ("agent1", "password123"))
-            logger.info("✅ Added test agent: agent1/password123")
-        conn.commit()
+        with conn.cursor() as c:
+            c.execute('''CREATE TABLE IF NOT EXISTS agents (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS conversations (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL,
+                latest_message TEXT,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                assigned_agent TEXT DEFAULT NULL,
+                channel TEXT DEFAULT 'dashboard',
+                opted_in INTEGER DEFAULT 0,
+                ai_enabled INTEGER DEFAULT 1,
+                handoff_notified INTEGER DEFAULT 0,
+                visible_in_conversations INTEGER DEFAULT 0,
+                booking_state TEXT DEFAULT NULL)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS bookings (
+                id SERIAL PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                check_in DATE,
+                check_out DATE,
+                guests INTEGER,
+                room_type TEXT,
+                total_cost REAL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
+            c.execute('''CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                user TEXT NOT NULL,
+                message TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
+            c.execute("SELECT COUNT(*) FROM agents")
+            if c.fetchone()[0] == 0:
+                c.execute("INSERT INTO agents (username, password) VALUES (%s, %s)", ("agent1", "password123"))
+                logger.info("✅ Added test agent: agent1/password123")
+            conn.commit()
     logger.info("✅ Database initialized")
-
+    
 # Initialize database and connection pool
 initialize_db_pool()
 initialize_database()
