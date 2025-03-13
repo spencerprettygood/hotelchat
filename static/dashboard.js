@@ -1,4 +1,3 @@
-// dashboard.js
 const socket = io();
 
 let currentConversationId = null;
@@ -34,6 +33,7 @@ function checkAuthStatus() {
             const dashboardSection = document.getElementById('dashboard');
             if (data.is_authenticated) {
                 currentAgent = data.agent; // Assuming /check-auth returns the agent's username
+                console.log("Current Agent:", currentAgent); // Debug log
                 loginPage.style.display = 'none';
                 dashboardSection.style.display = 'block';
                 fetchConversations();
@@ -73,6 +73,7 @@ function login() {
         .then(data => {
             if (data.message === 'Login successful') {
                 currentAgent = data.agent; // Assuming /login returns the agent's username
+                console.log("Current Agent:", currentAgent); // Debug log
                 document.getElementById('loginPage').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
                 fetchConversations();
@@ -147,6 +148,7 @@ function fetchConversations() {
             updateCounts(conversations);
 
             filteredConversations.forEach(convo => {
+                console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent); // Debug log
                 const li = document.createElement('li');
                 // Add spacing via CSS class
                 li.className = 'conversation-item'; // Add a class for styling
@@ -241,6 +243,7 @@ function takeOverConversation(convoId) {
         })
         .then(data => {
             if (data.message) {
+                currentFilter = 'you'; // Force switch to "You" filter after taking over
                 fetchConversations(); // Refresh the conversation list
                 if (currentConversationId === convoId) {
                     loadConversation(convoId); // Reload the current conversation
