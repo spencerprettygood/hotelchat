@@ -80,7 +80,7 @@ except FileNotFoundError:
     TRAINING_DOCUMENT = """
     **Amapola Resort Chatbot Training Document**
 
-    You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I’m sorry, that’s a bit complex for me to handle. Let me get a human to assist you."
+    You are a friendly and professional hotel representative for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires personal assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to an agent by saying: 'I’m sorry, that’s a bit complex for me to handle. Let me connect you with an agent to assist you.'
 
     **Business Information**
     - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
@@ -112,7 +112,7 @@ except FileNotFoundError:
     1. Your preferred dates (e.g., check-in and check-out dates)
     2. The number of guests
     3. Your preferred room type (Standard, Deluxe, or Suite)
-    For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer to speak with a human to finalize your booking, let me know!
+    For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer assistance to finalize your booking, let me know!
 
     Q: What is the check-in time?
     A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
@@ -131,7 +131,7 @@ except FileNotFoundError:
     Would you like to book an activity, or do you have questions about any of these?
 
     Q: What are the cancellation policies?
-    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
+    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can connect you with an agent to assist with the details.
 
     Q: Do you have a restaurant?
     A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It’s open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
@@ -144,7 +144,7 @@ except FileNotFoundError:
     - If the user asks multiple questions in one message, address each question systematically.
     - If the user provides partial information (e.g., "I want to book a room"), ask for missing details (e.g., dates, number of guests, room type).
     - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").
-    - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
+    - Escalate to an agent for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
@@ -415,7 +415,7 @@ def ai_respond(message, convo_id):
             c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
             messages = c.fetchall()
         conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a friendly hotel representative. Use the provided business information and Q&A to answer guest questions naturally and professionally. If the query involves collecting payment details, credit card information, or any sensitive personal information, immediately escalate by saying: 'To proceed with your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely.' Do not suggest providing the information directly or offer alternative contact methods like phone numbers or email addresses. For other complex queries or those requiring personal assistance, escalate with a similar message using 'agent'."}
         ]
         for msg in messages:
             user, message_text, sender = msg
@@ -439,12 +439,12 @@ def ai_respond(message, convo_id):
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retry_attempts - 1:
                     logger.info("✅ Set default AI reply due to repeated errors")
-                    return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+                    return "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
                 time.sleep(1)
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+        return "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
 
 def handle_booking_flow(message, convo_id, chat_id, channel):
     """
@@ -553,7 +553,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 return (False, ai_reply)
     elif booking_state_dict.get("status") == "confirming":
         if "yes" in message.lower():
-            ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
+            ai_reply = "Perfect! To finalize your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely."
             with get_db_connection() as conn:
                 c = conn.cursor()
                 c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
@@ -617,7 +617,7 @@ def chat():
             logger.info("✅ AI is enabled, proceeding with AI response")
             # Check for HELP keyword
             if "HELP" in user_message.upper():
-                ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                ai_reply = "I’m sorry, I couldn’t process that. Let me connect you with an agent to assist you."
                 logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
             else:
                 # Check booking flow
@@ -639,7 +639,7 @@ def chat():
                     logger.error(f"❌ Telegram error sending AI message: {str(e)}")
                     socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
             logger.info("✅ Checking for handoff condition")
-            if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
+            if "agent" in ai_reply.lower() or "sorry" in ai_reply.lower():
                 try:
                     with get_db_connection() as conn:
                         c = conn.cursor()
@@ -713,7 +713,7 @@ def telegram():
 
         # Check for HELP keyword
         if "HELP" in message.upper():
-            response = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+            response = "I’m sorry, I couldn’t process that. Let me connect you with an agent to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + response)
         else:
             # Check booking flow
@@ -726,7 +726,7 @@ def telegram():
         log_message(convo_id, "AI", response, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
 
-        if "human" in response.lower() or "sorry" in response.lower() or "HELP" in message.upper():
+        if "agent" in response.lower() or "sorry" in response.lower() or "HELP" in message.upper():
             if not handoff_notified:
                 c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                 conn.commit()
@@ -781,7 +781,7 @@ def instagram():
                         c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
                         messages = c.fetchall()
                     conversation_history = [
-                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel chatbot acting as a friendly salesperson. Use the provided business information and Q&A to answer guest questions. Maintain conversation context and provide relevant follow-up responses. Escalate to a human if the query is complex or requires personal assistance."}
+                        {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a friendly hotel representative. Use the provided business information and Q&A to answer guest questions naturally and professionally. If the query involves collecting payment details, credit card information, or any sensitive personal information, immediately escalate by saying: 'To proceed with your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely.' Do not suggest providing the information directly or offer alternative contact methods like phone numbers or email addresses. For other complex queries or those requiring personal assistance, escalate with a similar message using 'agent'."}
                     ]
                     for msg in messages:
                         user, message_text, sender = msg
@@ -799,7 +799,7 @@ def instagram():
                     model_used = response.model
                     logger.info(f"✅ Instagram AI reply: {ai_reply}, Model: {model_used}")
                 except Exception as e:
-                    ai_reply = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+                    ai_reply = "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
                     logger.error(f"❌ Instagram OpenAI error: {str(e)}")
                     logger.error(f"❌ Instagram OpenAI error type: {type(e).__name__}")
                 logger.info("✅ Logging Instagram AI response")
@@ -811,7 +811,7 @@ def instagram():
                 )
                 logger.info("✅ Emitting new_message event for Instagram")
                 socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "instagram"})
-                if "human" in ai_reply.lower() or "sorry" in ai_reply.lower():
+                if "agent" in ai_reply.lower() or "sorry" in ai_reply.lower():
                     try:
                         with get_db_connection() as conn:
                             c = conn.cursor()
