@@ -6,17 +6,20 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import openai
-import sqlite3
+import psycopg2
+from psycopg2 import pool
 import os
 import requests
 import json
-from datetime import datetime, timedelta
-import time
+from datetime import datetime
 import logging
 import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from contextlib import contextmanager
+import asyncio
+from aiohttp import ClientSession
+import aiohttp
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -50,9 +53,7 @@ except json.JSONDecodeError as e:
     raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY must be a valid JSON string")
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=SCOPES
-)
+credentials = service_account.Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
 service = build('calendar', 'v3', credentials=credentials)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -69,7 +70,13 @@ INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", None)
 WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
 
-DB_NAME = "chatbot.db"
+# PostgreSQL configuration (update with your Render PostgreSQL credentials)
+DB_HOST = os.getenv("DB_HOST", "your-render-postgres-host")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "your_db_name")
+DB_USER = os.getenv("DB_USER", "your_db_user")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "your_db_password")
+db_pool = None
 
 # Load or define the Q&A reference document
 try:
@@ -148,24 +155,37 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
+# Initialize PostgreSQL connection pool
+def initialize_db_pool():
+    global db_pool
+    db_pool = psycopg2.pool.SimpleConnectionPool(
+        1, 20,  # Min and max connections
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD
+    )
+    logger.info("✅ Database connection pool initialized")
+
 @contextmanager
 def get_db_connection():
-    """Context manager for SQLite database connection to ensure proper handling."""
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)  # Allow connection from any thread
+    """Context manager for PostgreSQL database connection to ensure proper handling."""
+    conn = db_pool.getconn()
     try:
         yield conn
     finally:
-        conn.close()
+        db_pool.putconn(conn)
 
 def initialize_database():
     with get_db_connection() as conn:
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS agents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL)''')
         c.execute('''CREATE TABLE IF NOT EXISTS conversations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT NOT NULL,
             latest_message TEXT,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -178,7 +198,7 @@ def initialize_database():
             booking_state TEXT DEFAULT NULL
         )''')
         c.execute('''CREATE TABLE IF NOT EXISTS bookings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             conversation_id INTEGER NOT NULL,
             check_in DATE,
             check_out DATE,
@@ -187,22 +207,24 @@ def initialize_database():
             total_cost REAL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         )''')
-        c.execute("DROP TABLE IF EXISTS messages")
-        c.execute('''CREATE TABLE messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+        c.execute('''CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
             conversation_id INTEGER NOT NULL,
             user TEXT NOT NULL,
             message TEXT NOT NULL,
             sender TEXT NOT NULL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_conversations_visible ON conversations (visible_in_conversations, last_updated)''')
         c.execute("SELECT COUNT(*) FROM agents")
         if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
+            c.execute("INSERT INTO agents (username, password) VALUES (%s, %s)", ("agent1", "password123"))
             logger.info("✅ Added test agent: agent1/password123")
         conn.commit()
     logger.info("✅ Database initialized")
 
+# Initialize database and connection pool
+initialize_db_pool()
 initialize_database()
 
 def add_test_conversations():
@@ -216,7 +238,7 @@ def add_test_conversations():
                 ("guest3", "Do you have a pool?")]
             convo_ids = []
             for username, message in test_conversations:
-                c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (%s, %s, %s, 1, 0)", 
                           (username, message, "dashboard"))
                 convo_ids.append(c.lastrowid)
             test_messages = [
@@ -227,9 +249,9 @@ def add_test_conversations():
                 (convo_ids[2], "guest3", "Do you have a pool?", "user"),
                 (convo_ids[2], "AI", "Yes, we have an outdoor pool!", "ai")]
             for convo_id, user, message, sender in test_messages:
-                c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+                c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (%s, %s, %s, %s)", 
                           (convo_id, user, message, sender))
-            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_ids[0],))
+            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = %s", (convo_ids[0],))
             conn.commit()
             logger.info("✅ Test conversations added.")
 
@@ -244,7 +266,7 @@ class Agent(UserMixin):
 def load_user(agent_id):
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, username FROM agents WHERE id = ?", (agent_id,))
+        c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
         agent = c.fetchone()
         if agent:
             return Agent(agent[0], agent[1])
@@ -260,7 +282,7 @@ def login():
         return jsonify({"message": "Missing username or password"}), 400
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, username FROM agents WHERE username = ? AND password = ?", (username, password))
+        c.execute("SELECT id, username FROM agents WHERE username = %s AND password = %s", (username, password))
         agent = c.fetchone()
         if agent:
             agent_obj = Agent(agent[0], agent[1])
@@ -280,12 +302,15 @@ def logout():
 @app.route("/conversations", methods=["GET"])
 def get_conversations():
     try:
+        filter_type = request.args.get("filter", "all")  # Options: "all", "unassigned", "mine"
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
-            raw_conversions = c.fetchall()
-            logger.info(f"✅ Raw conversations from database: {raw_conversions}")
-            c.execute("SELECT id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
+            if filter_type == "unassigned":
+                c.execute("SELECT id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 AND assigned_agent IS NULL ORDER BY last_updated DESC")
+            elif filter_type == "mine" and current_user.is_authenticated:
+                c.execute("SELECT id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 AND assigned_agent = %s ORDER BY last_updated DESC", (current_user.username,))
+            else:
+                c.execute("SELECT id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
             conversations = [{"id": row[0], "channel": row[1], "assigned_agent": row[2]} for row in c.fetchall()]
             logger.info(f"✅ Fetched conversations for dashboard: {conversations}")
         return jsonify(conversations)
@@ -302,7 +327,7 @@ def check_visibility():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT visible_in_conversations FROM conversations WHERE id = %s", (convo_id,))
             result = c.fetchone()
         if result:
             logger.info(f"✅ Visibility check for convo ID {convo_id}: {bool(result[0])}")
@@ -320,17 +345,15 @@ def get_messages():
         logger.error("❌ Missing conversation ID in get-messages request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        # Fetch messages
-        c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
-        messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
-        # Fetch username
-        c.execute("SELECT username FROM conversations WHERE id = ?", (convo_id,))
-        username_result = c.fetchone()
-        username = username_result[0] if username_result else "Unknown"
-        conn.close()
-        logger.info(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = %s ORDER BY timestamp ASC", (convo_id,))
+            messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
+            c.execute("SELECT username FROM conversations WHERE id = %s", (convo_id,))
+            username_result = c.fetchone()
+            username = username_result[0] if username_result else "Unknown"
+            conn.close()
+            logger.info(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
         return jsonify({"messages": messages, "username": username})
     except Exception as e:
         logger.error(f"❌ Error fetching messages for convo ID {convo_id}: {e}")
@@ -343,12 +366,12 @@ def log_message(convo_id, user, message, sender):
             message = "Error: Message content unavailable"
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (%s, %s, %s, %s)", 
                       (convo_id, user, message, sender))
-            c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
+            c.execute("UPDATE conversations SET latest_message = %s, last_updated = CURRENT_TIMESTAMP WHERE id = %s", 
                       (message, convo_id))
             if sender == "agent":
-                c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = %s", (convo_id,))
                 logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
             conn.commit()
         logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
@@ -363,7 +386,6 @@ def send_telegram_message(chat_id, text):
         response = requests.post(url, json=payload)
         response.raise_for_status()
         logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
-        time.sleep(0.5)
     except Exception as e:
         logger.error(f"❌ Failed to send Telegram message to {chat_id}: {str(e)}")
         raise
@@ -399,9 +421,12 @@ def check_availability(check_in, check_out):
         logger.error(f"❌ Google Calendar API error: {str(e)}")
         return True  # Assume unavailable on error to be safe
 
-def ai_respond(message, convo_id):
+# Semaphore for rate-limiting OpenAI calls
+openai_semaphore = asyncio.Semaphore(10)  # Allow 10 concurrent calls
+
+async def ai_respond(message, convo_id):
     """
-    Generate an AI response for the given message and conversation ID using OpenAI.
+    Asynchronously generate an AI response for the given message and conversation ID using OpenAI.
     Args:
         message (str): The user's message.
         convo_id (int): The conversation ID.
@@ -409,42 +434,43 @@ def ai_respond(message, convo_id):
         str: The AI's response.
     """
     logger.info(f"Generating AI response for convo_id {convo_id}: {message}")
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
-            messages = c.fetchall()
-        conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a friendly hotel representative. Use the provided business information and Q&A to answer guest questions naturally and professionally. If the query involves collecting payment details, credit card information, or any sensitive personal information, immediately escalate by saying: 'To proceed with your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely.' Do not suggest providing the information directly or offer alternative contact methods like phone numbers or email addresses. For other complex queries or those requiring personal assistance, escalate with a similar message using 'agent'."}
-        ]
-        for msg in messages:
-            user, message_text, sender = msg
-            role = "user" if sender == "user" else "assistant"
-            conversation_history.append({"role": role, "content": message_text})
-        conversation_history.append({"role": "user", "content": message})
+    async with ClientSession() as session:
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = %s ORDER BY timestamp DESC LIMIT 10", (convo_id,))
+                messages = c.fetchall()
+            conversation_history = [
+                {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a friendly hotel representative. Use the provided business information and Q&A to answer guest questions naturally and professionally. If the query involves collecting payment details, credit card information, or any sensitive personal information, immediately escalate by saying: 'To proceed with your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely.' Do not suggest providing the information directly or offer alternative contact methods like phone numbers or email addresses. For other complex queries or those requiring personal assistance, escalate with a similar message using 'agent'."}
+            ]
+            for msg in messages:
+                user, message_text, sender = msg
+                role = "user" if sender == "user" else "assistant"
+                conversation_history.append({"role": role, "content": message_text})
+            conversation_history.append({"role": "user", "content": message})
 
-        retry_attempts = 2
-        for attempt in range(retry_attempts):
-            try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",
-                    messages=conversation_history,
-                    max_tokens=150
-                )
-                ai_reply = response.choices[0].message.content.strip()
-                model_used = response.model
-                logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
-                return ai_reply
-            except Exception as e:
-                logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
-                if attempt == retry_attempts - 1:
-                    logger.info("✅ Set default AI reply due to repeated errors")
-                    return "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
-                time.sleep(1)
-                continue
-    except Exception as e:
-        logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
+            async with openai_semaphore:
+                retry_attempts = 2
+                for attempt in range(retry_attempts):
+                    try:
+                        async with session.post(
+                            "https://api.openai.com/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {openai.api_key}"},
+                            json={"model": "gpt-4o-mini", "messages": conversation_history, "max_tokens": 150}
+                        ) as response:
+                            result = await response.json()
+                            ai_reply = result["choices"][0]["message"]["content"].strip()
+                            logger.info(f"✅ AI reply: {ai_reply}")
+                            return ai_reply
+                    except Exception as e:
+                        logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
+                        if attempt == retry_attempts - 1:
+                            logger.info("✅ Set default AI reply due to repeated errors")
+                            return "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
+                        await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
+            return "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
 
 def handle_booking_flow(message, convo_id, chat_id, channel):
     """
@@ -461,7 +487,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
+        c.execute("SELECT booking_state FROM conversations WHERE id = %s", (convo_id,))
         booking_state = c.fetchone()[0]
 
     # Parse dates and numbers using regex as a fallback
@@ -492,8 +518,8 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 booking_state_dict = {"status": "awaiting_guests", "check_in": check_in.strftime("%Y-%m-%d"), "check_out": check_out.strftime("%Y-%m-%d")}
                 with get_db_connection() as conn:
                     c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                    c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
+                    c.execute("UPDATE conversations SET booking_state = %s WHERE id = %s", (str(booking_state_dict), convo_id))
+                    c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (%s, %s, %s)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                     conn.commit()
                 ai_reply = "Thanks for providing your dates! How many guests will be staying?"
                 return (False, ai_reply)
@@ -509,8 +535,8 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c = conn.cursor()
                 booking_state_dict["guests"] = guests
                 booking_state_dict["status"] = "awaiting_room_type"
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
+                c.execute("UPDATE conversations SET booking_state = %s WHERE id = %s", (str(booking_state_dict), convo_id))
+                c.execute("UPDATE bookings SET guests = %s WHERE conversation_id = %s", (guests, convo_id))
                 conn.commit()
             ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
             return (False, ai_reply)
@@ -538,16 +564,16 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             is_fully_booked = check_availability(check_in, check_out)
             if is_fully_booked:
                 ai_reply = f"Sorry, it looks like we’re fully booked for your dates ({booking_state_dict['check_in']} to {booking_state_dict['check_out']}). Please choose different dates."
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET booking_state = %s WHERE id = %s", (None, convo_id))
+                c.execute("DELETE FROM bookings WHERE conversation_id = %s", (convo_id,))
                 conn.commit()
                 return (False, ai_reply)
             else:
                 booking_state_dict["room_type"] = room_type
                 booking_state_dict["total_cost"] = total_cost
                 booking_state_dict["status"] = "confirming"
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
+                c.execute("UPDATE conversations SET booking_state = %s WHERE id = %s", (str(booking_state_dict), convo_id))
+                c.execute("UPDATE bookings SET room_type = %s, total_cost = %s WHERE conversation_id = %s", (room_type, total_cost, convo_id))
                 conn.commit()
                 ai_reply = f"Great choice! Let me check availability for your dates. Assuming everything is available, your total will be ${total_cost}. Would you like to proceed with the booking?"
                 return (False, ai_reply)
@@ -556,15 +582,15 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             ai_reply = "Perfect! To finalize your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely."
             with get_db_connection() as conn:
                 c = conn.cursor()
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = %s", (convo_id,))
                 conn.commit()
             socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
             return (False, ai_reply)
         else:
             with get_db_connection() as conn:
                 c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET booking_state = %s WHERE id = %s", (None, convo_id))
+                c.execute("DELETE FROM bookings WHERE conversation_id = %s", (convo_id,))
                 conn.commit()
             ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
             return (False, ai_reply)
@@ -575,7 +601,7 @@ def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated})
 
 @app.route("/chat", methods=["POST"])
-def chat():
+async def chat():
     data = request.get_json()
     convo_id = data.get("conversation_id")
     user_message = data.get("message")
@@ -587,7 +613,7 @@ def chat():
         logger.info(f"✅ Fetching conversation details for convo_id {convo_id}")
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT username, channel, assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT username, channel, assigned_agent, ai_enabled FROM conversations WHERE id = %s", (convo_id,))
             result = c.fetchone()
             username, channel, assigned_agent, ai_enabled = result if result else (None, None, None, None)
         if not username:
@@ -625,7 +651,7 @@ def chat():
                 if not continue_with_ai:
                     logger.info("✅ Booking flow handled, using booking flow reply")
                 else:
-                    ai_reply = ai_respond(user_message, convo_id)
+                    ai_reply = await ai_respond(user_message, convo_id)
 
             logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
@@ -643,19 +669,18 @@ def chat():
                 try:
                     with get_db_connection() as conn:
                         c = conn.cursor()
-                        c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = ?", (convo_id,))
+                        c.execute("SELECT handoff_notified, visible_in_conversations FROM conversations WHERE id = %s", (convo_id,))
                         result = c.fetchone()
                         handoff_notified, visible_in_conversations = result if result else (0, 0)
                     logger.info(f"✅ Handoff check for convo_id {convo_id}: handoff_notified={handoff_notified}, visible_in_conversations={visible_in_conversations}")
                     if not handoff_notified:
                         with get_db_connection() as conn:
                             c = conn.cursor()
-                            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = %s", (convo_id,))
                             conn.commit()
-                        time.sleep(3.0)
                         with get_db_connection() as conn:
                             c = conn.cursor()
-                            c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                            c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = %s", (convo_id,))
                             updated_result = c.fetchone()
                         logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
                         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
@@ -672,7 +697,7 @@ def chat():
         return jsonify({"error": "Failed to process chat message"}), 500
 
 @app.route("/telegram", methods=["POST"])
-def telegram():
+async def telegram():
     update = request.get_json()
     logger.info(f"Received Telegram update: {update}")
     chat_id = str(update["message"]["chat"]["id"])
@@ -680,11 +705,11 @@ def telegram():
 
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, ai_enabled, handoff_notified, assigned_agent FROM conversations WHERE username = ? AND channel = 'telegram'", (chat_id,))
+        c.execute("SELECT id, ai_enabled, handoff_notified, assigned_agent FROM conversations WHERE username = %s AND channel = 'telegram'", (chat_id,))
         result = c.fetchone()
 
         if not result:
-            c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations) VALUES (?, 'telegram', 1, 0)", (chat_id,))
+            c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations) VALUES (%s, 'telegram', 1, 0)", (chat_id,))
             conn.commit()
             convo_id = c.lastrowid
             ai_enabled = 1
@@ -721,17 +746,16 @@ def telegram():
             if not continue_with_ai:
                 logger.info("✅ Booking flow handled, using booking flow reply")
             else:
-                response = ai_respond(message, convo_id)
+                response = await ai_respond(message, convo_id)
 
         log_message(convo_id, "AI", response, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
 
         if "agent" in response.lower() or "sorry" in response.lower() or "HELP" in message.upper():
             if not handoff_notified:
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = %s", (convo_id,))
                 conn.commit()
-                # Verify the update
-                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = %s", (convo_id,))
                 updated_result = c.fetchone()
                 logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
                 socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
@@ -747,9 +771,8 @@ def telegram():
         return jsonify({}), 200
 
 @app.route("/instagram", methods=["POST"])
-def instagram():
+async def instagram():
     logger.info("✅ Entering /instagram endpoint (placeholder)")
-    # TODO: Implement IG-specific logic with bookings table, parsing, and Google Calendar
     data = request.get_json()
     if "object" not in data or data["object"] != "instagram":
         logger.info("✅ Not an Instagram event, returning OK")
@@ -762,12 +785,12 @@ def instagram():
             try:
                 with get_db_connection() as conn:
                     c = conn.cursor()
-                    c.execute("SELECT id FROM conversations WHERE username = ?", (sender_id,))
+                    c.execute("SELECT id FROM conversations WHERE username = %s", (sender_id,))
                     convo = c.fetchone()
                 if not convo:
                     with get_db_connection() as conn:
                         c = conn.cursor()
-                        c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                        c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (%s, %s, %s, 1, 0)", 
                                   (sender_id, incoming_msg, "instagram"))
                         convo_id = c.lastrowid
                 else:
@@ -778,7 +801,7 @@ def instagram():
                     logger.info(f"Processing Instagram message with AI: {incoming_msg}")
                     with get_db_connection() as conn:
                         c = conn.cursor()
-                        c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
+                        c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = %s ORDER BY timestamp DESC LIMIT 10", (convo_id,))
                         messages = c.fetchall()
                     conversation_history = [
                         {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a friendly hotel representative. Use the provided business information and Q&A to answer guest questions naturally and professionally. If the query involves collecting payment details, credit card information, or any sensitive personal information, immediately escalate by saying: 'To proceed with your booking, I’ll need to collect payment details. Let me connect you with an agent to assist you securely.' Do not suggest providing the information directly or offer alternative contact methods like phone numbers or email addresses. For other complex queries or those requiring personal assistance, escalate with a similar message using 'agent'."}
@@ -790,43 +813,34 @@ def instagram():
                     conversation_history.append({"role": "user", "content": incoming_msg})
                     logger.info(f"✅ Sending conversation history to OpenAI: {conversation_history}")
 
-                    response = openai.ChatCompletion.create(
-                        model="gpt-4o-mini",
-                        messages=conversation_history,
-                        max_tokens=150
-                    )
-                    ai_reply = response.choices[0].message.content.strip()
-                    model_used = response.model
-                    logger.info(f"✅ Instagram AI reply: {ai_reply}, Model: {model_used}")
+                    response = await ai_respond(incoming_msg, convo_id)
+                    logger.info(f"✅ Instagram AI reply: {response}")
                 except Exception as e:
-                    ai_reply = "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
+                    response = "I’m sorry, I’m having trouble processing your request right now. Let me connect you with an agent to assist you."
                     logger.error(f"❌ Instagram OpenAI error: {str(e)}")
                     logger.error(f"❌ Instagram OpenAI error type: {type(e).__name__}")
                 logger.info("✅ Logging Instagram AI response")
-                log_message(convo_id, "AI", ai_reply, "ai")
+                log_message(convo_id, "AI", response, "ai")
                 logger.info("✅ Sending Instagram AI response")
                 requests.post(
                     f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
-                    json={"recipient": {"id": sender_id}, "message": {"text": ai_reply}}
+                    json={"recipient": {"id": sender_id}, "message": {"text": response}}
                 )
                 logger.info("✅ Emitting new_message event for Instagram")
-                socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": "instagram"})
-                if "agent" in ai_reply.lower() or "sorry" in ai_reply.lower():
+                socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "instagram"})
+                if "agent" in response.lower() or "sorry" in response.lower():
                     try:
                         with get_db_connection() as conn:
                             c = conn.cursor()
-                            c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
+                            c.execute("SELECT handoff_notified FROM conversations WHERE id = %s", (convo_id,))
                             handoff_notified = c.fetchone()[0]
                         if not handoff_notified:
                             with get_db_connection() as conn:
                                 c = conn.cursor()
-                                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = %s", (convo_id,))
                                 conn.commit()
-                            time.sleep(3.0)
-                            with get_db_connection() as conn:
-                                c = conn.cursor()
-                                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-                                updated_result = c.fetchone()
+                            c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = %s", (convo_id,))
+                            updated_result = c.fetchone()
                             logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
                             socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": sender_id, "channel": "instagram"})
                             logger.info(f"✅ Instagram handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
@@ -864,7 +878,7 @@ def send_welcome():
         return jsonify({"error": "Missing to_number"}), 400
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "telegram"))
+        c.execute("SELECT id FROM conversations WHERE username = %s AND channel = %s", (to_number, "telegram"))
         convo = c.fetchone()
     if not convo:
         logger.error("❌ Conversation not found in /send-welcome")
@@ -896,11 +910,18 @@ def handoff():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 0 WHERE id = ?", (current_user.username, convo_id))
-            c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
+            # Check if the conversation is already assigned
+            c.execute("SELECT assigned_agent FROM conversations WHERE id = %s", (convo_id,))
+            result = c.fetchone()
+            if result and result[0] is not None:
+                logger.warning(f"❌ Conversation {convo_id} already assigned to {result[0]}")
+                return jsonify({"error": f"Conversation already assigned to {result[0]}"}), 409
+            c.execute("UPDATE conversations SET assigned_agent = %s, handoff_notified = 0 WHERE id = %s", (current_user.username, convo_id))
+            c.execute("SELECT username, channel FROM conversations WHERE id = %s", (convo_id,))
             username, channel = c.fetchone()
             conn.commit()
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+        socketio.emit("notify_agent", {"agent": current_user.username, "conversation_id": convo_id, "user": username, "channel": channel})
         logger.info(f"✅ Chat {convo_id} assigned to {current_user.username}")
         return jsonify({"message": f"Chat assigned to {current_user.username}"})
     except Exception as e:
@@ -919,7 +940,7 @@ def handback_to_ai():
         with get_db_connection() as conn:
             c = conn.cursor()
             # Fetch conversation details
-            c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = %s", (convo_id,))
             result = c.fetchone()
             if not result:
                 logger.error(f"❌ Conversation not found: {convo_id}")
@@ -932,11 +953,11 @@ def handback_to_ai():
                 return jsonify({"error": "You are not assigned to this conversation"}), 403
 
             # Re-enable AI and clear the assigned agent, ensure visible_in_conversations remains 0
-            c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0, visible_in_conversations = 0 WHERE id = ?", (convo_id,))
+            c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0, visible_in_conversations = 0 WHERE id = %s", (convo_id,))
             conn.commit()
 
             # Verify the update
-            c.execute("SELECT ai_enabled FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT ai_enabled FROM conversations WHERE id = %s", (convo_id,))
             updated_result = c.fetchone()
             if updated_result:
                 ai_enabled = updated_result[0]
@@ -966,20 +987,20 @@ def handback_to_ai():
         return jsonify({"error": "Failed to hand back to AI"}), 500
         
 @app.route("/test-openai", methods=["GET"])
-def test_openai():
+async def test_openai():
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=10
-        )
-        ai_reply = response.choices[0].message.content.strip()
-        model_used = response.model
-        logger.info(f"✅ OpenAI test successful: {ai_reply}, Model: {model_used}")
-        return jsonify({"status": "success", "reply": ai_reply, "model": model_used}), 200
+        async with ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {openai.api_key}"},
+                json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10}
+            ) as response:
+                result = await response.json()
+                ai_reply = result["choices"][0]["message"]["content"].strip()
+                logger.info(f"✅ OpenAI test successful: {ai_reply}")
+                return jsonify({"status": "success", "reply": ai_reply}), 200
     except Exception as e:
         logger.error(f"❌ OpenAI test failed: {str(e)}")
-        logger.error(f"❌ OpenAI test error type: {type(e).__name__}")
         return jsonify({"status": "failed", "error": str(e)}), 500
 
 @app.route("/clear-database", methods=["POST"])
