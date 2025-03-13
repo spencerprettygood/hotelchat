@@ -161,9 +161,10 @@ def add_test_conversations():
                     ("guest3", "Do you have a pool?")]
                 convo_ids = []
                 for username, message in test_conversations:
-                    c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (%s, %s, %s, 1, 0)", 
+                    c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (%s, %s, %s, 1, 0) RETURNING id",
                             (username, message, "dashboard"))
-                    convo_ids.append(c.lastrowid)
+                    convo_id = c.fetchone()[0]  # Fetch the returned ID
+                    convo_ids.append(convo_id)
                 test_messages = [
                     (convo_ids[0], "guest1", "Hi, can I book a room?", "user"),
                     (convo_ids[0], "AI", "Yes, I can help with that! What dates are you looking for?", "ai"),
