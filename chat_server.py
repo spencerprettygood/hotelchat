@@ -285,8 +285,8 @@ def get_conversations():
             c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
             raw_conversions = c.fetchall()
             logger.info(f"✅ Raw conversations from database: {raw_conversions}")
-            c.execute("SELECT id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
-            conversations = [{"id": row[0], "channel": row[1], "assigned_agent": row[2]} for row in c.fetchall()]
+            c.execute("SELECT id, username, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
+            conversations = [{"id": row[0], "username": row[1], "channel": row[2], "assigned_agent": row[3]} for row in c.fetchall()]
             logger.info(f"✅ Fetched conversations for dashboard: {conversations}")
         return jsonify(conversations)
     except Exception as e:
@@ -572,7 +572,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
-    return jsonify({"is_authenticated": current_user.is_authenticated})
+    return jsonify({"is_authenticated": current_user.is_authenticated, "agent": current_user.username if current_user.is_authenticated else None})
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -897,6 +897,9 @@ def handoff():
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 0 WHERE id = ?", (current_user.username, convo_id))
+            c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+            result = c.fetchone()
+            logger.info(f"✅ Handoff updated: convo_id={convo_id}, assigned_agent={result[2]}") # Debug log
             c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
             username, channel = c.fetchone()
             conn.commit()
