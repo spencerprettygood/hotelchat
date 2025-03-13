@@ -134,7 +134,7 @@ def initialize_database():
             c.execute('''CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
                 conversation_id INTEGER NOT NULL,
-                message_user TEXT NOT NULL,  -- Renamed from 'user' to 'message_user'
+                message_user TEXT NOT NULL,
                 message TEXT NOT NULL,
                 sender TEXT NOT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -487,6 +487,12 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
             return (False, ai_reply)
     return (True, None)
+
+@app.route("/check-auth", methods=["GET"])
+def check_auth():
+    if current_user.is_authenticated:
+        return jsonify({"authenticated": True, "username": current_user.username}), 200
+    return jsonify({"authenticated": False}), 200
 
 @app.route("/login", methods=["POST"])
 def login():
