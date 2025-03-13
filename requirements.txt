@@ -20,5 +20,8 @@ google-api-python-client==2.125.0
 # PostgreSQL database adapter
 psycopg2-binary==2.9.9
 
+# WSGI HTTP Server
+gunicorn==22.0.0  # Compatible with gevent and Flask
+
 # Development and debugging (optional, can be removed in production)
 werkzeug==3.0.1  # For Flask compatibility
