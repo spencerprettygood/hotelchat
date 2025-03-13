@@ -69,7 +69,7 @@ WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", None)
 WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
 
 # PostgreSQL configuration using DATABASE_URL
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("postgresql://amapola_chatbot_sql_user:oWokKS1br3DVc5TqlxVRZA1jJUlMZtkj@dpg-cv9hoqlrie7s73djgiqg-a/amapola_chatbot_sql")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable not set. Please set it in your Render environment.")
 url = urlparse.urlparse(DATABASE_URL)
