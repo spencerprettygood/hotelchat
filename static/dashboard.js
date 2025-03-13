@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     checkAuthStatus();
     fetchConversations();
-    setInterval(fetchConversations, 5000); // Poll every 5 seconds
+    setInterval(fetchConversations, 10000); // Poll every 10 seconds
 
     // Add event listener for Enter key to send messages
     const messageInput = document.getElementById('messageInput');
