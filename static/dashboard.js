@@ -1,10 +1,9 @@
-// dashboard.js
 const socket = io();
 
 let currentConversationId = null;
-let currentFilter = 'unassigned'; // Default filter
-let currentChannel = null; // Default: no channel filter
-let currentAgent = null; // Store the current agent's username
+let currentFilter = 'unassigned';
+let currentChannel = null;
+let currentAgent = null;
 
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -17,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     checkAuthStatus();
     fetchConversations();
-    setInterval(fetchConversations, 5000); // Poll every 5 seconds
+    setInterval(fetchConversations, 3000); // Poll every 3 seconds
 });
 
 // Check if user is authenticated
@@ -33,7 +32,7 @@ function checkAuthStatus() {
             const loginPage = document.getElementById('loginPage');
             const dashboardSection = document.getElementById('dashboard');
             if (data.is_authenticated) {
-                currentAgent = data.agent; // Assuming /check-auth returns the agent's username
+                currentAgent = data.agent;
                 loginPage.style.display = 'none';
                 dashboardSection.style.display = 'block';
                 fetchConversations();
@@ -42,7 +41,10 @@ function checkAuthStatus() {
                 dashboardSection.style.display = 'none';
             }
         })
-        .catch(error => console.error('Error checking auth status:', error));
+        .catch(error => {
+            console.error('Error checking auth status:', error);
+            alert('Failed to check authentication status. Please try again.');
+        });
 }
 
 // Login function for the button
@@ -72,7 +74,7 @@ function login() {
         })
         .then(data => {
             if (data.message === 'Login successful') {
-                currentAgent = data.agent; // Assuming /login returns the agent's username
+                currentAgent = data.agent;
                 document.getElementById('loginPage').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
                 fetchConversations();
@@ -80,7 +82,10 @@ function login() {
                 alert('Login failed: ' + data.message);
             }
         })
-        .catch(error => console.error('Error during login:', error));
+        .catch(error => {
+            console.error('Error during login:', error);
+            alert('Login failed. Please try again.');
+        });
 }
 
 // Logout button
@@ -98,101 +103,93 @@ if (logoutButton) {
             })
             .then(data => {
                 if (data.message === 'Logged out successfully') {
-                    currentAgent = null; // Clear the current agent
+                    currentAgent = null;
                     document.getElementById('loginPage').style.display = 'flex';
                     document.getElementById('dashboard').style.display = 'none';
                 }
             })
-            .catch(error => console.error('Error during logout:', error));
+            .catch(error => {
+                console.error('Error during logout:', error);
+                alert('Logout failed. Please try again.');
+            });
     });
 } else {
     console.error('Logout button not found.');
 }
 
+let fetchTimeout;
 function fetchConversations() {
-    const conversationList = document.getElementById('conversationList');
-    if (!conversationList) {
-        console.error('Conversation list (conversationList) is missing.');
-        return;
-    }
+    clearTimeout(fetchTimeout);
+    fetchTimeout = setTimeout(async () => {
+        const conversationList = document.getElementById('conversationList');
+        if (!conversationList) {
+            console.error('Conversation list (conversationList) is missing.');
+            return;
+        }
 
-    fetch('/conversations')
-        .then(response => {
+        try {
+            const response = await fetch(`/conversations?filter=${currentFilter}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
             }
-            return response.json();
-        })
-        .then(conversations => {
+            const conversations = await response.json();
+
             conversationList.innerHTML = '';
 
-            // Filter conversations based on currentFilter and currentChannel
             let filteredConversations = conversations.filter(convo => {
-                // Filter by channel
                 if (currentChannel && convo.channel !== currentChannel) {
                     return false;
                 }
-                // Filter by assignment
-                if (currentFilter === 'unassigned') {
-                    return !convo.assigned_agent;
-                } else if (currentFilter === 'you') {
-                    return convo.assigned_agent === currentAgent;
-                } else if (currentFilter === 'team') {
-                    return convo.assigned_agent && convo.assigned_agent !== currentAgent;
-                }
-                return true; // 'all' filter
+                return true;
             });
 
-            // Update counts
             updateCounts(conversations);
 
             filteredConversations.forEach(convo => {
                 const li = document.createElement('li');
-                // Add spacing via CSS class
-                li.className = 'conversation-item'; // Add a class for styling
+                li.className = 'conversation-item';
 
-                // Create a container for the conversation info and button
                 const convoContainer = document.createElement('div');
                 convoContainer.style.display = 'flex';
                 convoContainer.style.justifyContent = 'space-between';
                 convoContainer.style.alignItems = 'center';
 
-                // Conversation info
                 const convoInfo = document.createElement('span');
                 convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
 
-                // Add "Take Over" button for unassigned conversations
                 if (currentFilter === 'unassigned' && !convo.assigned_agent) {
                     const takeOverButton = document.createElement('button');
                     takeOverButton.textContent = 'Take Over';
                     takeOverButton.onclick = (e) => {
-                        e.stopPropagation(); // Prevent triggering loadConversation
+                        e.stopPropagation();
                         takeOverConversation(convo.id);
                     };
-                    takeOverButton.className = 'take-over-btn'; // Use a CSS class for consistency
+                    takeOverButton.className = 'take-over-btn';
                     convoContainer.appendChild(takeOverButton);
                 }
 
-                // Add "Hand Back to AI" button for conversations assigned to the current agent
                 if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
                     const handBackButton = document.createElement('button');
                     handBackButton.textContent = 'Hand Back to AI';
                     handBackButton.onclick = (e) => {
-                        e.stopPropagation(); // Prevent triggering loadConversation
+                        e.stopPropagation();
                         handBackToAI(convo.id);
                     };
-                    handBackButton.className = 'handback-button'; // Use the CSS class from dashboard.html
+                    handBackButton.className = 'handback-button';
                     convoContainer.appendChild(handBackButton);
                 }
 
                 li.appendChild(convoContainer);
                 conversationList.appendChild(li);
             });
-        })
-        .catch(error => console.error('Error fetching conversations:', error));
+        } catch (error) {
+            console.error('Error fetching conversations:', error);
+            alert('Failed to fetch conversations. Please try again.');
+        }
+    }, 500); // Debounce for 500ms
 }
 
 // Update conversation counts
@@ -241,15 +238,18 @@ function takeOverConversation(convoId) {
         })
         .then(data => {
             if (data.message) {
-                fetchConversations(); // Refresh the conversation list
+                fetchConversations();
                 if (currentConversationId === convoId) {
-                    loadConversation(convoId); // Reload the current conversation
+                    loadConversation(convoId);
                 }
             } else {
                 alert('Error assigning chat: ' + data.error);
             }
         })
-        .catch(error => console.error('Error during handoff:', error));
+        .catch(error => {
+            console.error('Error during handoff:', error);
+            alert('Failed to take over the conversation. Please try again.');
+        });
 }
 
 // Load a conversation into the active panel
@@ -277,15 +277,13 @@ function loadConversation(convoId) {
             messages.forEach(msg => {
                 const div = document.createElement('div');
                 const isUser = msg.sender === 'user';
-                div.className = 'message'; // Add the base message class
+                div.className = 'message';
                 div.classList.add(isUser ? 'user-message' : 'agent-message');
 
-                // Message text
                 const textSpan = document.createElement('span');
                 textSpan.textContent = msg.message;
                 div.appendChild(textSpan);
 
-                // Timestamp
                 const timestampSpan = document.createElement('span');
                 timestampSpan.className = 'message-timestamp';
                 const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
@@ -296,11 +294,12 @@ function loadConversation(convoId) {
             });
 
             chatBox.scrollTop = chatBox.scrollHeight;
-
-            // Update client name
             clientName.textContent = username;
         })
-        .catch(error => console.error('Error loading messages:', error));
+        .catch(error => {
+            console.error('Error loading messages:', error);
+            alert('Failed to load conversation messages. Please try again.');
+        });
 }
 
 // Send a message
@@ -337,15 +336,19 @@ function sendMessage() {
         })
         .then(data => {
             if (data.reply) {
-                // If AI responds, it will be handled via Socket.IO
+                // AI response will be handled via Socket.IO
             } else if (data.status === 'success') {
-                // Agent message sent successfully
                 messageInput.value = '';
+                loadConversation(currentConversationId); // Refresh the chat
             } else {
                 console.error('Error sending message:', data.error);
+                alert('Failed to send message: ' + data.error);
             }
         })
-        .catch(error => console.error('Error sending message:', error));
+        .catch(error => {
+            console.error('Error sending message:', error);
+            alert('Failed to send message. Please try again.');
+        });
 }
 
 // Hand back to AI
@@ -365,16 +368,19 @@ function handBackToAI(convoId) {
         })
         .then(data => {
             if (data.message) {
-                alert(data.message); // Temporary feedback; consider a better UI solution
-                socket.emit('refresh_conversations', { conversation_id: convoId });
+                alert(data.message);
+                fetchConversations();
                 if (currentConversationId === convoId) {
-                    loadConversation(convoId); // Refresh the chat panel
+                    loadConversation(convoId);
                 }
             } else {
                 alert('Failed to hand back to AI: ' + data.error);
             }
         })
-        .catch(error => console.error('Error handing back to AI:', error));
+        .catch(error => {
+            console.error('Error handing back to AI:', error);
+            alert('Failed to hand back to AI. Please try again.');
+        });
 }
 
 // Socket.IO event listeners
@@ -385,7 +391,7 @@ socket.on('new_message', (data) => {
         if (chatBox) {
             const div = document.createElement('div');
             const isUser = data.sender === 'user';
-            div.className = 'message'; // Add the base message class
+            div.className = 'message';
             div.classList.add(isUser ? 'user-message' : 'agent-message');
 
             const textSpan = document.createElement('span');
@@ -412,31 +418,19 @@ socket.on('error', (data) => {
 
 socket.on('refresh_conversations', (data) => {
     console.log('Refresh conversations event received:', data);
-    const conversationId = data.conversation_id;
-    pollVisibility(conversationId);
     fetchConversations();
 });
 
-// Poll visibility of a conversation
-function pollVisibility(conversationId) {
-    fetch(`/check-visibility?conversation_id=${conversationId}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.visible) {
-                console.log(`Conversation ${conversationId} is now visible`);
-                fetchConversations(); // Refresh the list again to be sure
-            } else {
-                console.log(`Conversation ${conversationId} is not yet visible, polling again...`);
-                setTimeout(() => pollVisibility(conversationId), 1000);
-            }
-        })
-        .catch(error => {
-            console.error('Error polling visibility:', error);
-            setTimeout(() => pollVisibility(conversationId), 1000);
-        });
-}
+socket.on('notify_agent', (data) => {
+    if (data.agent === currentAgent) {
+        const notificationArea = document.getElementById('notificationArea');
+        if (notificationArea) {
+            notificationArea.textContent = `New conversation assigned to you: ${data.conversation_id}`;
+            notificationArea.style.display = 'block';
+            setTimeout(() => {
+                notificationArea.style.display = 'none';
+            }, 5000);
+        }
+        fetchConversations();
+    }
+});
