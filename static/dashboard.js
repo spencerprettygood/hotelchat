@@ -17,6 +17,19 @@ document.addEventListener('DOMContentLoaded', () => {
     checkAuthStatus();
     fetchConversations();
     setInterval(fetchConversations, 5000); // Poll every 5 seconds
+
+    // Add event listener for Enter key to send messages
+    const messageInput = document.getElementById('messageInput');
+    if (messageInput) {
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' || e.keyCode === 13) {
+                e.preventDefault(); // Prevent default behavior (e.g., new line)
+                sendMessage(); // Call the sendMessage function
+            }
+        });
+    } else {
+        console.error('Message input not found for adding Enter key listener.');
+    }
 });
 
 // Check if user is authenticated
@@ -343,7 +356,7 @@ function sendMessage() {
                 // If AI responds, it will be handled via Socket.IO
             } else if (data.status === 'success') {
                 // Agent message sent successfully
-                messageInput.value = '';
+                messageInput.value = ''; // Clear the input after sending
             } else {
                 console.error('Error sending message:', data.error);
             }
