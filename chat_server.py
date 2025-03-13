@@ -713,7 +713,7 @@ def telegram():
 
         # Check for HELP keyword
         if "HELP" in message.upper():
-            response = "I’m sorry, I couldn’t process that. Let me get a human to assist you."
+            response = "I’m sorry, I couldn’t process that. Let me get another agent to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + response)
         else:
             # Check booking flow
