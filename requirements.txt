@@ -1,13 +1,24 @@
-flask
-Flask-CORS
+# Web framework and extensions
+flask==2.3.3
+flask-cors==4.0.0
 flask-socketio==5.3.6
-flask-login
-gevent
-openai==0.27.8
-requests
-gunicorn==22.0.0
-python-socketio==5.11.0
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
+flask-login==0.6.3
+
+# Asynchronous handling for Socket.IO
+gevent==24.2.1
+
+# OpenAI API (pinned to pre-1.0.0 version for compatibility with current code)
+openai==0.28.1
+
+# HTTP requests
+requests==2.31.0
+
+# Google Calendar integration
+google-auth==2.29.0
+google-api-python-client==2.125.0
+
+# PostgreSQL database adapter
+psycopg2-binary==2.9.9
+
+# Development and debugging (optional, can be removed in production)
+werkzeug==3.0.1  # For Flask compatibility
