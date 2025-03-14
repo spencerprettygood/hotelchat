@@ -674,30 +674,36 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             logger.info(f"Booking flow step completed in {duration:.2f} seconds - Invalid room type")
             return (False, ai_reply)
 
-    elif booking_state_dict.get("status") == "confirming":
-        if any(word in message.lower() for word in ["yes", "please", "confirmed"]):
-            check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
-            check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-            ai_reply = (f"Perfect! You’ve booked a {booking_state_dict['room_type'].title()} for {booking_state_dict['guests']} guests from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}. "
-                       "A human agent will assist you with payment and final confirmation shortly.")
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                conn.commit()
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
-            duration = time.time() - start_time
-            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Handoff initiated")
-            return (False, ai_reply)
-        else:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
-                conn.commit()
-            ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
-            duration = time.time() - start_time
-            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Booking cancelled")
-            return (False, ai_reply)
+   elif booking_state_dict.get("status") == "confirming":
+    check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+    check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+    if any(word in message.lower() for word in ["yes", "please", "confirmed"]):
+        ai_reply = (f"Great! I’ve reserved a {booking_state_dict['room_type'].title()} for {booking_state_dict['guests']} guests from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')} "
+                    f"at ${booking_state_dict['total_cost']}. A human agent will contact you shortly to process payment and finalize your booking.")
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+            conn.commit()
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
+        duration = time.time() - start_time
+        logger.info(f"Booking flow step completed in {duration:.2f} seconds - Reservation made, handoff initiated")
+        return (False, ai_reply)
+    elif any(word in message.lower() for word in ["no", "cancel", "nevermind"]):
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+            c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+            conn.commit()
+        ai_reply = "Okay, I’ve canceled the reservation. Let me know if you’d like to start over or have other questions!"
+        duration = time.time() - start_time
+        logger.info(f"Booking flow step completed in {duration:.2f} seconds - Booking cancelled")
+        return (False, ai_reply)
+    else:
+        ai_reply = (f"Just to confirm, you’d like a {booking_state_dict['room_type'].title()} for {booking_state_dict['guests']} guests from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')} "
+                    f"for ${booking_state_dict['total_cost']}. Please say 'yes' to proceed or 'no' to cancel.")
+        duration = time.time() - start_time
+        logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting clear confirmation")
+        return (False, ai_reply)
 
     duration = time.time() - start_time
     logger.info(f"Booking flow step completed in {duration:.2f} seconds - No booking action taken")
