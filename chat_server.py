@@ -679,7 +679,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
             check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
             ai_reply = (f"Perfect! You’ve booked a {booking_state_dict['room_type'].title()} for {booking_state_dict['guests']} guests from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}. "
-                       "A human agent will assist you with payment and final confirmation shortly.")
+                       "A sales agent will assist you with payment and final confirmation shortly.")
             with get_db_connection() as conn:
                 c = conn.cursor()
                 c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
