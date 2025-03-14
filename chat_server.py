@@ -557,7 +557,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 break
 
         if not date_str:
-            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15')."
+            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15' or '2025-03-10 to 2025-03-15')."
             return (False, ai_reply)
 
         try:
@@ -586,7 +586,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
                           (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                 conn.commit()
-            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. What room type would you like? We have Standard Room, Deluxe Room, or Suite."
+            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: Standard Room, Junior Suite, Apartment, or Villa?"
             return (False, ai_reply)
 
         except ValueError as e:
