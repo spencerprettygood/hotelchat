@@ -698,7 +698,7 @@ def chat():
                 if not continue_with_ai:
                     logger.info("✅ Booking flow handled, using booking flow reply")
                 else:
-                    ai_reply = ai_respond(user_message, convo_id)for st
+                    ai_reply = ai_respond(user_message, convo_id)
 
             logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
