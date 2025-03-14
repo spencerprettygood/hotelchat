@@ -470,6 +470,7 @@ def ai_respond(message, convo_id):
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
         return "I’m sorry, I’m having trouble processing your request right now. Let me tranfer you to another agent."
         
+# Insert extract_room_type_with_ai function here (starts at line 554)
 def extract_room_type_with_ai(message):
     """
     Use OpenAI to extract the intended room type from the user's message.
@@ -513,6 +514,7 @@ def extract_room_type_with_ai(message):
         logger.error(f"❌ Error extracting room type with AI: {str(e)}")
         return None
 
+# Existing handle_booking_flow function (now starts at line 595 after adding the new function)
 def handle_booking_flow(message, convo_id, chat_id, channel):
     """
     Handle the booking flow for a conversation.
@@ -592,24 +594,24 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             return (False, ai_reply)
 
     # Step 2: Collect and validate room type
-        elif booking_state_dict.get("status") == "awaiting_room_type":
-            # First try simple normalization and matching
-            message_normalized = message.lower().replace(" ", "")
-            normalized_room_types = {room_type.replace(" ", ""): room_type for room_type in ROOM_TYPES}
-    
-            selected_room = None
-            for norm_room, orig_room in normalized_room_types.items():
-                if norm_room in message_normalized:
-                     selected_room = orig_room
-                    break
+    elif booking_state_dict.get("status") == "awaiting_room_type":
+        # First try simple normalization and matching
+        message_normalized = message.lower().replace(" ", "")
+        normalized_room_types = {room_type.replace(" ", ""): room_type for room_type in ROOM_TYPES}
+        
+        selected_room = None
+        for norm_room, orig_room in normalized_room_types.items():
+            if norm_room in message_normalized:
+                selected_room = orig_room
+                break
 
-    # If simple matching fails, use AI to interpret the user's intent
-            if not selected_room:
-                selected_room = extract_room_type_with_ai(message)
+        # If simple matching fails, use AI to interpret the user's intent
+        if not selected_room:
+            selected_room = extract_room_type_with_ai(message)
 
-            if not selected_room:
-                ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
-                return (False, ai_reply)
+        if not selected_room:
+            ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
+            return (False, ai_reply)
 
         # Check availability
         check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
@@ -641,7 +643,6 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
         return (False, ai_reply)
 
     return (True, None)
-
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated, "agent": current_user.username if current_user.is_authenticated else None})
