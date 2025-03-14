@@ -539,22 +539,33 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
         booking_state = c.fetchone()
         if booking_state:
             booking_state = booking_state[0]
+            logger.debug(f"Retrieved booking_state from DB: {booking_state}")
         else:
-            logger.warning(f"No booking state found for convo_id {convo_id}, initializing as None")
+            logger.warning(f"No booking_state found for convo_id {convo_id}, initializing as None")
             booking_state = None
     
     # Parse booking_state (default to empty dict if None)
-    booking_state_dict = eval(booking_state) if booking_state else {}
-    logger.debug(f"Current booking_state_dict: {booking_state_dict}")
+    try:
+        booking_state_dict = eval(booking_state) if booking_state else {}
+        logger.debug(f"Parsed booking_state_dict: {booking_state_dict}")
+    except (SyntaxError, TypeError) as e:
+        logger.error(f"Failed to evaluate booking_state '{booking_state}': {str(e)}")
+        booking_state_dict = {}
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str({}), convo_id))
+            conn.commit()
 
     # Parse dates and room type using regex
     date_match = re.search(r'(?:from\s+)?(\w+\s+\d+)\s+(?:to\s+)?(\w+\s+\d+)', message, re.IGNORECASE)
     room_match = re.search(r'(standard room|junior suite|apartment|villa)', message.lower())
     dates = (date_match.group(1), date_match.group(2)) if date_match else None
     room_type_input = room_match.group(0) if room_match else None
+    logger.debug(f"Parsed input - dates: {dates}, room_type_input: {room_type_input}")
 
     # Booking flow
     if ("book" in message.lower() or "available" in message.lower()) and not booking_state_dict.get("status"):
+        logger.debug("Entering initial booking condition")
         if not dates:
             if "available" in message.lower():
                 ai_reply = "I can check availability for you! Please provide your preferred dates (e.g., 'March 14 to March 17' or 'from March 14 to March 17')."
@@ -617,6 +628,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 return (False, ai_reply)
 
     elif booking_state_dict.get("status") == "awaiting_room_type":
+        logger.debug("Entering awaiting_room_type condition")
         prices = {
             "standard room": 170,
             "junior suite": 200,
@@ -662,6 +674,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             return (False, ai_reply)
 
     elif booking_state_dict.get("status") == "confirming":
+        logger.debug("Entering confirming condition")
         logger.debug(f"Processing confirmation with message: '{message}'")
         if any(word in message.lower().strip() for word in ["yes", "please", "confirmed"]):
             check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
