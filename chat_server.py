@@ -959,6 +959,22 @@ def handback_to_ai():
             except Exception as e:
                 logger.error(f"❌ Telegram error sending handback message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Telegram: {str(e)}", "channel": channel})
+        elif channel == "whatsapp":
+            try:
+                logger.info(f"Sending handback message to WhatsApp - To: {username}, Body: {handback_message}")
+                send_whatsapp_message(username, handback_message)
+                logger.info("Handback message sent to WhatsApp: " + handback_message)
+            except Exception as e:
+                logger.error(f"WhatsApp error sending handback message: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to WhatsApp: {str(e)}", "channel": channel})
+        elif channel == "instagram":
+            try:
+                logger.info(f"Sending handback message to Instagram - To: {username}, Body: {handback_message}")
+                send_instagram_message(username, handback_message)
+                logger.info("Handback message sent to Instagram: " + handback_message)
+            except Exception as e:
+                logger.error(f"Instagram error sending handback message: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Instagram: {str(e)}", "channel": channel})
 
         # Emit a refresh event to update the conversation list in the dashboard
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
