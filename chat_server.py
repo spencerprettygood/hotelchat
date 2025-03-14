@@ -591,25 +591,25 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
             return (False, ai_reply)
 
-# Step 2: Collect and validate room type
-elif booking_state_dict.get("status") == "awaiting_room_type":
-    # First try simple normalization and matching
-    message_normalized = message.lower().replace(" ", "")
-    normalized_room_types = {room_type.replace(" ", ""): room_type for room_type in ROOM_TYPES}
+    # Step 2: Collect and validate room type
+        elif booking_state_dict.get("status") == "awaiting_room_type":
+            # First try simple normalization and matching
+            message_normalized = message.lower().replace(" ", "")
+            normalized_room_types = {room_type.replace(" ", ""): room_type for room_type in ROOM_TYPES}
     
-    selected_room = None
-    for norm_room, orig_room in normalized_room_types.items():
-        if norm_room in message_normalized:
-            selected_room = orig_room
-            break
+            selected_room = None
+            for norm_room, orig_room in normalized_room_types.items():
+                if norm_room in message_normalized:
+                     selected_room = orig_room
+                    break
 
     # If simple matching fails, use AI to interpret the user's intent
-    if not selected_room:
-        selected_room = extract_room_type_with_ai(message)
+            if not selected_room:
+                selected_room = extract_room_type_with_ai(message)
 
-    if not selected_room:
-        ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
-        return (False, ai_reply)
+            if not selected_room:
+                ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
+                return (False, ai_reply)
 
         # Check availability
         check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
