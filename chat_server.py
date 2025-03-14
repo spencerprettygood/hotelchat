@@ -167,12 +167,12 @@ try:
         if line.startswith("-"):
             # Extract room type and price information
             parts = line.split(":")[1].strip().split("(")
-            room_type_full = parts[0].split(":")[0].strip()  # e.g., "Standard Room $150/night"
+            room_type_full = parts[0].split(":")[0].strip()  # e.g., "Standard Room $170/night"
             room_type = room_type_full.split("$")[0].strip().lower()  # e.g., "standard room"
             ROOM_TYPES.append(room_type)
 
             # Parse the price (regular and promotion if present)
-            price_part = room_type_full.split("$")[1].split("/")[0].strip()  # e.g., "150"
+            price_part = room_type_full.split("$")[1].split("/")[0].strip()  # e.g., "170"
             regular_price = float(price_part)
 
             promo_price = None
@@ -193,13 +193,13 @@ try:
             }
             logger.info(f"✅ Parsed room type: {room_type}, prices: {ROOM_PRICES[room_type]}")
 except IndexError:
-    # Fallback to a default list of room types and prices if the expected sections are missing
+    # Fallback to a default list of room types and prices matching the training document
     ROOM_TYPES = ["standard room", "junior suite", "apartment", "villa"]
     ROOM_PRICES = {
-        "standard room": {"regular_price": 150.0, "promo_price": None, "promo_end_date": None},
-        "junior suite": {"regular_price": 200.0, "promo_price": 180.0, "promo_end_date": datetime(2025, 3, 31).date()},
-        "apartment": {"regular_price": 250.0, "promo_price": None, "promo_end_date": None},
-        "villa": {"regular_price": 400.0, "promo_price": None, "promo_end_date": None}
+        "standard room": {"regular_price": 170.0, "promo_price": None, "promo_end_date": None},
+        "junior suite": {"regular_price": 200.0, "promo_price": None, "promo_end_date": None},
+        "apartment": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None},
+        "villa": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None}
     }
     logger.warning("⚠️ Failed to parse room types and prices from TRAINING_DOCUMENT; using default room types and prices")
 
