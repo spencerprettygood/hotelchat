@@ -536,41 +536,26 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
     with get_db_connection() as conn:
         c = conn.cursor()
         c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
-        booking_state = c.fetchone()
-        if booking_state:
-            booking_state = booking_state[0]
-            logger.debug(f"Retrieved booking_state from DB: {booking_state}")
-        else:
-            logger.warning(f"No booking_state found for convo_id {convo_id}, initializing as None")
-            booking_state = None
+        booking_state = c.fetchone()[0]
     
     # Parse booking_state (default to empty dict if None)
-    try:
-        booking_state_dict = eval(booking_state) if booking_state else {}
-        logger.debug(f"Parsed booking_state_dict: {booking_state_dict}")
-    except (SyntaxError, TypeError) as e:
-        logger.error(f"Failed to evaluate booking_state '{booking_state}': {str(e)}")
-        booking_state_dict = {}
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str({}), convo_id))
-            conn.commit()
+    booking_state_dict = eval(booking_state) if booking_state else {}
 
-    # Parse dates and room type using regex
+    # Parse dates and numbers using regex
     date_match = re.search(r'(?:from\s+)?(\w+\s+\d+)\s+(?:to\s+)?(\w+\s+\d+)', message, re.IGNORECASE)
+    number_match = re.search(r'(\d+)\s*(guests)?', message, re.IGNORECASE)
     room_match = re.search(r'(standard room|junior suite|apartment|villa)', message.lower())
     dates = (date_match.group(1), date_match.group(2)) if date_match else None
+    guests = int(number_match.group(1)) if number_match else None
     room_type_input = room_match.group(0) if room_match else None
-    logger.debug(f"Parsed input - dates: {dates}, room_type_input: {room_type_input}")
 
     # Booking flow
     if ("book" in message.lower() or "available" in message.lower()) and not booking_state_dict.get("status"):
-        logger.debug("Entering initial booking condition")
         if not dates:
             if "available" in message.lower():
-                ai_reply = "I can check availability for you! Please provide your preferred dates (e.g., 'March 14 to March 17' or 'from March 14 to March 17')."
+                ai_reply = "I can check availability for you! Please provide your preferred dates (e.g., 'March 14 to March 16' or 'from March 14 to March 16')."
             else:
-                ai_reply = "I’d love to help you book! Please provide your preferred dates (e.g., 'March 14 to March 17' or 'from March 14 to March 17')."
+                ai_reply = "I’d love to help you book! Please provide your preferred dates (e.g., 'March 14 to March 16' or 'from March 14 to March 16')."
             duration = time.time() - start_time
             logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting dates")
             return (False, ai_reply)
@@ -588,11 +573,12 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 check_out = datetime(2025, check_out_month, check_out_day)
                 
                 if check_out <= check_in:
-                    ai_reply = "It seems your check-out date is before or equal to your check-in date. Please provide valid dates (e.g., 'March 14 to March 17')."
+                    ai_reply = "It seems your check-out date is before or equal to your check-in date. Please provide valid dates (e.g., 'March 14 to March 16')."
                     duration = time.time() - start_time
                     logger.info(f"Booking flow step failed in {duration:.2f} seconds - Invalid date range")
                     return (False, ai_reply)
 
+                # Check availability
                 is_fully_booked = check_availability(check_in, check_out)
                 if is_fully_booked:
                     ai_reply = f"Sorry, it looks like we’re fully booked for {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}. Please choose different dates."
@@ -606,7 +592,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                     return (False, ai_reply)
 
                 booking_state_dict = {
-                    "status": "awaiting_room_type",
+                    "status": "awaiting_guests",
                     "check_in": check_in.strftime("%Y-%m-%d"),
                     "check_out": check_out.strftime("%Y-%m-%d")
                 }
@@ -616,95 +602,106 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                     c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
                               (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                     conn.commit()
-                    logger.debug(f"Database updated with booking_state: {booking_state_dict}")
-                ai_reply = f"Great! For your stay from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}, we have the following room options available: - Standard Room: $170/night, - Junior Suite: $200/night, - Apartment: $280/night, - Villa: $280/night. Which room type would you prefer?"
+                ai_reply = f"I’ve checked, and {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')} is available! How many guests will be staying?"
                 duration = time.time() - start_time
-                logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting room type")
+                logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting guests")
                 return (False, ai_reply)
             except (ValueError, KeyError) as e:
-                ai_reply = "I couldn’t parse your dates. Please use the format 'March 14 to March 17' or 'from March 14 to March 17'."
+                ai_reply = "I couldn’t parse your dates. Please use the format 'March 14 to March 16' or 'from March 14 to March 16'."
                 duration = time.time() - start_time
                 logger.info(f"Booking flow step failed in {duration:.2f} seconds - Invalid dates: {str(e)}")
                 return (False, ai_reply)
 
+    elif booking_state_dict.get("status") == "awaiting_guests":
+        if not guests:
+            ai_reply = "Please tell me how many guests will be staying (e.g., '4 guests')."
+            duration = time.time() - start_time
+            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting guests count")
+            return (False, ai_reply)
+        else:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                booking_state_dict["guests"] = guests
+                booking_state_dict["status"] = "awaiting_room_type"
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
+                c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
+                conn.commit()
+            ai_reply = "Got it! Now, please choose a room type: Standard Room ($150/night), Junior Suite ($200/night), Apartment ($250/night), or Villa ($280/night)."
+            duration = time.time() - start_time
+            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting room type")
+            return (False, ai_reply)
+
     elif booking_state_dict.get("status") == "awaiting_room_type":
-        logger.debug("Entering awaiting_room_type condition")
         prices = {
-            "standard room": 170,
+            "standard room": 150,
             "junior suite": 200,
-            "apartment": 280,
+            "apartment": 250,
             "villa": 280
         }
         if room_type_input and room_type_input in prices:
             room_type = room_type_input
             rate_per_night = prices[room_type]
-            check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
-            check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-            is_fully_booked = check_availability(check_in, check_out)
-            if is_fully_booked:
-                ai_reply = f"Sorry, it looks like we’re fully booked for {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}. Please choose different dates."
-                with get_db_connection() as conn:
-                    c = conn.cursor()
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+                check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+                nights = (check_out - check_in).days
+                total_cost = nights * rate_per_night * booking_state_dict["guests"]  # Adjust for per-room pricing if needed
+                is_fully_booked = check_availability(check_in, check_out)
+                if is_fully_booked:
+                    ai_reply = f"Sorry, it looks like we’re fully booked for {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}. Please choose different dates."
                     c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
                     c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
                     conn.commit()
-                duration = time.time() - start_time
-                logger.info(f"Booking flow step completed in {duration:.2f} seconds - Fully booked")
-                return (False, ai_reply)
-            else:
-                nights = (check_out - check_in).days
-                total_cost = nights * rate_per_night
-                booking_state_dict["room_type"] = room_type
-                booking_state_dict["total_cost"] = total_cost
-                booking_state_dict["status"] = "confirming"
-                with get_db_connection() as conn:
-                    c = conn.cursor()
+                    duration = time.time() - start_time
+                    logger.info(f"Booking flow step completed in {duration:.2f} seconds - Fully booked")
+                    return (False, ai_reply)
+                else:
+                    booking_state_dict["room_type"] = room_type
+                    booking_state_dict["total_cost"] = total_cost
+                    booking_state_dict["status"] = "confirming"
                     c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
                     c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
                     conn.commit()
-                    logger.debug(f"Database updated with booking_state: {booking_state_dict}")
-                ai_reply = f"The {room_type.title()} is available for ${rate_per_night}/night. Would you like to proceed with booking the {room_type.title()} for your stay from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}?"
-                duration = time.time() - start_time
-                logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting confirmation")
-                return (False, ai_reply)
+                    ai_reply = (f"Great choice! I’ve confirmed availability for your dates. A {room_type.title()} for {booking_state_dict['guests']} guests from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')} will cost ${total_cost} total. "
+                               "Would you like to proceed with the booking?")
+                    duration = time.time() - start_time
+                    logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting confirmation")
+                    return (False, ai_reply)
         else:
-            ai_reply = "Please choose a valid room type: Standard Room ($170/night), Junior Suite ($200/night), Apartment ($280/night), or Villa ($280/night)."
+            ai_reply = "Please choose a valid room type: Standard Room ($150/night), Junior Suite ($200/night), Apartment ($250/night), or Villa ($280/night)."
             duration = time.time() - start_time
             logger.info(f"Booking flow step completed in {duration:.2f} seconds - Invalid room type")
             return (False, ai_reply)
 
     elif booking_state_dict.get("status") == "confirming":
-        logger.debug("Entering confirming condition")
-        logger.debug(f"Processing confirmation with message: '{message}'")
-        if any(word in message.lower().strip() for word in ["yes", "please", "confirmed"]):
+        if any(word in message.lower() for word in ["yes", "please", "confirmed"]):
             check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
             check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-            total_cost = booking_state_dict["total_cost"]
-            ai_reply = (f"Perfect! You’ve booked a {booking_state_dict['room_type'].title()} for your stay from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')} at a total of ${total_cost}. "
+            ai_reply = (f"Perfect! You’ve booked a {booking_state_dict['room_type'].title()} for {booking_state_dict['guests']} guests from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}. "
                        "A human agent will assist you with payment and final confirmation shortly.")
             with get_db_connection() as conn:
                 c = conn.cursor()
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1, booking_state = ? WHERE id = ?", (None, convo_id))
-                c.execute("UPDATE bookings SET status = 'confirmed' WHERE conversation_id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                 conn.commit()
-                c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
-                updated_state = c.fetchone()[0]
-                logger.debug(f"Database commit successful, updated booking_state: {updated_state}")
             socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
             duration = time.time() - start_time
-            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Handoff initiated, booking confirmed")
+            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Handoff initiated")
             return (False, ai_reply)
         else:
-            ai_reply = "It seems I need more information to proceed with the booking. Please confirm with 'yes' or let me know how I can assist further!"
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
+                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+                conn.commit()
+            ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
             duration = time.time() - start_time
-            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Awaiting confirmation clarification")
+            logger.info(f"Booking flow step completed in {duration:.2f} seconds - Booking cancelled")
             return (False, ai_reply)
 
-    # Fallback to avoid resetting if no state matches
-    ai_reply = "It seems we might have lost the context. Could you please clarify what you would like assistance with? Are you looking to book a room or have a specific question?"
     duration = time.time() - start_time
-    logger.warning(f"Booking flow fell back to default case in {duration:.2f} seconds - State: {booking_state_dict}")
-    return (False, ai_reply)
+    logger.info(f"Booking flow step completed in {duration:.2f} seconds - No booking action taken")
+    return (True, None)
     
 @app.route("/check-auth", methods=["GET"])
 @add_request_id
