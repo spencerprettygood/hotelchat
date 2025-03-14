@@ -991,7 +991,7 @@ def handback_to_ai():
                 logger.error(f"❌ Failed to verify ai_enabled for convo_id {convo_id} after handback")
 
         # Notify the user that the AI has taken over
-        handback_message = "The agent has handed the conversation back to me. I’m here to assist you now! How can I help?"
+        handback_message = "The sales agent has handed the conversation back to me. Anything else I can help you with?"
         log_message(convo_id, "AI", handback_message, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": handback_message, "sender": "ai", "channel": channel})
         if channel == "telegram":
