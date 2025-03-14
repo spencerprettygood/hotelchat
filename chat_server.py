@@ -593,63 +593,21 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
             return (False, ai_reply)
 
-    # Step 2: Collect and validate room type
+    # Step 2: Collect room type preference and hand off to agent
     elif booking_state_dict.get("status") == "awaiting_room_type":
-        # First try simple normalization and matching
-        message_normalized = message.lower().replace(" ", "").strip()
-        logger.info(f"Normalized user message: '{message_normalized}' (original: '{message}')")
+        # Prompt the user and immediately hand off to an agent, regardless of their response
+        ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
+        logger.info(f"Handing off to agent with reply: '{ai_reply}'")
         
-        normalized_room_types = {room_type.replace(" ", "").strip(): room_type for room_type in ROOM_TYPES}
-        logger.info(f"Normalized room types: {normalized_room_types}")
-        
-        selected_room = None
-        for norm_room, orig_room in normalized_room_types.items():
-            logger.info(f"Comparing '{norm_room}' with '{message_normalized}'")
-            if norm_room == message_normalized:
-                selected_room = orig_room
-                logger.info(f"Matched room type: '{selected_room}'")
-                break
-            else:
-                logger.info(f"No match: '{norm_room}' != '{message_normalized}'")
-
-        # If simple matching fails, use AI to interpret the user's intent
-        if not selected_room:
-            logger.info("Simple matching failed, falling back to AI")
-            selected_room = extract_room_type_with_ai(message)
-            if selected_room:
-                logger.info(f"AI matched room type: '{selected_room}'")
-
-        if not selected_room:
-            ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
-            logger.info(f"No room type matched, replying with: '{ai_reply}'")
-            return (False, ai_reply)
-
-        # Check availability
-        check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
-        check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-        is_fully_booked = check_availability(check_in, check_out)
-
-        if is_fully_booked:
-            ai_reply = f"Sorry, we’re fully booked from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Please choose different dates."
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
-                conn.commit()
-            return (False, ai_reply)
-
-        # Store room type and hand off to agent
-        booking_state_dict["room_type"] = selected_room
+        # Update conversation state for handoff
         booking_state_dict["status"] = "handoff"
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
                       (json.dumps(booking_state_dict), convo_id))
-            c.execute("UPDATE bookings SET room_type = ? WHERE conversation_id = ?", (selected_room, convo_id))
             conn.commit()
 
-        # Notify the user and trigger dashboard refresh
-        ai_reply = f"Great! You’ve selected a {selected_room.title()} from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. An agent will assist you on the dashboard to finalize your booking."
+        # Trigger dashboard refresh
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
         return (False, ai_reply)
 
