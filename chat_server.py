@@ -17,6 +17,8 @@ import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from contextlib import contextmanager
+from dateutil.parser import parse as parse_date
+import json
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
@@ -147,6 +149,16 @@ except FileNotFoundError:
     - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
+
+# Parse room types from TRAINING_DOCUMENT
+ROOM_TYPES = []
+room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0]
+for line in room_types_section.splitlines():
+    line = line.strip()
+    if line.startswith("-"):
+        room_type = line.split(":")[0].replace("-", "").strip().lower()
+        ROOM_TYPES.append(room_type)
+logger.info(f"✅ Parsed room types: {ROOM_TYPES}")
 
 @contextmanager
 def get_db_connection():
@@ -459,115 +471,113 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
     """
     logger.info(f"Handling booking flow for convo_id {convo_id}: {message}")
 
+    # Load booking state from the database
     with get_db_connection() as conn:
         c = conn.cursor()
         c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
         booking_state = c.fetchone()[0]
 
-    # Parse dates and numbers using regex as a fallback
-    date_match = re.search(r'(\w+\s+\d+\s+to\s+\w+\s+\d+)', message, re.IGNORECASE)
-    number_match = re.search(r'(\d+)\s*(guests)?', message, re.IGNORECASE)
-    dates = date_match.group(0) if date_match else None
-    guests = int(number_match.group(1)) if number_match else None
+    # Parse booking_state as JSON (safer than eval)
+    booking_state_dict = json.loads(booking_state) if booking_state else {}
 
-    # Evaluate booking_state if it exists
-    booking_state_dict = eval(booking_state) if booking_state else {}
-
-    # Booking flow
-    if "book" in message.lower() and not booking_state_dict.get("status"):
-        if not dates:
-            ai_reply = "I’d love to help you book! Please provide your preferred dates (e.g., 'March 10 to March 15')."
-            return (False, ai_reply)
-        else:
-            try:
-                date_parts = re.split(r'\s+to\s+', dates.lower())
-                months = {'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
-                          'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12}
-                check_in_day = int(date_parts[1])
-                check_out_day = int(date_parts[3])
-                check_in_month = months[date_parts[0].split()[0]]
-                check_out_month = months[date_parts[2].split()[0]]
-                check_in = datetime(2025, check_in_month, check_in_day)
-                check_out = datetime(2025, check_out_month, check_out_day)
-                booking_state_dict = {"status": "awaiting_guests", "check_in": check_in.strftime("%Y-%m-%d"), "check_out": check_out.strftime("%Y-%m-%d")}
-                with get_db_connection() as conn:
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                    c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
-                    conn.commit()
-                ai_reply = "Thanks for providing your dates! How many guests will be staying?"
-                return (False, ai_reply)
-            except (ValueError, KeyError) as e:
-                ai_reply = "I couldn’t parse your dates. Please use the format 'March 10 to March 15'."
-                return (False, ai_reply)
-    elif booking_state_dict.get("status") == "awaiting_guests":
-        if not guests:
-            ai_reply = "Please tell me how many guests will be staying (e.g., '4 guests')."
-            return (False, ai_reply)
-        else:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                booking_state_dict["guests"] = guests
-                booking_state_dict["status"] = "awaiting_room_type"
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                c.execute("UPDATE bookings SET guests = ? WHERE conversation_id = ?", (guests, convo_id))
-                conn.commit()
-            ai_reply = "Got it! Now, please choose a room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
-            return (False, ai_reply)
-    elif booking_state_dict.get("status") == "awaiting_room_type":
-        room_type = message.lower()
-        if "standard" in room_type:
-            rate_per_night = 150
-            room_type = "standard"
-        elif "deluxe" in room_type:
-            rate_per_night = 250
-            room_type = "deluxe"
-        elif "suite" in room_type:
-            rate_per_night = 400
-            room_type = "suite"
-        else:
-            ai_reply = "Please choose a valid room type: Standard ($150/night), Deluxe ($250/night), or Suite ($400/night)."
-            return (False, ai_reply)
-
+    # Reset booking state if user starts a new booking
+    if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type"]:
+        booking_state_dict = {"status": "awaiting_dates"}
         with get_db_connection() as conn:
             c = conn.cursor()
-            check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
-            check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-            nights = (check_out - check_in).days
-            total_cost = nights * rate_per_night * booking_state_dict["guests"]  # Adjust for per-room pricing if needed
-            is_fully_booked = check_availability(check_in, check_out)
-            if is_fully_booked:
-                ai_reply = f"Sorry, it looks like we’re fully booked for your dates ({booking_state_dict['check_in']} to {booking_state_dict['check_out']}). Please choose different dates."
+            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
+            c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
+            conn.commit()
+
+    # Step 1: Collect and validate dates
+    if booking_state_dict.get("status") == "awaiting_dates":
+        # Try to parse dates from the message
+        date_str = None
+        for fmt in [r'(\w+\s+\d+\s+to\s+\w+\s+\d+)', r'(\d{4}-\d{2}-\d{2}\s+to\s+\d{4}-\d{2}-\d{2})']:
+            match = re.search(fmt, message, re.IGNORECASE)
+            if match:
+                date_str = match.group(0)
+                break
+
+        if not date_str:
+            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15' or '2025-03-10 to 2025-03-15')."
+            return (False, ai_reply)
+
+        try:
+            # Split the date string and parse dates
+            date_parts = re.split(r'\s+to\s+', date_str.lower(), flags=re.IGNORECASE)
+            check_in_str, check_out_str = date_parts
+            check_in = parse_date(check_in_str, default=datetime.now())
+            check_out = parse_date(check_out_str, default=datetime.now())
+
+            # Ensure dates are in the future and check_out is after check_in
+            now = datetime.now()
+            if check_in < now:
+                ai_reply = "Your check-in date must be in the future. Please provide new dates (e.g., 'March 10 to March 15')."
+                return (False, ai_reply)
+            if check_out <= check_in:
+                ai_reply = "Your check-out date must be after your check-in date. Please provide new dates (e.g., 'March 10 to March 15')."
+                return (False, ai_reply)
+
+            # Store dates and move to next step
+            booking_state_dict["check_in"] = check_in.strftime("%Y-%m-%d")
+            booking_state_dict["check_out"] = check_out.strftime("%Y-%m-%d")
+            booking_state_dict["status"] = "awaiting_room_type"
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
+                c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
+                          (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
+                conn.commit()
+            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. What room type would you like? We have Standard Room, Deluxe Room, or Suite."
+            return (False, ai_reply)
+
+        except ValueError as e:
+            ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
+            return (False, ai_reply)
+
+    # Step 2: Collect and validate room type
+    elif booking_state_dict.get("status") == "awaiting_room_type":
+        message_lower = message.lower()
+        selected_room = None
+        for room_type in ROOM_TYPES:
+            if room_type in message_lower:
+                selected_room = room_type
+                break
+
+        if not selected_room:
+            ai_reply = "Please choose a valid room type: Standard Room, Deluxe Room, or Suite."
+            return (False, ai_reply)
+
+        # Check availability
+        check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+        check_out = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+        is_fully_booked = check_availability(check_in, check_out)
+
+        if is_fully_booked:
+            ai_reply = f"Sorry, we’re fully booked from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Please choose different dates."
+            with get_db_connection() as conn:
+                c = conn.cursor()
                 c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
                 c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
                 conn.commit()
-                return (False, ai_reply)
-            else:
-                booking_state_dict["room_type"] = room_type
-                booking_state_dict["total_cost"] = total_cost
-                booking_state_dict["status"] = "confirming"
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (str(booking_state_dict), convo_id))
-                c.execute("UPDATE bookings SET room_type = ?, total_cost = ? WHERE conversation_id = ?", (room_type, total_cost, convo_id))
-                conn.commit()
-                ai_reply = f"Great choice! Let me check availability for your dates. Assuming everything is available, your total will be ${total_cost}. Would you like to proceed with the booking?"
-                return (False, ai_reply)
-    elif booking_state_dict.get("status") == "confirming":
-        if "yes" in message.lower():
-            ai_reply = "Perfect! To finalize your booking, I’ll need to get a human to assist you with the payment and confirmation details. Please hold on while I connect you."
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                conn.commit()
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
             return (False, ai_reply)
-        else:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (None, convo_id))
-                c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
-                conn.commit()
-            ai_reply = "Okay, let me know if you’d like to start the booking process again or if you have other questions!"
-            return (False, ai_reply)
+
+        # Store room type and hand off to agent
+        booking_state_dict["room_type"] = selected_room
+        booking_state_dict["status"] = "handoff"
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
+                      (json.dumps(booking_state_dict), convo_id))
+            c.execute("UPDATE bookings SET room_type = ? WHERE conversation_id = ?", (selected_room, convo_id))
+            conn.commit()
+
+        # Notify the user and trigger dashboard refresh
+        ai_reply = f"Great! You’ve selected a {selected_room.title()} from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. An agent will assist you on the dashboard to finalize your booking."
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
+        return (False, ai_reply)
+
     return (True, None)
 
 @app.route("/check-auth", methods=["GET"])
