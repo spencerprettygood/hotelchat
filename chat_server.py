@@ -157,20 +157,51 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Parse room types from TRAINING_DOCUMENT
+# Parse room types and prices from TRAINING_DOCUMENT
 ROOM_TYPES = []
+ROOM_PRICES = {}
 try:
     room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0]
     for line in room_types_section.splitlines():
         line = line.strip()
         if line.startswith("-"):
-            room_type = line.split(":")[0].replace("-", "").strip().lower()
+            # Extract room type and price information
+            parts = line.split(":")[1].strip().split("(")
+            room_type_full = parts[0].split(":")[0].strip()  # e.g., "Standard Room $150/night"
+            room_type = room_type_full.split("$")[0].strip().lower()  # e.g., "standard room"
             ROOM_TYPES.append(room_type)
-    logger.info(f"✅ Parsed room types: {ROOM_TYPES}")
+
+            # Parse the price (regular and promotion if present)
+            price_part = room_type_full.split("$")[1].split("/")[0].strip()  # e.g., "150"
+            regular_price = float(price_part)
+
+            promo_price = None
+            promo_end_date = None
+            if len(parts) > 1:  # Check for promotion
+                promo_info = parts[1].replace(")", "").strip()
+                if "Promotion" in promo_info:
+                    promo_parts = promo_info.split("until")
+                    promo_price_str = promo_parts[0].replace("Promotion:", "").strip().split("$")[1].split("/")[0].strip()
+                    promo_price = float(promo_price_str)
+                    promo_end_date_str = promo_parts[1].strip()
+                    promo_end_date = datetime.strptime(promo_end_date_str, "%B %d, %Y").date()
+
+            ROOM_PRICES[room_type] = {
+                "regular_price": regular_price,
+                "promo_price": promo_price,
+                "promo_end_date": promo_end_date
+            }
+            logger.info(f"✅ Parsed room type: {room_type}, prices: {ROOM_PRICES[room_type]}")
 except IndexError:
-    # Fallback to a default list of room types if the expected sections are missing
-    ROOM_TYPES = ["standard room", "deluxe room", "suite"]
-    logger.warning("⚠️ Failed to parse room types from TRAINING_DOCUMENT; using default room types: standard room, deluxe room, suite")
+    # Fallback to a default list of room types and prices if the expected sections are missing
+    ROOM_TYPES = ["standard room", "junior suite", "apartment", "villa"]
+    ROOM_PRICES = {
+        "standard room": {"regular_price": 150.0, "promo_price": None, "promo_end_date": None},
+        "junior suite": {"regular_price": 200.0, "promo_price": 180.0, "promo_end_date": datetime(2025, 3, 31).date()},
+        "apartment": {"regular_price": 250.0, "promo_price": None, "promo_end_date": None},
+        "villa": {"regular_price": 400.0, "promo_price": None, "promo_end_date": None}
+    }
+    logger.warning("⚠️ Failed to parse room types and prices from TRAINING_DOCUMENT; using default room types and prices")
 
 @contextmanager
 def get_db_connection():
@@ -586,7 +617,16 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
                           (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                 conn.commit()
-            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: Standard Room, Junior Suite, Apartment, or Villa?"
+            # Replace the existing ai_reply line
+            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: "
+            room_options = []
+            for room_type in ROOM_TYPES:
+                display_type = room_type.replace(" ", " ").title()  # Convert to title case for display (e.g., "Junior Suite")
+                price_info = ROOM_PRICES[room_type]
+                current_date = date(2025, 3, 14)  # Current date as March 14, 2025
+                price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
+                room_options.append(f"{display_type} (${price_to_use}/night)")
+            ai_reply += ", ".join(room_options[:-1]) + ", or " + room_options[-1] + "?"
             return (False, ai_reply)
 
         except ValueError as e:
