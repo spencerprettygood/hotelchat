@@ -463,12 +463,12 @@ def ai_respond(message, convo_id):
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retry_attempts - 1:
                     logger.info("✅ Set default AI reply due to repeated errors")
-                    return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+                    return "I’m sorry, I’m having trouble processing your request right now. Let me tranfer you to another agent."
                 time.sleep(1)
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you.
+        return "I’m sorry, I’m having trouble processing your request right now. Let me tranfer you to another agent."
         
 def extract_room_type_with_ai(message):
     """
