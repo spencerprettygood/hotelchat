@@ -19,6 +19,13 @@ from googleapiclient.discovery import build
 from contextlib import contextmanager
 from dateutil.parser import parse as parse_date
 import json
+from googleapiclient.discovery import build
+from googleapiclient.discovery_cache.base import Cache
+class NullCache(Cache):
+    def get(self, url):
+        return None
+    def set(self, url, content):
+        pass
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
