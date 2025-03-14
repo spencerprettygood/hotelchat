@@ -152,13 +152,18 @@ except FileNotFoundError:
 
 # Parse room types from TRAINING_DOCUMENT
 ROOM_TYPES = []
-room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0]
-for line in room_types_section.splitlines():
-    line = line.strip()
-    if line.startswith("-"):
-        room_type = line.split(":")[0].replace("-", "").strip().lower()
-        ROOM_TYPES.append(room_type)
-logger.info(f"✅ Parsed room types: {ROOM_TYPES}")
+try:
+    room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0]
+    for line in room_types_section.splitlines():
+        line = line.strip()
+        if line.startswith("-"):
+            room_type = line.split(":")[0].replace("-", "").strip().lower()
+            ROOM_TYPES.append(room_type)
+    logger.info(f"✅ Parsed room types: {ROOM_TYPES}")
+except IndexError:
+    # Fallback to a default list of room types if the expected sections are missing
+    ROOM_TYPES = ["standard room", "deluxe room", "suite"]
+    logger.warning("⚠️ Failed to parse room types from TRAINING_DOCUMENT; using default room types: standard room, deluxe room, suite")
 
 @contextmanager
 def get_db_connection():
