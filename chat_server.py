@@ -1307,4 +1307,4 @@ def test_openai():
         model_used = response.model
         total_duration = time.time() - start_time
         logger.info(f"OpenAI test successful in {total_duration:.2f} seconds: {reply}, Model: {model_used}")
-        return jsonify({"status": "success", "reply": reply
+        return jsonify({"status": "success", "reply": reply})
