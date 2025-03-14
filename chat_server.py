@@ -588,7 +588,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 break
 
         if not date_str:
-            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15')."
+            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15' or '2025-03-10 to 2025-03-15')."
             return (False, ai_reply)
 
         try:
@@ -617,11 +617,10 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
                           (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                 conn.commit()
-            # Replace the existing ai_reply line
             ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: "
             room_options = []
             for room_type in ROOM_TYPES:
-                display_type = room_type.replace(" ", " ").title()  # Convert to title case for display (e.g., "Junior Suite")
+                display_type = room_type.replace(" ", " ").title()  # Convert to title case for display
                 price_info = ROOM_PRICES[room_type]
                 current_date = date(2025, 3, 14)  # Current date as March 14, 2025
                 price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
@@ -630,13 +629,13 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             return (False, ai_reply)
 
         except ValueError as e:
-            ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15'."
+            ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
             return (False, ai_reply)
 
     # Step 2: Collect room type preference and hand off to agent
     elif booking_state_dict.get("status") == "awaiting_room_type":
         # Prompt the user and immediately hand off to an agent, regardless of their response
-        ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you to finalize your booking."
+        ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
         logger.info(f"Handing off to agent with reply: '{ai_reply}'")
         
         # Update conversation state for handoff
