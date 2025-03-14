@@ -596,21 +596,32 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
     # Step 2: Collect and validate room type
     elif booking_state_dict.get("status") == "awaiting_room_type":
         # First try simple normalization and matching
-        message_normalized = message.lower().replace(" ", "")
-        normalized_room_types = {room_type.replace(" ", ""): room_type for room_type in ROOM_TYPES}
+        message_normalized = message.lower().replace(" ", "").strip()
+        logger.info(f"Normalized user message: '{message_normalized}' (original: '{message}')")
+        
+        normalized_room_types = {room_type.replace(" ", "").strip(): room_type for room_type in ROOM_TYPES}
+        logger.info(f"Normalized room types: {normalized_room_types}")
         
         selected_room = None
         for norm_room, orig_room in normalized_room_types.items():
-            if norm_room in message_normalized:
+            logger.info(f"Comparing '{norm_room}' with '{message_normalized}'")
+            if norm_room == message_normalized:
                 selected_room = orig_room
+                logger.info(f"Matched room type: '{selected_room}'")
                 break
+            else:
+                logger.info(f"No match: '{norm_room}' != '{message_normalized}'")
 
         # If simple matching fails, use AI to interpret the user's intent
         if not selected_room:
+            logger.info("Simple matching failed, falling back to AI")
             selected_room = extract_room_type_with_ai(message)
+            if selected_room:
+                logger.info(f"AI matched room type: '{selected_room}'")
 
         if not selected_room:
             ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
+            logger.info(f"No room type matched, replying with: '{ai_reply}'")
             return (False, ai_reply)
 
         # Check availability
@@ -643,6 +654,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
         return (False, ai_reply)
 
     return (True, None)
+    
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated, "agent": current_user.username if current_user.is_authenticated else None})
