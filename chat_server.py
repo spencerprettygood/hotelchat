@@ -545,7 +545,6 @@ def extract_room_type_with_ai(message):
         logger.error(f"❌ Error extracting room type with AI: {str(e)}")
         return None
 
-# Existing handle_booking_flow function (now starts at line 595 after adding the new function)
 def handle_booking_flow(message, convo_id, chat_id, channel):
     """
     Handle the booking flow for a conversation.
@@ -567,6 +566,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
     # Parse booking_state as JSON (safer than eval)
     booking_state_dict = json.loads(booking_state) if booking_state else {}
+    logger.info(f"Current booking state for convo_id {convo_id}: {booking_state_dict}")
 
     # Reset booking state if user starts a new booking
     if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type"]:
@@ -576,6 +576,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
             c.execute("DELETE FROM bookings WHERE conversation_id = ?", (convo_id,))
             conn.commit()
+        logger.info(f"Reset booking state to 'awaiting_dates' for convo_id {convo_id}")
 
     # Step 1: Collect and validate dates
     if booking_state_dict.get("status") == "awaiting_dates":
@@ -589,6 +590,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
         if not date_str:
             ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15' or '2025-03-10 to 2025-03-15')."
+            logger.info(f"Prompting for dates: {ai_reply}")
             return (False, ai_reply)
 
         try:
@@ -602,9 +604,11 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             now = datetime.now()
             if check_in < now:
                 ai_reply = "Your check-in date must be in the future. Please provide new dates (e.g., 'March 10 to March 15')."
+                logger.info(f"Invalid check-in date: {ai_reply}")
                 return (False, ai_reply)
             if check_out <= check_in:
                 ai_reply = "Your check-out date must be after your check-in date. Please provide new dates (e.g., 'March 10 to March 15')."
+                logger.info(f"Invalid date range: {ai_reply}")
                 return (False, ai_reply)
 
             # Store dates and move to next step
@@ -617,6 +621,8 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
                           (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                 conn.commit()
+            logger.info(f"Updated state to 'awaiting_room_type' for convo_id {convo_id}, dates: {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}")
+
             ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: "
             room_options = []
             for room_type in ROOM_TYPES:
@@ -626,16 +632,29 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
                 room_options.append(f"{display_type} (${price_to_use}/night)")
             ai_reply += ", ".join(room_options[:-1]) + ", or " + room_options[-1] + "?"
+            logger.info(f"Prompting for room type: {ai_reply}")
             return (False, ai_reply)
 
         except ValueError as e:
-            ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15'."
+            ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
+            logger.info(f"Date parsing error: {ai_reply}")
             return (False, ai_reply)
 
     # Step 2: Collect room type preference and hand off to agent
     elif booking_state_dict.get("status") == "awaiting_room_type":
-        # Prompt the user and immediately hand off to an agent, regardless of their response
-        ai_reply = f"Thanks for your room type preference! You’ve chosen {message}. An agent will assist you on the dashboard to finalize your booking."
+        # Ensure dates are available in the state
+        if "check_in" not in booking_state_dict or "check_out" not in booking_state_dict:
+            ai_reply = "I need your check-in and check-out dates to proceed. Please provide them (e.g., 'March 10 to March 15')."
+            booking_state_dict["status"] = "awaiting_dates"
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
+                conn.commit()
+            logger.info(f"Missing dates, resetting to 'awaiting_dates': {ai_reply}")
+            return (False, ai_reply)
+
+        # Prompt the user and immediately hand off to an agent
+        ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
         logger.info(f"Handing off to agent with reply: '{ai_reply}'")
         
         # Update conversation state for handoff
@@ -645,9 +664,11 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
                       (json.dumps(booking_state_dict), convo_id))
             conn.commit()
+            logger.info(f"Updated state to 'handoff' for convo_id {convo_id}")
 
         # Trigger dashboard refresh
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
+        logger.info(f"Emitted refresh_conversations event for convo_id {convo_id}")
         return (False, ai_reply)
 
     return (True, None)
