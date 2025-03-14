@@ -557,7 +557,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 break
 
         if not date_str:
-            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15' or '2025-03-10 to 2025-03-15')."
+            ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15')."
             return (False, ai_reply)
 
         try:
