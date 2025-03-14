@@ -556,17 +556,20 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
     Returns:
         tuple: (bool, str) - (whether to continue with AI response, AI reply if any)
     """
-    logger.info(f"Handling booking flow for convo_id {convo_id}: {message}")
+    logger.info(f"Handling booking flow for convo_id {convo_id}, message: '{message}', chat_id: {chat_id}, channel: {channel}")
 
     # Load booking state from the database
     with get_db_connection() as conn:
         c = conn.cursor()
         c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
-        booking_state = c.fetchone()[0]
-
-    # Parse booking_state as JSON (safer than eval)
-    booking_state_dict = json.loads(booking_state) if booking_state else {}
-    logger.info(f"Current booking state for convo_id {convo_id}: {booking_state_dict}")
+        result = c.fetchone()
+        if result is None:
+            logger.warning(f"No conversation found for convo_id {convo_id}, initializing new state")
+            booking_state_dict = {}
+        else:
+            booking_state = result[0]
+            booking_state_dict = json.loads(booking_state) if booking_state else {}
+        logger.info(f"Initial booking state for convo_id {convo_id}: {booking_state_dict}")
 
     # Reset booking state if user starts a new booking
     if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type"]:
@@ -580,6 +583,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
     # Step 1: Collect and validate dates
     if booking_state_dict.get("status") == "awaiting_dates":
+        logger.info(f"Processing 'awaiting_dates' state for message: '{message}'")
         # Try to parse dates from the message
         date_str = None
         for fmt in [r'(\w+\s+\d+\s+to\s+\w+\s+\d+)', r'(\d{4}-\d{2}-\d{2}\s+to\s+\d{4}-\d{2}-\d{2})']:
@@ -590,7 +594,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
         if not date_str:
             ai_reply = "I’d love to help you book! Please provide your check-in and check-out dates (e.g., 'March 10 to March 15' or '2025-03-10 to 2025-03-15')."
-            logger.info(f"Prompting for dates: {ai_reply}")
+            logger.info(f"No dates found in message, prompting user: {ai_reply}")
             return (False, ai_reply)
 
         try:
@@ -599,16 +603,17 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             check_in_str, check_out_str = date_parts
             check_in = parse_date(check_in_str, default=datetime.now())
             check_out = parse_date(check_out_str, default=datetime.now())
+            logger.info(f"Parsed dates - check_in: {check_in}, check_out: {check_out}")
 
             # Ensure dates are in the future and check_out is after check_in
             now = datetime.now()
             if check_in < now:
                 ai_reply = "Your check-in date must be in the future. Please provide new dates (e.g., 'March 10 to March 15')."
-                logger.info(f"Invalid check-in date: {ai_reply}")
+                logger.info(f"Invalid check-in date (past date): {ai_reply}")
                 return (False, ai_reply)
             if check_out <= check_in:
                 ai_reply = "Your check-out date must be after your check-in date. Please provide new dates (e.g., 'March 10 to March 15')."
-                logger.info(f"Invalid date range: {ai_reply}")
+                logger.info(f"Invalid date range (check_out <= check_in): {ai_reply}")
                 return (False, ai_reply)
 
             # Store dates and move to next step
@@ -621,7 +626,10 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c.execute("INSERT INTO bookings (conversation_id, check_in, check_out) VALUES (?, ?, ?)", 
                           (convo_id, check_in.strftime("%Y-%m-%d"), check_out.strftime("%Y-%m-%d")))
                 conn.commit()
-            logger.info(f"Updated state to 'awaiting_room_type' for convo_id {convo_id}, dates: {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}")
+                # Verify the state was updated
+                c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
+                updated_state = c.fetchone()[0]
+                logger.info(f"After update, booking state for convo_id {convo_id}: {updated_state}")
 
             ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: "
             room_options = []
@@ -637,11 +645,12 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
 
         except ValueError as e:
             ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
-            logger.info(f"Date parsing error: {ai_reply}")
+            logger.info(f"Date parsing error: {str(e)}, response: {ai_reply}")
             return (False, ai_reply)
 
     # Step 2: Collect room type preference and hand off to agent
     elif booking_state_dict.get("status") == "awaiting_room_type":
+        logger.info(f"Processing 'awaiting_room_type' state for message: '{message}'")
         # Ensure dates are available in the state
         if "check_in" not in booking_state_dict or "check_out" not in booking_state_dict:
             ai_reply = "I need your check-in and check-out dates to proceed. Please provide them (e.g., 'March 10 to March 15')."
@@ -650,13 +659,13 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c = conn.cursor()
                 c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
                 conn.commit()
-            logger.info(f"Missing dates, resetting to 'awaiting_dates': {ai_reply}")
+            logger.info(f"Missing dates in state, resetting to 'awaiting_dates': {ai_reply}")
             return (False, ai_reply)
 
         # Prompt the user and immediately hand off to an agent
         ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
         logger.info(f"Handing off to agent with reply: '{ai_reply}'")
-        
+
         # Update conversation state for handoff
         booking_state_dict["status"] = "handoff"
         with get_db_connection() as conn:
@@ -664,13 +673,17 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
                       (json.dumps(booking_state_dict), convo_id))
             conn.commit()
-            logger.info(f"Updated state to 'handoff' for convo_id {convo_id}")
+            # Verify the state was updated
+            c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
+            updated_state = c.fetchone()[0]
+            logger.info(f"After handoff, booking state for convo_id {convo_id}: {updated_state}")
 
         # Trigger dashboard refresh
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
         logger.info(f"Emitted refresh_conversations event for convo_id {convo_id}")
         return (False, ai_reply)
 
+    logger.info(f"No matching booking state for convo_id {convo_id}, passing to default handler")
     return (True, None)
     
 @app.route("/check-auth", methods=["GET"])
