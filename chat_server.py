@@ -468,7 +468,50 @@ def ai_respond(message, convo_id):
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you."
+        return "I’m sorry, I’m having trouble processing your request right now. Let me get a human to assist you.
+        
+def extract_room_type_with_ai(message):
+    """
+    Use OpenAI to extract the intended room type from the user's message.
+    Args:
+        message (str): The user's message.
+    Returns:
+        str: The matched room type, or None if no match is found.
+    """
+    prompt = f"""
+    You are a hotel chatbot. The user has provided the following message: '{message}'
+    The valid room types are: Standard Room, Deluxe Room, Suite.
+    Determine which room type the user is referring to, if any. Respond with the exact room type (e.g., "Standard Room") or "None" if no match is found.
+    Examples:
+    - "I want a standard room" → "Standard Room"
+    - "Give me a deluxe" → "Deluxe Room"
+    - "I’d like a suite please" → "Suite"
+    - "I want a basic room" → "Standard Room"
+    - "I’d like a luxury room" → "Suite"
+    - "Something else" → "None"
+    """
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a hotel chatbot helping with bookings."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=10
+        )
+        ai_reply = response.choices[0].message.content.strip()
+        logger.info(f"AI extracted room type: {ai_reply} from message: {message}")
+        if ai_reply == "None":
+            return None
+        # Ensure the AI's response matches one of the valid room types (case-insensitive)
+        ai_reply_lower = ai_reply.lower()
+        for room_type in ROOM_TYPES:
+            if room_type in ai_reply_lower:
+                return room_type
+        return None
+    except Exception as e:
+        logger.error(f"❌ Error extracting room type with AI: {str(e)}")
+        return None
 
 def handle_booking_flow(message, convo_id, chat_id, channel):
     """
@@ -548,18 +591,25 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
             ai_reply = "I couldn’t understand the dates. Please try a format like 'March 10 to March 15' or '2025-03-10 to 2025-03-15'."
             return (False, ai_reply)
 
-    # Step 2: Collect and validate room type
-    elif booking_state_dict.get("status") == "awaiting_room_type":
-        message_lower = message.lower()
-        selected_room = None
-        for room_type in ROOM_TYPES:
-            if room_type in message_lower:
-                selected_room = room_type
-                break
+# Step 2: Collect and validate room type
+elif booking_state_dict.get("status") == "awaiting_room_type":
+    # First try simple normalization and matching
+    message_normalized = message.lower().replace(" ", "")
+    normalized_room_types = {room_type.replace(" ", ""): room_type for room_type in ROOM_TYPES}
+    
+    selected_room = None
+    for norm_room, orig_room in normalized_room_types.items():
+        if norm_room in message_normalized:
+            selected_room = orig_room
+            break
 
-        if not selected_room:
-            ai_reply = "Please choose a valid room type: Standard Room, Deluxe Room, or Suite."
-            return (False, ai_reply)
+    # If simple matching fails, use AI to interpret the user's intent
+    if not selected_room:
+        selected_room = extract_room_type_with_ai(message)
+
+    if not selected_room:
+        ai_reply = f"I couldn’t recognize '{message}' as a valid room type. Please choose one of the following: Standard Room, Deluxe Room, or Suite."
+        return (False, ai_reply)
 
         # Check availability
         check_in = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
@@ -647,7 +697,7 @@ def chat():
                 if not continue_with_ai:
                     logger.info("✅ Booking flow handled, using booking flow reply")
                 else:
-                    ai_reply = ai_respond(user_message, convo_id)
+                    ai_reply = ai_respond(user_message, convo_id)for st
 
             logger.info("✅ Logging and emitting AI response")
             log_message(convo_id, "AI", ai_reply, "ai")
