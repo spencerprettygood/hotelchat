@@ -16,18 +16,13 @@ Check-in Time: 3:00 PM
 
 Check-out Time: 12:00 PM
 
-Room Rates: (Subject to availability)
-
+**Room Types**
 Standard Room: $170/night
-
 Junior Suite: $200/night
-
 Apartment: $280/night
-
 Villa: $280/night
 
-Amenities:
-
+**Amenities**
 Free Wi-Fi (fiber optic network with speeds over 100 Mbps)
 Outdoor pool with swim-up bar (Open 24/7)
 On-site restaurant "Margaritas" (Open 24/7)
@@ -38,6 +33,7 @@ Pet-friendly policy for pets under 15 kg
 Free parking with 24-hour security
 Shuttle services to/from the airport and popular tourist spots (available for a surcharge)
 Beach access (500 meters from the resort)
+
 
 Booking Policy:
 Reservations require a credit card.
