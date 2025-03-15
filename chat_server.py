@@ -82,8 +82,8 @@ DB_NAME = "chatbot.db"
 
 # Load or define the Q&A reference document
 try:
-    with open("qa_reference.txt", "r") as file:
-        TRAINING_DOCUMENT = file.read()
+    with open("qa_reference.txt", "r") as f:
+        TRAINING_DOCUMENT = f.read()
     logger.info("✅ Loaded Q&A reference document")
 except FileNotFoundError:
     TRAINING_DOCUMENT = """
@@ -94,6 +94,7 @@ except FileNotFoundError:
     **Business Information**
     - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
     - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
+   
     - **Room Types**:
       - Standard Room: $150/night, 2 guests, 1 queen bed
       - Deluxe Room: $250/night, 4 guests, 2 queen beds, ocean view
