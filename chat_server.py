@@ -157,7 +157,6 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Parse room types and prices from TRAINING_DOCUMENT
 ROOM_TYPES = []
 ROOM_PRICES = {}
 try:
@@ -197,9 +196,9 @@ except IndexError:
     ROOM_TYPES = ["standard room", "junior suite", "apartment", "villa"]
     ROOM_PRICES = {
         "standard room": {"regular_price": 170.0, "promo_price": None, "promo_end_date": None},
-        "junior suite": {"regular_price": 200.0, "promo_price": None, "promo_end_date": None},
+        "junior suite": {"regular_price": 200.0, "promo_price": 180.0, "promo_end_date": date(2025, 3, 31)},
         "apartment": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None},
-        "villa": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None}
+        "villa": {"regular_price": 280.0, "promo_price": 250.0, "promo_end_date": date(2025, 3, 31)}
     }
     logger.warning("⚠️ Failed to parse room types and prices from TRAINING_DOCUMENT; using default room types and prices")
 
