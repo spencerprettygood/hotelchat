@@ -808,8 +808,16 @@ def chat():
 def telegram():
     update = request.get_json()
     logger.info(f"Received Telegram update: {update}")
-    chat_id = str(update["message"]["chat"]["id"])
-    message = update["message"]["text"]
+
+    # Extract message details
+    if "message" not in update:
+        logger.warning("No message in Telegram update, returning OK")
+        return jsonify({"status": "ok"}), 200
+
+    message_data = update["message"]
+    chat_id = str(message_data["chat"]["id"])
+    text = message_data.get("text", "")
+    message_id = str(message_data.get("message_id", ""))  # Extract message_id, default to empty string if not present
 
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -836,8 +844,8 @@ def telegram():
         else:
             convo_id, ai_enabled, handoff_notified, assigned_agent = result
 
-        log_message(convo_id, "user", message, "user")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": message, "sender": "user", "channel": "telegram"})
+        log_message(convo_id, "user", text, "user")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": text, "sender": "user", "channel": "telegram"})
 
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}, handoff_notified={handoff_notified}, assigned_agent={assigned_agent}")
         if not ai_enabled:
@@ -845,21 +853,21 @@ def telegram():
             return jsonify({}), 200
 
         # Check for HELP keyword
-        if "HELP" in message.upper():
+        if "HELP" in text.upper():
             response = "I’m sorry, I couldn’t process that. Let me get another agent to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + response)
         else:
-            # Check booking flow
-            continue_with_ai, response = handle_booking_flow(message, convo_id, chat_id, "telegram")
+            # Check booking flow with message_id to prevent duplicates
+            continue_with_ai, response = handle_booking_flow(text, convo_id, chat_id, "telegram", message_id=message_id)
             if not continue_with_ai:
                 logger.info("✅ Booking flow handled, using booking flow reply")
             else:
-                response = ai_respond(message, convo_id)
+                response = ai_respond(text, convo_id)
 
         log_message(convo_id, "AI", response, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
 
-        if "human" in response.lower() or "sorry" in response.lower() or "HELP" in message.upper():
+        if "human" in response.lower() or "sorry" in response.lower() or "HELP" in text.upper():
             if not handoff_notified:
                 c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                 conn.commit()
