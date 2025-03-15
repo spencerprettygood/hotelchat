@@ -548,9 +548,6 @@ def extract_room_type_with_ai(message):
 # Add a global set to track processed message IDs (assuming Telegram provides a message ID)
 PROCESSED_MESSAGES = set()
 
-# Add a global set to track processed messages
-PROCESSED_MESSAGES = set()
-
 def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
     """
     Handle the booking flow for a conversation.
