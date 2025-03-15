@@ -80,89 +80,128 @@ WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
 
 DB_NAME = "chatbot.db"
 
-logger = logging.getLogger(__name__)
-
-# Load the Q&A reference document
-logger.info("Attempting to load qa_reference.txt")
+# Load or define the Q&A reference document
 try:
-    with open("qa_reference.txt", "r") as f:
-        TRAINING_DOCUMENT = f.read()
+    with open("qa_reference.txt", "r") as file:
+        TRAINING_DOCUMENT = file.read()
     logger.info("✅ Loaded Q&A reference document")
 except FileNotFoundError:
-    logger.error("❌ qa_reference.txt not found")
-    raise FileNotFoundError("The file 'qa_reference.txt' is required and was not found. Please provide the document.")
-except Exception as e:
-    logger.error(f"❌ Unexpected error loading qa_reference.txt: {str(e)}")
-    raise Exception(f"Failed to load qa_reference.txt due to an unexpected error: {str(e)}")
+    TRAINING_DOCUMENT = """
+    **Amapola Resort Chatbot Training Document**
 
-logger.info(f"TRAINING_DOCUMENT content length: {len(TRAINING_DOCUMENT)}")
+    You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I’m sorry, that’s a bit complex for me to handle. Let me get a human to assist you."
+
+    **Business Information**
+    - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
+    - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
+    - **Room Types**:
+      - Standard Room: $150/night, 2 guests, 1 queen bed
+      - Deluxe Room: $250/night, 4 guests, 2 queen beds, ocean view
+      - Suite: $400/night, 4 guests, 1 king bed, living area, oceanfront balcony
+    - **Amenities**:
+      - Beachfront access, outdoor pool, spa, gym, on-site restaurant (Amapola Bistro), free Wi-Fi, parking ($20/day)
+    - **Activities**:
+      - Snorkeling ($50/person), kayak rentals ($30/hour), sunset cruises ($100/person)
+    - **Policies**:
+      - Cancellation: Free cancellation up to 48 hours before arrival
+      - Pets: Not allowed
+      - Children: Kids under 12 stay free with an adult
+
+    **Common Q&A**
+
+    Q: What are your room rates?
+    A: We offer several room types:
+    - Standard Room: $150/night for 2 guests
+    - Deluxe Room: $250/night for 4 guests, with an ocean view
+    - Suite: $400/night for 4 guests, with an oceanfront balcony
+    Would you like to book a room, or do you have questions about a specific room type?
+
+    Q: How do I book a room?
+    A: I can help you start the booking process! Please let me know:
+    1. Your preferred dates (e.g., check-in and check-out dates)
+    2. The number of guests
+    3. Your preferred room type (Standard, Deluxe, or Suite)
+    For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer to speak with a human to finalize your booking, let me know!
+
+    Q: What is the check-in time?
+    A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
+
+    Q: Do you have a pool?
+    A: Yes, we have a beautiful outdoor pool with beachfront views! It’s open from 8:00 AM to 8:00 PM daily. We also have a spa and gym if you’re interested in other amenities. Would you like to know more?
+
+    Q: Can I bring my pet?
+    A: I’m sorry, but pets are not allowed at Amapola Resort. If you need recommendations for pet-friendly accommodations nearby, I can help you find some options!
+
+    Q: What activities do you offer?
+    A: We have a variety of activities for our guests:
+    - Snorkeling: $50 per person
+    - Kayak rentals: $30 per hour
+    - Sunset cruises: $100 per person
+    Would you like to book an activity, or do you have questions about any of these?
+
+    Q: What are the cancellation policies?
+    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
+
+    Q: Do you have a restaurant?
+    A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It’s open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
+
+    **Conversational Guidelines**
+    - Always greet new users with: "Thank you for contacting us."
+    - For follow-up messages, do not repeat the greeting. Instead, respond based on the context of the conversation.
+    - Ask clarifying questions if the user’s intent is unclear (e.g., "Could you tell me your preferred dates for booking?").
+    - Use a friendly and professional tone, and keep responses concise (under 150 tokens, as set by max_tokens).
+    - If the user asks multiple questions in one message, address each question systematically.
+    - If the user provides partial information (e.g., "I want to book a room"), ask for missing details (e.g., dates, number of guests, room type).
+    - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").
+    - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
+    """
+    logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
 # Parse room types and prices from TRAINING_DOCUMENT
 ROOM_TYPES = []
 ROOM_PRICES = {}
 try:
-    logger.info("Starting to parse TRAINING_DOCUMENT for room types")
-    # Split the document to isolate the Room Types section
-    if "**Room Types**:" not in TRAINING_DOCUMENT or "**Amenities**:" not in TRAINING_DOCUMENT:
-        raise ValueError("Required sections (**Room Types**: and **Amenities**:) not found in TRAINING_DOCUMENT")
-    room_types_section = TRAINING_DOCUMENT.split("**Room Types**:")[1].split("**Amenities**:")[0].strip()
-    if not room_types_section:
-        raise ValueError("Room types section is empty")
-
+    room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0]
     for line in room_types_section.splitlines():
         line = line.strip()
-        logger.info(f"Processing line: '{line}'")
-        if line.startswith("- "):
-            try:
-                # Remove the leading "- " and split by ":"
-                room_info = line[2:].strip().split(":")
-                if len(room_info) < 2:
-                    raise ValueError("Invalid room format, missing colon")
-                room_type = room_info[0].strip().lower()  # e.g., "standard room"
-                ROOM_TYPES.append(room_type)
+        if line.startswith("-"):
+            # Extract room type and price information
+            parts = line.split(":")[1].strip().split("(")
+            room_type_full = parts[0].split(":")[0].strip()  # e.g., "Standard Room $170/night"
+            room_type = room_type_full.split("$")[0].strip().lower()  # e.g., "standard room"
+            ROOM_TYPES.append(room_type)
 
-                # Extract price and details after the colon
-                details = room_info[1].strip()  # e.g., "$150/night, 2 guests, 1 queen bed" or "$150/night (Promotion: $120 until March 31, 2025), 2 guests, 1 queen bed"
-                
-                # Parse the regular price using regex
-                regular_price_match = re.search(r'\$\d+\.?\d*/night', details)
-                if not regular_price_match:
-                    raise ValueError("Regular price not found in expected format")
-                regular_price = float(regular_price_match.group(0).replace("$", "").replace("/night", "").strip())
+            # Parse the price (regular and promotion if present)
+            price_part = room_type_full.split("$")[1].split("/")[0].strip()  # e.g., "170"
+            regular_price = float(price_part)
 
-                # Check for promotion
-                promo_price = None
-                promo_end_date = None
-                if "(" in details and "Promotion:" in details:
-                    promo_info = details.split("(")[1].split(")")[0].strip()  # e.g., "Promotion: $120 until March 31, 2025"
-                    if "Promotion:" in promo_info:
-                        promo_parts = promo_info.split("until")
-                        if len(promo_parts) < 2:
-                            raise ValueError("Invalid promotion format, missing 'until' date")
-                        promo_price_str = promo_parts[0].replace("Promotion:", "").strip().split("$")[1].split("/")[0].strip()
-                        promo_price = float(promo_price_str)
-                        promo_end_date_str = promo_parts[1].strip()
-                        promo_end_date = datetime.strptime(promo_end_date_str, "%B %d, %Y").date()
+            promo_price = None
+            promo_end_date = None
+            if len(parts) > 1:  # Check for promotion
+                promo_info = parts[1].replace(")", "").strip()
+                if "Promotion" in promo_info:
+                    promo_parts = promo_info.split("until")
+                    promo_price_str = promo_parts[0].replace("Promotion:", "").strip().split("$")[1].split("/")[0].strip()
+                    promo_price = float(promo_price_str)
+                    promo_end_date_str = promo_parts[1].strip()
+                    promo_end_date = datetime.strptime(promo_end_date_str, "%B %d, %Y").date()
 
-                ROOM_PRICES[room_type] = {
-                    "regular_price": regular_price,
-                    "promo_price": promo_price,
-                    "promo_end_date": promo_end_date
-                }
-                logger.info(f"✅ Parsed room type: {room_type}, prices: {ROOM_PRICES[room_type]}")
-            except (IndexError, ValueError) as e:
-                logger.error(f"❌ Failed to parse line '{line}': {str(e)}")
-                raise  # Re-raise the exception to fail the parsing process
-    if not ROOM_TYPES:
-        logger.error("❌ No valid room types parsed from TRAINING_DOCUMENT")
-        raise ValueError("No valid room types parsed")
-except Exception as e:
-    logger.error(f"❌ Failed to parse room types and prices from TRAINING_DOCUMENT: {str(e)}")
-    raise  # Re-raise the exception to stop execution if parsing fails
-
-# Log the final ROOM_TYPES and ROOM_PRICES for debugging
-logger.info(f"Final ROOM_TYPES after parsing: {ROOM_TYPES}")
-logger.info(f"Final ROOM_PRICES after parsing: {ROOM_PRICES}")
+            ROOM_PRICES[room_type] = {
+                "regular_price": regular_price,
+                "promo_price": promo_price,
+                "promo_end_date": promo_end_date
+            }
+            logger.info(f"✅ Parsed room type: {room_type}, prices: {ROOM_PRICES[room_type]}")
+except IndexError:
+    # Fallback to a default list of room types and prices matching the training document
+    ROOM_TYPES = ["standard room", "junior suite", "apartment", "villa"]
+    ROOM_PRICES = {
+        "standard room": {"regular_price": 170.0, "promo_price": None, "promo_end_date": None},
+        "junior suite": {"regular_price": 200.0, "promo_price": None, "promo_end_date": None},
+        "apartment": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None},
+        "villa": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None}
+    }
+    logger.warning("⚠️ Failed to parse room types and prices from TRAINING_DOCUMENT; using default room types and prices")
 
 @contextmanager
 def get_db_connection():
@@ -543,7 +582,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
         logger.info(f"Initial booking state for convo_id {convo_id}: {booking_state_dict}")
 
     # Reset booking state if user starts a new booking
-    if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type", "awaiting_confirmation"]:
+    if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type"]:
         booking_state_dict = {"status": "awaiting_dates"}
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -602,24 +641,15 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
                 updated_state = c.fetchone()[0]
                 logger.info(f"After update, booking state for convo_id {convo_id}: {updated_state}")
 
-            ai_reply = f"Great! For your stay from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}, we have the following room options available:\n\n"
+            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: "
             room_options = []
-            logger.info(f"ROOM_TYPES: {ROOM_TYPES}")  # Debug log for ROOM_TYPES
-            logger.info(f"ROOM_PRICES: {ROOM_PRICES}")  # Debug log for ROOM_PRICES
-            if not ROOM_TYPES or not ROOM_PRICES:
-                logger.warning("ROOM_TYPES or ROOM_PRICES is empty or undefined")
-                ai_reply += "Error: No room options available. Please contact support.\n\nWould you like to proceed with a specific room type or need assistance with anything else?"
-            else:
-                for idx, room_type in enumerate(ROOM_TYPES, 1):
-                    display_type = room_type.replace(" ", " ").title()  # Convert to title case for display
-                    price_info = ROOM_PRICES.get(room_type, {"regular_price": 0, "promo_price": None, "promo_end_date": None})
-                    current_date = date.today()  # Use dynamic date instead of hardcoded
-                    price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
-                    room_option = f"{idx}. {display_type}: ${price_to_use}/night"
-                    if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date):
-                        room_option += f" (currently on promotion for ${price_info['promo_price']}/night)"
-                    room_options.append(room_option)
-                ai_reply += "\n".join(room_options) + "\n\nWould you like to proceed with a specific room type or need assistance with anything else?"
+            for room_type in ROOM_TYPES:
+                display_type = room_type.replace(" ", " ").title()  # Convert to title case for display
+                price_info = ROOM_PRICES[room_type]
+                current_date = date(2025, 3, 14)  # Current date as March 14, 2025
+                price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
+                room_options.append(f"{display_type} (${price_to_use}/night)")
+            ai_reply += ", ".join(room_options[:-1]) + ", or " + room_options[-1] + "?"
             logger.info(f"Prompting for room type: {ai_reply}")
             return (False, ai_reply)
 
@@ -628,7 +658,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
             logger.info(f"Date parsing error: {str(e)}, response: {ai_reply}")
             return (False, ai_reply)
 
-    # Step 2: Collect room type preference
+    # Step 2: Collect room type preference and hand off to agent
     elif booking_state_dict.get("status") == "awaiting_room_type":
         logger.info(f"Processing 'awaiting_room_type' state for message: '{message}'")
         # Ensure dates are available in the state
@@ -649,73 +679,30 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
             logger.info(f"Invalid room type provided: '{message}', prompting again: {ai_reply}")
             return (False, ai_reply)
 
-        # Store the selected room type
-        booking_state_dict["room_type"] = room_type_lower
-        booking_state_dict["status"] = "awaiting_confirmation"
+        # Prompt the user and immediately hand off to an agent
+        ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
+        logger.info(f"Handing off to agent with reply: '{ai_reply}'")
+
+        # Update conversation state for handoff
+        booking_state_dict["status"] = "handoff"
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
+            c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
+                      (json.dumps(booking_state_dict), convo_id))
             conn.commit()
             # Verify the state was updated
             c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
             updated_state = c.fetchone()[0]
-            logger.info(f"After room type selection, booking state for convo_id {convo_id}: {updated_state}")
+            logger.info(f"After handoff, booking state for convo_id {convo_id}: {updated_state}")
 
-        # Get the price for the selected room type
-        price_info = ROOM_PRICES.get(room_type_lower, {"regular_price": 0, "promo_price": None, "promo_end_date": None})
-        current_date = date.today()  # Use dynamic date instead of hardcoded
-        price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
-
-        check_in_date = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
-        check_out_date = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
-        ai_reply = f"The {room_type_lower.title()} is available for your stay from {check_in_date.strftime('%B %d')} to {check_out_date.strftime('%B %d')}. The {'promotional rate' if price_to_use == price_info['promo_price'] else 'rate'} is ${price_to_use}/night.\n\nWould you like to proceed with the booking? If so, please let me know, and I can assist you with the next steps!"
-        logger.info(f"Prompting for confirmation: {ai_reply}")
+        # Trigger dashboard refresh
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
+        logger.info(f"Emitted refresh_conversations event for convo_id {convo_id}")
         return (False, ai_reply)
-
-    # Step 3: Await confirmation and hand off to agent
-    elif booking_state_dict.get("status") == "awaiting_confirmation":
-        logger.info(f"Processing 'awaiting_confirmation' state for message: '{message}'")
-        # Ensure required state data is available
-        if "check_in" not in booking_state_dict or "check_out" not in booking_state_dict or "room_type" not in booking_state_dict:
-            ai_reply = "I need your check-in and check-out dates and room type to proceed. Let’s start over. Please provide your dates (e.g., 'March 10 to March 15')."
-            booking_state_dict["status"] = "awaiting_dates"
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
-                conn.commit()
-            logger.info(f"Missing state data, resetting to 'awaiting_dates': {ai_reply}")
-            return (False, ai_reply)
-
-        # Check if the user confirms the booking
-        if "yes" in message.lower():
-            room_type = booking_state_dict["room_type"]
-            ai_reply = f"Thanks for your room type preference! You’ve chosen {room_type.title()} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
-            logger.info(f"Handing off to agent with reply: '{ai_reply}'")
-
-            # Update conversation state for handoff
-            booking_state_dict["status"] = "handoff"
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
-                          (json.dumps(booking_state_dict), convo_id))
-                conn.commit()
-                # Verify the state was updated
-                c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
-                updated_state = c.fetchone()[0]
-                logger.info(f"After handoff, booking state for convo_id {convo_id}: {updated_state}")
-
-            # Trigger dashboard refresh
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
-            logger.info(f"Emitted refresh_conversations event for convo_id {convo_id}")
-            return (False, ai_reply)
-        else:
-            ai_reply = "I’m sorry, I didn’t understand your response. Would you like to proceed with the booking? Please confirm with 'Yes' or let me know how I can assist you further."
-            logger.info(f"Prompting for confirmation again: {ai_reply}")
-            return (False, ai_reply)
 
     logger.info(f"No matching booking state for convo_id {convo_id}, passing to default handler")
     return (True, None)
-
+    
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated, "agent": current_user.username if current_user.is_authenticated else None})
@@ -864,42 +851,6 @@ def telegram():
         if not ai_enabled:
             logger.info(f"❌ AI disabled for convo_id: {convo_id}, Skipping AI response")
             return jsonify({}), 200
-
-        # Check for ASSIST or AGENT keywords in user message
-        if any(keyword in text.upper() for keyword in ["ASSIST", "AGENT"]):
-            response = "I’m sorry, I couldn’t process that. Let me get an agent to assist you."
-            logger.info("✅ Forcing handoff for keywords 'ASSIST' or 'AGENT', AI reply set to: " + response)
-        else:
-            # Check booking flow with message_id to prevent duplicates
-            continue_with_ai, response = handle_booking_flow(text, convo_id, chat_id, "telegram", message_id=message_id)
-            if not continue_with_ai:
-                logger.info("✅ Booking flow handled, using booking flow reply")
-            else:
-                response = ai_respond(text, convo_id)
-
-        log_message(convo_id, "AI", response, "ai")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
-
-        # Check for handoff triggers in AI response or user message
-        if any(keyword in response.lower() for keyword in ["agent", "assistance"]) or any(keyword in text.upper() for keyword in ["ASSIST", "AGENT"]):
-            if not handoff_notified:
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                conn.commit()
-                # Verify the update
-                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-                updated_result = c.fetchone()
-                logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
-                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
-                logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
-
-        try:
-            send_telegram_message(chat_id, response)
-            logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
-        except Exception as e:
-            logger.error(f"❌ Telegram error: {str(e)}")
-            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
-
-        return jsonify({}), 200
 
         # Check for HELP keyword
         if "HELP" in text.upper():
