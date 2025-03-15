@@ -548,6 +548,9 @@ def extract_room_type_with_ai(message):
 # Add a global set to track processed message IDs (assuming Telegram provides a message ID)
 PROCESSED_MESSAGES = set()
 
+# Add a global set to track processed messages
+PROCESSED_MESSAGES = set()
+
 def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
     """
     Handle the booking flow for a conversation.
@@ -582,7 +585,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
         logger.info(f"Initial booking state for convo_id {convo_id}: {booking_state_dict}")
 
     # Reset booking state if user starts a new booking
-    if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type"]:
+    if "book" in message.lower() and booking_state_dict.get("status") not in ["awaiting_dates", "awaiting_room_type", "awaiting_confirmation"]:
         booking_state_dict = {"status": "awaiting_dates"}
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -641,15 +644,18 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
                 updated_state = c.fetchone()[0]
                 logger.info(f"After update, booking state for convo_id {convo_id}: {updated_state}")
 
-            ai_reply = f"Thanks for your dates! You’ve chosen {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}. Which room type would you prefer: "
+            ai_reply = f"Great! For your stay from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}, we have the following room options available:\n\n"
             room_options = []
-            for room_type in ROOM_TYPES:
+            for idx, room_type in enumerate(ROOM_TYPES, 1):
                 display_type = room_type.replace(" ", " ").title()  # Convert to title case for display
                 price_info = ROOM_PRICES[room_type]
                 current_date = date(2025, 3, 14)  # Current date as March 14, 2025
                 price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
-                room_options.append(f"{display_type} (${price_to_use}/night)")
-            ai_reply += ", ".join(room_options[:-1]) + ", or " + room_options[-1] + "?"
+                room_option = f"{idx}. {display_type}: ${price_to_use}/night"
+                if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date):
+                    room_option += f" (currently on promotion for ${price_info['promo_price']}/night)"
+                room_options.append(room_option)
+            ai_reply += "\n".join(room_options) + "\n\nWould you like to proceed with a specific room type or need assistance with anything else?"
             logger.info(f"Prompting for room type: {ai_reply}")
             return (False, ai_reply)
 
@@ -658,7 +664,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
             logger.info(f"Date parsing error: {str(e)}, response: {ai_reply}")
             return (False, ai_reply)
 
-    # Step 2: Collect room type preference and hand off to agent
+    # Step 2: Collect room type preference
     elif booking_state_dict.get("status") == "awaiting_room_type":
         logger.info(f"Processing 'awaiting_room_type' state for message: '{message}'")
         # Ensure dates are available in the state
@@ -679,26 +685,69 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
             logger.info(f"Invalid room type provided: '{message}', prompting again: {ai_reply}")
             return (False, ai_reply)
 
-        # Prompt the user and immediately hand off to an agent
-        ai_reply = f"Thanks for your room type preference! You’ve chosen {message} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
-        logger.info(f"Handing off to agent with reply: '{ai_reply}'")
-
-        # Update conversation state for handoff
-        booking_state_dict["status"] = "handoff"
+        # Store the selected room type
+        booking_state_dict["room_type"] = room_type_lower
+        booking_state_dict["status"] = "awaiting_confirmation"
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
-                      (json.dumps(booking_state_dict), convo_id))
+            c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
             conn.commit()
             # Verify the state was updated
             c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
             updated_state = c.fetchone()[0]
-            logger.info(f"After handoff, booking state for convo_id {convo_id}: {updated_state}")
+            logger.info(f"After room type selection, booking state for convo_id {convo_id}: {updated_state}")
 
-        # Trigger dashboard refresh
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
-        logger.info(f"Emitted refresh_conversations event for convo_id {convo_id}")
+        # Get the price for the selected room type
+        price_info = ROOM_PRICES[room_type_lower]
+        current_date = date(2025, 3, 14)  # Current date as March 14, 2025
+        price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
+
+        check_in_date = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
+        check_out_date = datetime.strptime(booking_state_dict["check_out"], "%Y-%m-%d")
+        ai_reply = f"The {room_type_lower.title()} is available for your stay from {check_in_date.strftime('%B %d')} to {check_out_date.strftime('%B %d')}. The {'promotional rate' if price_to_use == price_info['promo_price'] else 'rate'} is ${price_to_use}/night.\n\nWould you like to proceed with the booking? If so, please let me know, and I can assist you with the next steps!"
+        logger.info(f"Prompting for confirmation: {ai_reply}")
         return (False, ai_reply)
+
+    # Step 3: Await confirmation and hand off to agent
+    elif booking_state_dict.get("status") == "awaiting_confirmation":
+        logger.info(f"Processing 'awaiting_confirmation' state for message: '{message}'")
+        # Ensure required state data is available
+        if "check_in" not in booking_state_dict or "check_out" not in booking_state_dict or "room_type" not in booking_state_dict:
+            ai_reply = "I need your check-in and check-out dates and room type to proceed. Let’s start over. Please provide your dates (e.g., 'March 10 to March 15')."
+            booking_state_dict["status"] = "awaiting_dates"
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
+                conn.commit()
+            logger.info(f"Missing state data, resetting to 'awaiting_dates': {ai_reply}")
+            return (False, ai_reply)
+
+        # Check if the user confirms the booking
+        if "yes" in message.lower():
+            room_type = booking_state_dict["room_type"]
+            ai_reply = f"Thanks for your room type preference! You’ve chosen {room_type.title()} from {booking_state_dict['check_in']} to {booking_state_dict['check_out']}. An agent will assist you on the dashboard to finalize your booking."
+            logger.info(f"Handing off to agent with reply: '{ai_reply}'")
+
+            # Update conversation state for handoff
+            booking_state_dict["status"] = "handoff"
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE conversations SET booking_state = ?, handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", 
+                          (json.dumps(booking_state_dict), convo_id))
+                conn.commit()
+                # Verify the state was updated
+                c.execute("SELECT booking_state FROM conversations WHERE id = ?", (convo_id,))
+                updated_state = c.fetchone()[0]
+                logger.info(f"After handoff, booking state for convo_id {convo_id}: {updated_state}")
+
+            # Trigger dashboard refresh
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": channel})
+            logger.info(f"Emitted refresh_conversations event for convo_id {convo_id}")
+            return (False, ai_reply)
+        else:
+            ai_reply = "I’m sorry, I didn’t understand your response. Would you like to proceed with the booking? Please confirm with 'Yes' or let me know how I can assist you further."
+            logger.info(f"Prompting for confirmation again: {ai_reply}")
+            return (False, ai_reply)
 
     logger.info(f"No matching booking state for convo_id {convo_id}, passing to default handler")
     return (True, None)
