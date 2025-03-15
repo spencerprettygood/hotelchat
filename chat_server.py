@@ -545,7 +545,10 @@ def extract_room_type_with_ai(message):
         logger.error(f"❌ Error extracting room type with AI: {str(e)}")
         return None
 
-def handle_booking_flow(message, convo_id, chat_id, channel):
+# Add a global set to track processed message IDs (assuming Telegram provides a message ID)
+PROCESSED_MESSAGES = set()
+
+def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
     """
     Handle the booking flow for a conversation.
     Args:
@@ -553,10 +556,17 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
         convo_id (int): The conversation ID.
         chat_id (str): The chat ID or username.
         channel (str): The communication channel (e.g., 'telegram').
+        message_id (str, optional): The message ID to prevent duplicate processing.
     Returns:
         tuple: (bool, str) - (whether to continue with AI response, AI reply if any)
     """
-    logger.info(f"Handling booking flow for convo_id {convo_id}, message: '{message}', chat_id: {chat_id}, channel: {channel}")
+    # Use message_id to prevent duplicate processing
+    message_key = f"{convo_id}:{message_id}" if message_id else f"{convo_id}:{message}"
+    if message_key in PROCESSED_MESSAGES:
+        logger.info(f"Skipping duplicate message for convo_id {convo_id}, message_key: {message_key}")
+        return (False, None)
+    PROCESSED_MESSAGES.add(message_key)
+    logger.info(f"Handling booking flow for convo_id {convo_id}, message: '{message}', chat_id: {chat_id}, channel: {channel}, message_id: {message_id}")
 
     # Load booking state from the database
     with get_db_connection() as conn:
@@ -660,6 +670,13 @@ def handle_booking_flow(message, convo_id, chat_id, channel):
                 c.execute("UPDATE conversations SET booking_state = ? WHERE id = ?", (json.dumps(booking_state_dict), convo_id))
                 conn.commit()
             logger.info(f"Missing dates in state, resetting to 'awaiting_dates': {ai_reply}")
+            return (False, ai_reply)
+
+        # Validate the room type
+        room_type_lower = message.lower()
+        if room_type_lower not in ROOM_TYPES:
+            ai_reply = f"Sorry, I didn’t recognize that room type. Please choose from: {', '.join([rt.title() for rt in ROOM_TYPES[:-1]])}, or {ROOM_TYPES[-1].title()}."
+            logger.info(f"Invalid room type provided: '{message}', prompting again: {ai_reply}")
             return (False, ai_reply)
 
         # Prompt the user and immediately hand off to an agent
