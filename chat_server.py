@@ -898,6 +898,42 @@ def telegram():
             logger.info(f"❌ AI disabled for convo_id: {convo_id}, Skipping AI response")
             return jsonify({}), 200
 
+        # Check for ASSIST or AGENT keywords in user message
+        if any(keyword in text.upper() for keyword in ["ASSIST", "AGENT"]):
+            response = "I’m sorry, I couldn’t process that. Let me get an agent to assist you."
+            logger.info("✅ Forcing handoff for keywords 'ASSIST' or 'AGENT', AI reply set to: " + response)
+        else:
+            # Check booking flow with message_id to prevent duplicates
+            continue_with_ai, response = handle_booking_flow(text, convo_id, chat_id, "telegram", message_id=message_id)
+            if not continue_with_ai:
+                logger.info("✅ Booking flow handled, using booking flow reply")
+            else:
+                response = ai_respond(text, convo_id)
+
+        log_message(convo_id, "AI", response, "ai")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
+
+        # Check for handoff triggers in AI response or user message
+        if any(keyword in response.lower() for keyword in ["agent", "assistance"]) or any(keyword in text.upper() for keyword in ["ASSIST", "AGENT"]):
+            if not handoff_notified:
+                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                conn.commit()
+                # Verify the update
+                c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+                updated_result = c.fetchone()
+                logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
+                logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+
+        try:
+            send_telegram_message(chat_id, response)
+            logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
+        except Exception as e:
+            logger.error(f"❌ Telegram error: {str(e)}")
+            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
+
+        return jsonify({}), 200
+
         # Check for HELP keyword
         if "HELP" in text.upper():
             response = "I’m sorry, I couldn’t process that. Let me get another agent to assist you."
