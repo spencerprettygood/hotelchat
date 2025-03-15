@@ -80,12 +80,13 @@ WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
 
 DB_NAME = "chatbot.db"
 
-# Load or define the Q&A reference document
 try:
+    logger.info("Attempting to load qa_reference.txt")
     with open("qa_reference.txt", "r") as f:
         TRAINING_DOCUMENT = f.read()
     logger.info("✅ Loaded Q&A reference document")
 except FileNotFoundError:
+    logger.warning("⚠️ qa_reference.txt not found, using default training document")
     TRAINING_DOCUMENT = """
     **Amapola Resort Chatbot Training Document**
 
@@ -156,53 +157,137 @@ except FileNotFoundError:
     - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").
     - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
     """
-    logger.warning("⚠️ qa_reference.txt not found, using default training document")
+except Exception as e:
+    logger.error(f"❌ Unexpected error loading qa_reference.txt: {str(e)}; using default training document")
+    TRAINING_DOCUMENT = """
+    **Amapola Resort Chatbot Training Document**
 
+    You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I’m sorry, that’s a bit complex for me to handle. Let me get a human to assist you."
+
+    **Business Information**
+    - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
+    - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
+   
+    - **Room Types**:
+      - Standard Room: $150/night, 2 guests, 1 queen bed
+      - Deluxe Room: $250/night, 4 guests, 2 queen beds, ocean view
+      - Suite: $400/night, 4 guests, 1 king bed, living area, oceanfront balcony
+    - **Amenities**:
+      - Beachfront access, outdoor pool, spa, gym, on-site restaurant (Amapola Bistro), free Wi-Fi, parking ($20/day)
+    - **Activities**:
+      - Snorkeling ($50/person), kayak rentals ($30/hour), sunset cruises ($100/person)
+    - **Policies**:
+      - Cancellation: Free cancellation up to 48 hours before arrival
+      - Pets: Not allowed
+      - Children: Kids under 12 stay free with an adult
+
+    **Common Q&A**
+
+    Q: What are your room rates?
+    A: We offer several room types:
+    - Standard Room: $150/night for 2 guests
+    - Deluxe Room: $250/night for 4 guests, with an ocean view
+    - Suite: $400/night for 4 guests, with an oceanfront balcony
+    Would you like to book a room, or do you have questions about a specific room type?
+
+    Q: How do I book a room?
+    A: I can help you start the booking process! Please let me know:
+    1. Your preferred dates (e.g., check-in and check-out dates)
+    2. The number of guests
+    3. Your preferred room type (Standard, Deluxe, or Suite)
+    For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer to speak with a human to finalize your booking, let me know!
+
+    Q: What is the check-in time?
+    A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
+
+    Q: Do you have a pool?
+    A: Yes, we have a beautiful outdoor pool with beachfront views! It’s open from 8:00 AM to 8:00 PM daily. We also have a spa and gym if you’re interested in other amenities. Would you like to know more?
+
+    Q: Can I bring my pet?
+    A: I’m sorry, but pets are not allowed at Amapola Resort. If you need recommendations for pet-friendly accommodations nearby, I can help you find some options!
+
+    Q: What activities do you offer?
+    A: We have a variety of activities for our guests:
+    - Snorkeling: $50 per person
+    - Kayak rentals: $30 per hour
+    - Sunset cruises: $100 per person
+    Would you like to book an activity, or do you have questions about any of these?
+
+    Q: What are the cancellation policies?
+    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
+
+    Q: Do you have a restaurant?
+    A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It’s open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
+
+    **Conversational Guidelines**
+    - Always greet new users with: "Thank you for contacting us."
+    - For follow-up messages, do not repeat the greeting. Instead, respond based on the context of the conversation.
+    - Ask clarifying questions if the user’s intent is unclear (e.g., "Could you tell me your preferred dates for booking?").
+    - Use a friendly and professional tone, and keep responses concise (under 150 tokens, as set by max_tokens).
+    - If the user asks multiple questions in one message, address each question systematically.
+    - If the user provides partial information (e.g., "I want to book a room"), ask for missing details (e.g., dates, number of guests, room type).
+    - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").
+    - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
+    """
+logger.info(f"TRAINING_DOCUMENT content length: {len(TRAINING_DOCUMENT)}")
+
+# Parse room types and prices from TRAINING_DOCUMENT
 ROOM_TYPES = []
 ROOM_PRICES = {}
 try:
-    room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0]
+    logger.info("Starting to parse TRAINING_DOCUMENT for room types")
+    room_types_section = TRAINING_DOCUMENT.split("**Room Types**")[1].split("**Amenities**")[0].strip()
+    if not room_types_section:
+        raise IndexError("Room types section is empty")
     for line in room_types_section.splitlines():
         line = line.strip()
+        logger.info(f"Processing line: '{line}'")
         if line.startswith("-"):
-            # Extract room type and price information
-            parts = line.split(":")[1].strip().split("(")
-            room_type_full = parts[0].split(":")[0].strip()  # e.g., "Standard Room $170/night"
-            room_type = room_type_full.split("$")[0].strip().lower()  # e.g., "standard room"
-            ROOM_TYPES.append(room_type)
+            try:
+                # Extract room type and price information
+                parts = line.split(":")[1].strip().split("(")  # Split after ":" and handle promotion
+                room_type_full = parts[0].strip()  # e.g., "Standard Room: $150/night, 2 guests, 1 queen bed"
+                room_type = room_type_full.split("$")[0].strip().split(":")[0].strip().lower()  # e.g., "standard room"
+                ROOM_TYPES.append(room_type)
 
-            # Parse the price (regular and promotion if present)
-            price_part = room_type_full.split("$")[1].split("/")[0].strip()  # e.g., "170"
-            regular_price = float(price_part)
+                # Parse the price (regular price only, as no promotions are in this format)
+                price_part = room_type_full.split("$")[1].split(",")[0].strip().split("/")[0]  # e.g., "150"
+                regular_price = float(price_part)
 
-            promo_price = None
-            promo_end_date = None
-            if len(parts) > 1:  # Check for promotion
-                promo_info = parts[1].replace(")", "").strip()
-                if "Promotion" in promo_info:
-                    promo_parts = promo_info.split("until")
-                    promo_price_str = promo_parts[0].replace("Promotion:", "").strip().split("$")[1].split("/")[0].strip()
-                    promo_price = float(promo_price_str)
-                    promo_end_date_str = promo_parts[1].strip()
-                    promo_end_date = datetime.strptime(promo_end_date_str, "%B %d, %Y").date()
+                promo_price = None
+                promo_end_date = None
+                if len(parts) > 1:  # Check for promotion (though not present in this document)
+                    promo_info = parts[1].replace(")", "").strip()
+                    if "Promotion" in promo_info:
+                        promo_parts = promo_info.split("until")
+                        promo_price_str = promo_parts[0].replace("Promotion:", "").strip().split("$")[1].split("/")[0].strip()
+                        promo_price = float(promo_price_str)
+                        promo_end_date_str = promo_parts[1].strip()
+                        promo_end_date = datetime.strptime(promo_end_date_str, "%B %d, %Y").date()
 
-            ROOM_PRICES[room_type] = {
-                "regular_price": regular_price,
-                "promo_price": promo_price,
-                "promo_end_date": promo_end_date
-            }
-            logger.info(f"✅ Parsed room type: {room_type}, prices: {ROOM_PRICES[room_type]}")
-except IndexError:
-    # Fallback to a default list of room types and prices matching the training document
-    ROOM_TYPES = ["standard room", "junior suite", "apartment", "villa"]
+                ROOM_PRICES[room_type] = {
+                    "regular_price": regular_price,
+                    "promo_price": promo_price,
+                    "promo_end_date": promo_end_date
+                }
+                logger.info(f"✅ Parsed room type: {room_type}, prices: {ROOM_PRICES[room_type]}")
+            except (IndexError, ValueError) as e:
+                logger.warning(f"⚠️ Failed to parse line '{line}': {str(e)}, skipping")
+    if not ROOM_TYPES:
+        raise IndexError("No valid room types parsed")
+except IndexError as e:
+    logger.warning(f"⚠️ {str(e)}; using default room types and prices")
+    ROOM_TYPES = ["standard room", "deluxe room", "suite"]
     ROOM_PRICES = {
-        "standard room": {"regular_price": 170.0, "promo_price": None, "promo_end_date": None},
-        "junior suite": {"regular_price": 200.0, "promo_price": 180.0, "promo_end_date": date(2025, 3, 31)},
-        "apartment": {"regular_price": 280.0, "promo_price": None, "promo_end_date": None},
-        "villa": {"regular_price": 280.0, "promo_price": 250.0, "promo_end_date": date(2025, 3, 31)}
+        "standard room": {"regular_price": 150.0, "promo_price": None, "promo_end_date": None},
+        "deluxe room": {"regular_price": 250.0, "promo_price": None, "promo_end_date": None},
+        "suite": {"regular_price": 400.0, "promo_price": None, "promo_end_date": None}
     }
-    logger.warning("⚠️ Failed to parse room types and prices from TRAINING_DOCUMENT; using default room types and prices")
+    logger.warning("⚠️ Failed to parse room types and prices from TRAINING_DOCUMENT; using default room types and prices matching document")
 
+# Log the final ROOM_TYPES and ROOM_PRICES for debugging
+logger.info(f"Final ROOM_TYPES after parsing: {ROOM_TYPES}")
+logger.info(f"Final ROOM_PRICES after parsing: {ROOM_PRICES}")
 @contextmanager
 def get_db_connection():
     """Context manager for SQLite database connection to ensure proper handling."""
