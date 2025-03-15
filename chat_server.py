@@ -643,16 +643,22 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
 
             ai_reply = f"Great! For your stay from {check_in.strftime('%B %d')} to {check_out.strftime('%B %d')}, we have the following room options available:\n\n"
             room_options = []
-            for idx, room_type in enumerate(ROOM_TYPES, 1):
-                display_type = room_type.replace(" ", " ").title()  # Convert to title case for display
-                price_info = ROOM_PRICES[room_type]
-                current_date = date(2025, 3, 14)  # Current date as March 14, 2025
-                price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
-                room_option = f"{idx}. {display_type}: ${price_to_use}/night"
-                if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date):
-                    room_option += f" (currently on promotion for ${price_info['promo_price']}/night)"
-                room_options.append(room_option)
-            ai_reply += "\n".join(room_options) + "\n\nWould you like to proceed with a specific room type or need assistance with anything else?"
+            logger.info(f"ROOM_TYPES: {ROOM_TYPES}")  # Debug log for ROOM_TYPES
+            logger.info(f"ROOM_PRICES: {ROOM_PRICES}")  # Debug log for ROOM_PRICES
+            if not ROOM_TYPES or not ROOM_PRICES:
+                logger.warning("ROOM_TYPES or ROOM_PRICES is empty or undefined")
+                ai_reply += "Error: No room options available. Please contact support.\n\nWould you like to proceed with a specific room type or need assistance with anything else?"
+            else:
+                for idx, room_type in enumerate(ROOM_TYPES, 1):
+                    display_type = room_type.replace(" ", " ").title()  # Convert to title case for display
+                    price_info = ROOM_PRICES.get(room_type, {"regular_price": 0, "promo_price": None, "promo_end_date": None})
+                    current_date = date.today()  # Use dynamic date instead of hardcoded
+                    price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
+                    room_option = f"{idx}. {display_type}: ${price_to_use}/night"
+                    if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date):
+                        room_option += f" (currently on promotion for ${price_info['promo_price']}/night)"
+                    room_options.append(room_option)
+                ai_reply += "\n".join(room_options) + "\n\nWould you like to proceed with a specific room type or need assistance with anything else?"
             logger.info(f"Prompting for room type: {ai_reply}")
             return (False, ai_reply)
 
@@ -695,8 +701,8 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
             logger.info(f"After room type selection, booking state for convo_id {convo_id}: {updated_state}")
 
         # Get the price for the selected room type
-        price_info = ROOM_PRICES[room_type_lower]
-        current_date = date(2025, 3, 14)  # Current date as March 14, 2025
+        price_info = ROOM_PRICES.get(room_type_lower, {"regular_price": 0, "promo_price": None, "promo_end_date": None})
+        current_date = date.today()  # Use dynamic date instead of hardcoded
         price_to_use = price_info["promo_price"] if price_info["promo_price"] and (not price_info["promo_end_date"] or price_info["promo_end_date"] >= current_date) else price_info["regular_price"]
 
         check_in_date = datetime.strptime(booking_state_dict["check_in"], "%Y-%m-%d")
@@ -748,7 +754,7 @@ def handle_booking_flow(message, convo_id, chat_id, channel, message_id=None):
 
     logger.info(f"No matching booking state for convo_id {convo_id}, passing to default handler")
     return (True, None)
-    
+
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated, "agent": current_user.username if current_user.is_authenticated else None})
