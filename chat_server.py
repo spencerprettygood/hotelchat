@@ -753,10 +753,10 @@ def chat():
                     except Exception as e:
                         logger.error(f"❌ Telegram error sending AI message: {str(e)}")
                         socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
-                # Perform handoff to dashboard
+                # Perform handoff to dashboard, but keep AI enabled
                 with get_db_connection() as conn:
                     c = conn.cursor()
-                    c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                     conn.commit()
                     c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                     updated_result = c.fetchone()
@@ -795,7 +795,7 @@ def chat():
                     if not handoff_notified:
                         with get_db_connection() as conn:
                             c = conn.cursor()
-                            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                             conn.commit()
                         time.sleep(3.0)
                         with get_db_connection() as conn:
@@ -821,7 +821,6 @@ def telegram():
     update = request.get_json()
     logger.info(f"Received Telegram update: {update}")
 
-    # Extract message details
     if "message" not in update:
         logger.warning("No message in Telegram update, returning OK")
         return jsonify({"status": "ok"}), 200
@@ -829,7 +828,7 @@ def telegram():
     message_data = update["message"]
     chat_id = str(message_data["chat"]["id"])
     text = message_data.get("text", "")
-    message_id = str(message_data.get("message_id", ""))  # Extract message_id, default to empty string if not present
+    message_id = str(message_data.get("message_id", ""))
 
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -843,7 +842,6 @@ def telegram():
             ai_enabled = 1
             handoff_notified = 0
             assigned_agent = None
-            # Send welcome message for new conversation
             welcome_message = "Thank you for contacting us."
             log_message(convo_id, "AI", welcome_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
@@ -864,7 +862,6 @@ def telegram():
             logger.info(f"❌ AI disabled for convo_id: {convo_id}, Skipping AI response")
             return jsonify({}), 200
 
-        # Check for booking-related keywords
         if "book" in text.lower():
             response = "I’ll connect you with a team member who can assist with your booking on the dashboard."
             logger.info(f"✅ Detected booking request, handing off to dashboard: {response}")
@@ -876,8 +873,7 @@ def telegram():
             except Exception as e:
                 logger.error(f"❌ Telegram error: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
-            # Perform handoff to dashboard
-            c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
             conn.commit()
             c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
             updated_result = c.fetchone()
@@ -886,7 +882,6 @@ def telegram():
             logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
             return jsonify({}), 200
 
-        # Check for HELP keyword
         if "HELP" in text.upper():
             response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you."
             logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + response)
@@ -898,9 +893,8 @@ def telegram():
 
         if "sorry" in response.lower() or "HELP" in text.upper():
             if not handoff_notified:
-                c.execute("UPDATE conversations SET handoff_notified = 1, ai_enabled = 0, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                 conn.commit()
-                # Verify the update
                 c.execute("SELECT handoff_notified, visible_in_conversations, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
                 updated_result = c.fetchone()
                 logger.info(f"✅ After handoff update for convo_id {convo_id}: handoff_notified={updated_result[0]}, visible_in_conversations={updated_result[1]}, assigned_agent={updated_result[2]}")
@@ -915,7 +909,7 @@ def telegram():
             socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
 
         return jsonify({}), 200
-
+        
 @app.route("/instagram", methods=["POST"])
 def instagram():
     logger.info("✅ Entering /instagram endpoint")
