@@ -863,7 +863,7 @@ def telegram():
             return jsonify({}), 200
 
         if "book" in text.lower():
-            response = "I’ll connect you with a team member who can assist with your booking on the dashboard."
+            response = "I’ll connect you with a team member who can assist with your booking."
             logger.info(f"✅ Detected booking request, handing off to dashboard: {response}")
             log_message(convo_id, "AI", response, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
