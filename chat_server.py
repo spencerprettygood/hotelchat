@@ -1212,24 +1212,28 @@ def handoff():
     data = request.get_json()
     convo_id = data.get("conversation_id")
     if not convo_id:
-        logger.error("❌ Missing conversation ID in /handoff request")
-        return jsonify({"message": "Missing conversation ID"}), 400
+        logger.error("❌ Missing conversation_id in /handoff request")
+        return jsonify({"error": "Missing conversation_id"}), 400
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("UPDATE conversations SET assigned_agent = ?, handoff_notified = 0 WHERE id = ?", (current_user.username, convo_id))
-            c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-            result = c.fetchone()
-            logger.info(f"✅ Handoff updated: convo_id={convo_id}, assigned_agent={result[2]}") # Debug log
             c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
-            username, channel = c.fetchone()
+            result = c.fetchone()
+            if not result:
+                logger.error(f"❌ Conversation not found: {convo_id}")
+                return jsonify({"error": "Conversation not found"}), 404
+            username, channel = result
+            c.execute("UPDATE conversations SET assigned_agent = ?, ai_enabled = 0 WHERE id = ?", (current_user.username, convo_id))
             conn.commit()
+            c.execute("SELECT assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
+            updated_result = c.fetchone()
+            logger.info(f"✅ After handoff for convo_id {convo_id}: assigned_agent={updated_result[0]}, ai_enabled={updated_result[1]}")
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
-        logger.info(f"✅ Chat {convo_id} assigned to {current_user.username}")
-        return jsonify({"message": f"Chat assigned to {current_user.username}"})
+        logger.info(f"✅ Agent {current_user.username} took over convo_id {convo_id}, AI disabled")
+        return jsonify({"status": "success", "message": f"Agent {current_user.username} has taken over the conversation"})
     except Exception as e:
-        logger.error(f"❌ Error in /handoff endpoint: {e}")
-        return jsonify({"error": "Failed to assign chat"}), 500
+        logger.error(f"❌ Error in /handoff endpoint: {str(e)}")
+        return jsonify({"error": "Failed to process handoff"}), 500
 
 @app.route("/handback-to-ai", methods=["POST"])
 @login_required
