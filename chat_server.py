@@ -394,14 +394,16 @@ def check_availability(check_in, check_out):
             end_time = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
 
             # Check for events on this day
+            logger.info(f"✅ Checking calendar for {current_date.strftime('%Y-%m-%d')}")
             events_result = service.events().list(
-                calendarId='primary',  # Use your specific calendar ID if not 'primary'
+                calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',  # Use your specific calendar ID if not 'primary'
                 timeMin=start_time,
                 timeMax=end_time,
                 singleEvents=True,
                 orderBy='startTime'
             ).execute()
             events = events_result.get('items', [])
+            logger.info(f"✅ Events found on {current_date.strftime('%Y-%m-%d')}: {events}")
 
             # If any "Fully Booked" event is found on this day, the range is unavailable
             if any(event.get('summary') == "Fully Booked" for event in events):
@@ -415,35 +417,38 @@ def check_availability(check_in, check_out):
         return f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are available."
     except Exception as e:
         logger.error(f"❌ Google Calendar API error: {str(e)}")
-        return "Sorry, I’m having trouble checking availability right now. Please try again later or contact an agent."
+        return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
         
 def ai_respond(message, convo_id):
     """
     Generate an AI response for the given message and conversation ID using OpenAI,
-    with added logic to handle availability checks based on Google Calendar.
+    with logic to handle availability checks based on Google Calendar.
     """
     logger.info(f"✅ Generating AI response for convo_id {convo_id}: {message}")
     try:
         # Check for availability query with date range
-        date_match = re.search(r'(?:are rooms available|availability) from\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4})\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4}|\d{4}-\d{2}-\d{2})', message.lower())
+        date_match = re.search(r'(?:are rooms available|availability|do you have any rooms|rooms available)\s*(?:from|on)?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4})(?:\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4}|\d{4}-\d{2}-\d{2}))?', message.lower())
         if date_match:
             check_in_str, check_out_str = date_match.groups()
-            # Parse dates (supporting formats like "March 17, 2025" to "March 20, 2025")
+            # Parse dates
             try:
-                check_in = datetime.strptime(check_in_str, '%B %d')
-                check_out = datetime.strptime(check_out_str, '%B %d')
+                check_in = datetime.strptime(check_in_str, '%B %d, %Y')
+                if check_out_str:
+                    try:
+                        check_out = datetime.strptime(check_out_str, '%B %d, %Y')
+                    except ValueError:
+                        check_out = datetime.strptime(check_out_str, '%Y-%m-%d')
+                else:
+                    # If only one date is provided, assume a one-night stay
+                    check_out = check_in + timedelta(days=1)
             except ValueError:
-                try:
-                    check_in = datetime.strptime(check_in_str, '%B %d')
-                    check_out = datetime.strptime(check_out_str, '%Y-%m')
-                except ValueError:
-                    logger.error(f"❌ Invalid date format in range: {check_in_str} to {check_out_str}")
-                    return "Sorry, I couldn’t understand the dates. Please use a format like 'March 17, 2025 to March 20, 2025'."
+                logger.error(f"❌ Invalid date format: {check_in_str} to {check_out_str}")
+                return "Sorry, I couldn’t understand the dates. Please use a format like 'March 17, 2025' or 'March 17, 2025 to March 20, 2025'."
 
             if check_out <= check_in:
                 return "The check-out date must be after the check-in date. Please provide a valid range."
 
-            # Check availability using the updated function
+            # Check availability using the calendar
             availability = check_availability(check_in, check_out)
             if "are available" in availability.lower():
                 # Dates are available, store the intent and prompt to proceed
@@ -452,7 +457,7 @@ def ai_respond(message, convo_id):
                     c = conn.cursor()
                     c.execute("UPDATE conversations SET booking_intent = ? WHERE id = ?", (booking_intent, convo_id))
                     conn.commit()
-                response = f"{availability} Would you like to proceed with booking?"
+                response = f"{availability}. Would you like to book?"
             else:
                 # Dates are not available, return the message directly
                 response = availability
@@ -460,13 +465,18 @@ def ai_respond(message, convo_id):
             logger.info(f"✅ Availability check result: {response}")
             return response
 
+        # Check for booking request
+        if "book" in message.lower() or "booking" in message.lower():
+            logger.info(f"✅ Detected booking request, handing off to dashboard")
+            return "I’ll connect you with a team member to assist with your booking."
+
         # Fetch conversation history for other queries
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
             messages = c.fetchall()
         conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. Escalate to a human if the query is complex or requires personal assistance."}
+            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. If you don’t know the answer or the query is complex, respond with 'I’m sorry, I don’t have that information. I’ll connect you with a team member to assist you.'"}
         ]
         for msg in messages:
             user, message_text, sender = msg
@@ -474,7 +484,7 @@ def ai_respond(message, convo_id):
             conversation_history.append({"role": role, "content": message_text})
         conversation_history.append({"role": "user", "content": message})
 
-        # Call OpenAI for non-availability queries
+        # Call OpenAI for other queries
         retry_attempts = 2
         for attempt in range(retry_attempts):
             try:
@@ -486,19 +496,20 @@ def ai_respond(message, convo_id):
                 ai_reply = response.choices[0].message.content.strip()
                 model_used = response.model
                 logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
+                if "sorry" in ai_reply.lower():
+                    return ai_reply  # Trigger handoff if OpenAI apologizes
                 return ai_reply
             except Exception as e:
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retry_attempts - 1:
                     logger.info("✅ Setting default AI reply due to repeated errors")
-                    return "I’m sorry, I’m having trouble processing your request right now. Let me transfer you to another agent."
+                    return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
                 time.sleep(1)
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. Let me transfer you to another agent."
+        return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
         
-# Insert extract_room_type_with_ai function here (starts at line 554)
 def extract_room_type_with_ai(message):
     """
     Use OpenAI to extract the intended room type from the user's message.
