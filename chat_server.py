@@ -382,13 +382,14 @@ def check_availability(check_in, check_out):
     logger.info(f"✅ Checking availability from {check_in} to {check_out}")
     try:
         current_date = check_in
+        logger.info(f"✅ Date range to check: {current_date.strftime('%Y-%m-%d')} to {(check_out - timedelta(days=1)).strftime('%Y-%m-%d')}")
         while current_date < check_out:
             start_time = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
             end_time = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
 
             logger.info(f"✅ Checking calendar for {current_date.strftime('%Y-%m-%d')}")
             events_result = service.events().list(
-                calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',  # Replace with your actual calendar ID
+                calendarId='yourcalendarid@group.calendar.google.com',  # Replace with your actual calendar ID
                 timeMin=start_time,
                 timeMax=end_time,
                 singleEvents=True,
@@ -399,12 +400,12 @@ def check_availability(check_in, check_out):
 
             if any(event.get('summary') == "Fully Booked" for event in events):
                 logger.info(f"✅ Found 'Fully Booked' event on {current_date.strftime('%Y-%m-%d')}, range unavailable")
-                return f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
+                return f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
 
             current_date += timedelta(days=1)
 
-        logger.info(f"✅ No 'Fully Booked' events found from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}, range available")
-        return f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are available."
+        logger.info(f"✅ No 'Fully Booked' events found from {check_in.strftime('%Y-%m-%d')} to {(check_out - timedelta(days=1)).strftime('%Y-%m-%d')}, range available")
+        return f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are available."
     except Exception as e:
         logger.error(f"❌ Google Calendar API error: {str(e)}")
         return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
@@ -416,29 +417,38 @@ def ai_respond(message, convo_id):
     """
     logger.info(f"✅ Generating AI response for convo_id {convo_id}: {message}")
     try:
-        date_match = re.search(r'(?:are rooms available|availability|do you have any rooms|rooms available)\s*(?:from|on)?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?)(?:\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?))?', message.lower())
+        # Enhanced regex to capture dates with or without "what about" context
+        date_match = re.search(
+            r'(?:are rooms available|availability|do you have any rooms|rooms available|what about)?\s*(?:from|on)?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?)(?:\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?))?',
+            message.lower()
+        )
         if date_match:
             check_in_str, check_out_str = date_match.groups()
-            current_year = datetime.now().year  # Use 2025 as the current year (March 17, 2025)
+            current_year = datetime.now().year  # 2025 as of March 17, 2025
+            logger.info(f"✅ Extracted date strings: check_in_str='{check_in_str}', check_out_str='{check_out_str}'")
             try:
-                # Parse with current year
+                # Remove suffixes like "st", "nd", "rd", "th" for cleaner parsing
+                check_in_str = re.sub(r'(st|nd|rd|th)', '', check_in_str).strip()
                 check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
                 if check_out_str:
+                    check_out_str = re.sub(r'(st|nd|rd|th)', '', check_out_str).strip()
                     check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
                 else:
-                    # If only one date, assume a one-night stay
                     check_out = check_in + timedelta(days=1)
-            except ValueError:
-                logger.error(f"❌ Invalid date format: {check_in_str} to {check_out_str}")
+                logger.info(f"✅ Parsed dates: check_in={check_in.strftime('%Y-%m-%d')}, check_out={check_out.strftime('%Y-%m-%d')}")
+            except ValueError as e:
+                logger.error(f"❌ Invalid date format: {check_in_str} to {check_out_str}, error: {str(e)}")
                 return "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or 'March 20 to March 25'."
 
-            # Adjust for year rollover (e.g., December to January)
+            # Handle year rollover (e.g., December to January)
             if check_out < check_in:
                 check_out = check_out.replace(year=check_out.year + 1)
+                logger.info(f"✅ Adjusted check_out for year rollover: {check_out.strftime('%Y-%m-%d')}")
 
             if check_out <= check_in:
                 return "The check-out date must be after the check-in date. Please provide a valid range."
 
+            # Call check_availability with the parsed dates
             availability = check_availability(check_in, check_out)
             if "are available" in availability.lower():
                 booking_intent = f"{check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}"
@@ -462,7 +472,7 @@ def ai_respond(message, convo_id):
             c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
             messages = c.fetchall()
         conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. If you don’t know the answer or the query is complex, respond with 'I’m sorry, I don’t have that information. I’ll connect you with a team member to assist you.' Do not mention room types or pricing unless specifically asked."}
+            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. If you don’t know the answer or the query is complex, respond with 'I’m sorry, I don’t have that information. I’ll connect you with a team member to assist you.' Do not mention room types or pricing unless specifically asked."}
         ]
         for msg in messages:
             user, message_text, sender = msg
