@@ -716,7 +716,7 @@ def telegram():
             handoff_notified = 0
             assigned_agent = None
             booking_intent = None
-            welcome_message = "Thank you for contacting us.\nHow can I assist you today?"
+            welcome_message = "Thank you for contacting us."
             log_message(convo_id, chat_id, welcome_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
             try:
