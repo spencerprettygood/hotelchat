@@ -381,22 +381,14 @@ def check_availability(check_in, check_out):
     """
     logger.info(f"✅ Checking availability from {check_in} to {check_out}")
     try:
-        # Ensure check-in and check-out are datetime objects
-        if not isinstance(check_in, datetime):
-            check_in = datetime.strptime(check_in, '%Y-%m-%d')
-        if not isinstance(check_out, datetime):
-            check_out = datetime.strptime(check_out, '%Y-%m-%d')
-
-        # Iterate through each day in the range
         current_date = check_in
         while current_date < check_out:
             start_time = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
             end_time = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
 
-            # Check for events on this day
             logger.info(f"✅ Checking calendar for {current_date.strftime('%Y-%m-%d')}")
             events_result = service.events().list(
-                calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',  # Use your specific calendar ID if not 'primary'
+                calendarId='primary',  # Replace with your calendar ID if not 'primary'
                 timeMin=start_time,
                 timeMax=end_time,
                 singleEvents=True,
@@ -405,14 +397,12 @@ def check_availability(check_in, check_out):
             events = events_result.get('items', [])
             logger.info(f"✅ Events found on {current_date.strftime('%Y-%m-%d')}: {events}")
 
-            # If any "Fully Booked" event is found on this day, the range is unavailable
             if any(event.get('summary') == "Fully Booked" for event in events):
                 logger.info(f"✅ Found 'Fully Booked' event on {current_date.strftime('%Y-%m-%d')}, range unavailable")
                 return f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
 
             current_date += timedelta(days=1)
 
-        # If no "Fully Booked" events were found, the range is available
         logger.info(f"✅ No 'Fully Booked' events found from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}, range available")
         return f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are available."
     except Exception as e:
@@ -426,32 +416,31 @@ def ai_respond(message, convo_id):
     """
     logger.info(f"✅ Generating AI response for convo_id {convo_id}: {message}")
     try:
-        # Check for availability query with date range
-        date_match = re.search(r'(?:are rooms available|availability|do you have any rooms|rooms available)\s*(?:from|on)?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4})(?:\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4}|\d{4}-\d{2}-\d{2}))?', message.lower())
+        date_match = re.search(r'(?:are rooms available|availability|do you have any rooms|rooms available)\s*(?:from|on)?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?)(?:\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?))?', message.lower())
         if date_match:
             check_in_str, check_out_str = date_match.groups()
-            # Parse dates
+            current_year = datetime.now().year  # Use 2025 as the current year (March 17, 2025)
             try:
-                check_in = datetime.strptime(check_in_str, '%B %d, %Y')
+                # Parse with current year
+                check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
                 if check_out_str:
-                    try:
-                        check_out = datetime.strptime(check_out_str, '%B %d, %Y')
-                    except ValueError:
-                        check_out = datetime.strptime(check_out_str, '%Y-%m-%d')
+                    check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
                 else:
-                    # If only one date is provided, assume a one-night stay
+                    # If only one date, assume a one-night stay
                     check_out = check_in + timedelta(days=1)
             except ValueError:
                 logger.error(f"❌ Invalid date format: {check_in_str} to {check_out_str}")
-                return "Sorry, I couldn’t understand the dates. Please use a format like 'March 17, 2025' or 'March 17, 2025 to March 20, 2025'."
+                return "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or 'March 20 to March 25'."
+
+            # Adjust for year rollover (e.g., December to January)
+            if check_out < check_in:
+                check_out = check_out.replace(year=check_out.year + 1)
 
             if check_out <= check_in:
                 return "The check-out date must be after the check-in date. Please provide a valid range."
 
-            # Check availability using the calendar
             availability = check_availability(check_in, check_out)
             if "are available" in availability.lower():
-                # Dates are available, store the intent and prompt to proceed
                 booking_intent = f"{check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}"
                 with get_db_connection() as conn:
                     c = conn.cursor()
@@ -459,24 +448,21 @@ def ai_respond(message, convo_id):
                     conn.commit()
                 response = f"{availability}. Would you like to book?"
             else:
-                # Dates are not available, return the message directly
                 response = availability
 
             logger.info(f"✅ Availability check result: {response}")
             return response
 
-        # Check for booking request
         if "book" in message.lower() or "booking" in message.lower():
             logger.info(f"✅ Detected booking request, handing off to dashboard")
             return "I’ll connect you with a team member to assist with your booking."
 
-        # Fetch conversation history for other queries
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
             messages = c.fetchall()
         conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. If you don’t know the answer or the query is complex, respond with 'I’m sorry, I don’t have that information. I’ll connect you with a team member to assist you.'"}
+            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. If you don’t know the answer or the query is complex, respond with 'I’m sorry, I don’t have that information. I’ll connect you with a team member to assist you.' Do not mention room types or pricing unless specifically asked."}
         ]
         for msg in messages:
             user, message_text, sender = msg
@@ -484,7 +470,6 @@ def ai_respond(message, convo_id):
             conversation_history.append({"role": role, "content": message_text})
         conversation_history.append({"role": "user", "content": message})
 
-        # Call OpenAI for other queries
         retry_attempts = 2
         for attempt in range(retry_attempts):
             try:
@@ -509,10 +494,6 @@ def ai_respond(message, convo_id):
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
         return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
-    
-
-# Add a global set to track processed message IDs (assuming Telegram provides a message ID)
-PROCESSED_MESSAGES = set()
     
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
@@ -700,6 +681,7 @@ def telegram():
     chat_id = str(message_data["chat"]["id"])
     text = message_data.get("text", "")
     message_id = str(message_data.get("message_id", ""))
+    convo_id = None
 
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -724,8 +706,8 @@ def telegram():
             handoff_notified = 0
             assigned_agent = None
             booking_intent = None
-            welcome_message = "Thank you for contacting us."
-            log_message(convo_id, "AI", welcome_message, "ai")
+            welcome_message = "Thank you for contacting us.\nHow can I assist you today?"
+            log_message(convo_id, chat_id, welcome_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
             try:
                 send_telegram_message(chat_id, welcome_message)
@@ -736,7 +718,7 @@ def telegram():
         else:
             convo_id, ai_enabled, handoff_notified, assigned_agent, booking_intent = result
 
-        log_message(convo_id, "user", text, "user")
+        log_message(convo_id, chat_id, text, "user")
         socketio.emit("new_message", {"convo_id": convo_id, "message": text, "sender": "user", "channel": "telegram"})
 
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}, handoff_notified={handoff_notified}, assigned_agent={assigned_agent}")
@@ -744,13 +726,17 @@ def telegram():
             logger.info(f"❌ AI disabled for convo_id: {convo_id}, Skipping AI response")
             return jsonify({}), 200
 
+        # Generate AI response
+        response = ai_respond(text, convo_id)
+
+        # Handle handoff if booking intent is set and user confirms
         if booking_intent and ("yes" in text.lower() or "proceed" in text.lower()):
-            response = f"Great! An agent will assist you with booking a room for {booking_intent}. Please wait."
-            log_message(convo_id, "AI", response, "ai")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
+            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait."
+            log_message(convo_id, "AI", handoff_message, "ai")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": handoff_message, "sender": "ai", "channel": "telegram"})
             try:
-                send_telegram_message(chat_id, response)
-                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
+                send_telegram_message(chat_id, handoff_message)
+                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {handoff_message}")
             except Exception as e:
                 logger.error(f"❌ Telegram error sending message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
@@ -771,14 +757,14 @@ def telegram():
             logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
             return jsonify({}), 200
 
-        if "book" in text.lower():
-            response = "I’ll connect you with a team member who can assist with your booking."
-            logger.info(f"✅ Detected booking request, handing off to dashboard: {response}")
-            log_message(convo_id, "AI", response, "ai")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
+        # Handle direct booking request
+        if "book" in text.lower() or "booking" in text.lower():
+            handoff_message = "I’ll connect you with a team member to assist with your booking."
+            log_message(convo_id, "AI", handoff_message, "ai")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": handoff_message, "sender": "ai", "channel": "telegram"})
             try:
-                send_telegram_message(chat_id, response)
-                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
+                send_telegram_message(chat_id, handoff_message)
+                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {handoff_message}")
             except Exception as e:
                 logger.error(f"❌ Telegram error sending message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
@@ -796,40 +782,37 @@ def telegram():
                         logger.error(f"❌ Database error: {e}")
                         raise
             socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
-            logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+            logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
             return jsonify({}), 200
 
-        if "HELP" in text.upper():
-            response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you."
-            logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + response)
-        else:
-            response = ai_respond(text, convo_id)
+        # Send AI response if not a handoff case
+        if response:
+            log_message(convo_id, "AI", response, "ai")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
+            try:
+                send_telegram_message(chat_id, response)
+                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
+            except Exception as e:
+                logger.error(f"❌ Telegram error: {str(e)}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
 
-        log_message(convo_id, "AI", response, "ai")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
-
-        if "sorry" in response.lower() or "HELP" in text.upper():
+        if "sorry" in response.lower():
             if not handoff_notified:
-                try:
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                    conn.commit()
-                except sqlite3.OperationalError as e:
-                    if "database is locked" in str(e):
-                        time.sleep(1)
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    try:
                         c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                         conn.commit()
-                    else:
-                        logger.error(f"❌ Database error: {e}")
-                        raise
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e):
+                            time.sleep(1)
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            conn.commit()
+                        else:
+                            logger.error(f"❌ Database error: {e}")
+                            raise
                 socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id, "channel": "telegram"})
                 logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
-
-        try:
-            send_telegram_message(chat_id, response)
-            logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
-        except Exception as e:
-            logger.error(f"❌ Telegram error: {str(e)}")
-            socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
 
         return jsonify({}), 200
     
