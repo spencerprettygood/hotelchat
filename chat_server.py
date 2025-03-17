@@ -430,12 +430,12 @@ def ai_respond(message, convo_id):
             check_in_str, check_out_str = date_match.groups()
             # Parse dates (supporting formats like "March 17, 2025" to "March 20, 2025")
             try:
-                check_in = datetime.strptime(check_in_str, '%B %d, %Y')
-                check_out = datetime.strptime(check_out_str, '%B %d, %Y')
+                check_in = datetime.strptime(check_in_str, '%B %d')
+                check_out = datetime.strptime(check_out_str, '%B %d')
             except ValueError:
                 try:
-                    check_in = datetime.strptime(check_in_str, '%B %d, %Y')
-                    check_out = datetime.strptime(check_out_str, '%Y-%m-%d')
+                    check_in = datetime.strptime(check_in_str, '%B %d')
+                    check_out = datetime.strptime(check_out_str, '%Y-%m')
                 except ValueError:
                     logger.error(f"❌ Invalid date format in range: {check_in_str} to {check_out_str}")
                     return "Sorry, I couldn’t understand the dates. Please use a format like 'March 17, 2025 to March 20, 2025'."
