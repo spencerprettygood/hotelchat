@@ -249,6 +249,26 @@ def load_user(agent_id):
             return Agent(agent[0], agent[1])
     return None
 
+def detect_language(message, convo_id):
+    """
+    Detect the user's language (English or Spanish) based on the message or conversation history.
+    Returns 'es' for Spanish, 'en' for English.
+    """
+    spanish_keywords = ["hola", "gracias", "reservar", "habitación", "disponibilidad", "marzo", "abril"]
+    if any(keyword in message.lower() for keyword in spanish_keywords):
+        return "es"
+    
+    # Check conversation history for language cues
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT message FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 5", (convo_id,))
+        messages = c.fetchall()
+        for msg in messages:
+            if any(keyword in msg[0].lower() for keyword in spanish_keywords):
+                return "es"
+    
+    return "en"
+
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -472,31 +492,61 @@ def ai_respond(message, convo_id):
     """
     Generate an AI response for the given message and conversation ID using OpenAI,
     with logic to handle availability checks based on Google Calendar.
+    Supports both English and Spanish date formats.
     """
     logger.info(f"✅ Generating AI response for convo_id {convo_id}: {message}")
     try:
-        # Enhanced regex to capture dates with or without "what about" context
+        # Enhanced regex to capture dates in English (e.g., "March 20") and Spanish (e.g., "20 de marzo")
         date_match = re.search(
-            r'(?:are rooms available|availability|do you have any rooms|rooms available|what about)?\s*(?:from|on)?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?)(?:\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?))?',
+            r'(?:are rooms available|availability|do you have any rooms|rooms available|what about|'
+            r'¿hay habitaciones disponibles?|disponibilidad|¿tienen habitaciones?|habitaciones disponibles?|qué tal)?\s*'
+            r'(?:from|on|de|el)?\s*'
+            r'(?:(?:([A-Za-z]{3,9})\s+(\d{1,2}(?:st|nd|rd|th)?))|(?:(\d{1,2})\s*(?:de)?\s*([A-Za-z]{3,9})))'
+            r'(?:\s*(?:to|a|al|until|hasta)?\s*'
+            r'(?:(?:([A-Za-z]{3,9})\s+(\d{1,2}(?:st|nd|rd|th)?))|(?:(\d{1,2})\s*(?:de)?\s*([A-Za-z]{3,9}))))?',
             message.lower()
         )
         if date_match:
-            check_in_str, check_out_str = date_match.groups()
+            # Groups for English: (month1, day1, None, None, month2, day2, None, None)
+            # Groups for Spanish: (None, None, day1, month1, None, None, day2, month2)
+            month1_en, day1_en, day1_es, month1_es, month2_en, day2_en, day2_es, month2_es = date_match.groups()
             current_year = datetime.now().year  # 2025 as of March 17, 2025
-            logger.info(f"✅ Extracted date strings: check_in_str='{check_in_str}', check_out_str='{check_out_str}'")
-            try:
-                # Remove suffixes like "st", "nd", "rd", "th" for cleaner parsing
+            logger.info(f"✅ Extracted date strings: month1_en={month1_en}, day1_en={day1_en}, day1_es={day1_es}, month1_es={month1_es}, "
+                        f"month2_en={month2_en}, day2_en={day2_en}, day2_es={day2_es}, month2_es={month2_es}")
+
+            # Spanish to English month mapping
+            spanish_to_english_months = {
+                "enero": "January", "febrero": "February", "marzo": "March", "abril": "April",
+                "mayo": "May", "junio": "June", "julio": "July", "agosto": "August",
+                "septiembre": "September", "octubre": "October", "noviembre": "November", "diciembre": "December"
+            }
+
+            # Parse check-in date
+            if month1_en and day1_en:  # English format: "March 20"
+                check_in_str = f"{month1_en} {day1_en}"
                 check_in_str = re.sub(r'(st|nd|rd|th)', '', check_in_str).strip()
                 check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
-                if check_out_str:
-                    check_out_str = re.sub(r'(st|nd|rd|th)', '', check_out_str).strip()
-                    check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
-                else:
-                    check_out = check_in + timedelta(days=1)
-                logger.info(f"✅ Parsed dates: check_in={check_in.strftime('%Y-%m-%d')}, check_out={check_out.strftime('%Y-%m-%d')}")
-            except ValueError as e:
-                logger.error(f"❌ Invalid date format: {check_in_str} to {check_out_str}, error: {str(e)}")
-                return "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or 'March 20 to March 25'."
+            elif day1_es and month1_es:  # Spanish format: "20 de marzo"
+                month1_en = spanish_to_english_months.get(month1_es.lower(), month1_es)
+                check_in_str = f"{month1_en} {day1_es}"
+                check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
+            else:
+                logger.error(f"❌ Could not parse check-in date from: {message}")
+                return "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if "sorry" in message.lower() else \
+                       "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
+
+            # Parse check-out date (if provided)
+            if month2_en and day2_en:  # English format: "March 25"
+                check_out_str = f"{month2_en} {day2_en}"
+                check_out_str = re.sub(r'(st|nd|rd|th)', '', check_out_str).strip()
+                check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
+            elif day2_es and month2_es:  # Spanish format: "25 de marzo"
+                month2_en = spanish_to_english_months.get(month2_es.lower(), month2_es)
+                check_out_str = f"{month2_en} {day2_es}"
+                check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
+            else:
+                check_out = check_in + timedelta(days=1)  # Default to 1-day stay if no check-out date
+            logger.info(f"✅ Parsed dates: check_in={check_in.strftime('%Y-%m-%d')}, check_out={check_out.strftime('%Y-%m-%d')}")
 
             # Handle year rollover (e.g., December to January)
             if check_out < check_in:
@@ -504,7 +554,8 @@ def ai_respond(message, convo_id):
                 logger.info(f"✅ Adjusted check_out for year rollover: {check_out.strftime('%Y-%m-%d')}")
 
             if check_out <= check_in:
-                return "The check-out date must be after the check-in date. Please provide a valid range."
+                return "The check-out date must be after the check-in date. Please provide a valid range." if "sorry" in message.lower() else \
+                       "La fecha de salida debe ser posterior a la fecha de entrada. Por favor, proporciona un rango válido."
 
             # Call check_availability with the parsed dates
             availability = check_availability(check_in, check_out)
@@ -514,23 +565,28 @@ def ai_respond(message, convo_id):
                     c = conn.cursor()
                     c.execute("UPDATE conversations SET booking_intent = ? WHERE id = ?", (booking_intent, convo_id))
                     conn.commit()
-                response = f"{availability}. Would you like to book?"
+                response = f"{availability}. Would you like to book?" if "sorry" in message.lower() else \
+                           f"{availability.replace('are available', 'están disponibles')}. ¿Te gustaría reservar?"
             else:
-                response = availability
+                response = availability if "sorry" in message.lower() else \
+                           availability.replace("are not available", "no están disponibles").replace("fully booked", "completamente reservado")
 
             logger.info(f"✅ Availability check result: {response}")
             return response
 
-        if "book" in message.lower() or "booking" in message.lower():
+        # Detect language for booking keywords
+        is_spanish = any(spanish_word in message.lower() for spanish_word in ["reservar", "habitación", "disponibilidad"])
+        if "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
             logger.info(f"✅ Detected booking request, handing off to dashboard")
-            return "I’ll connect you with a team member to assist with your booking."
+            return "I’ll connect you with a team member to assist with your booking." if not is_spanish else \
+                   "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
 
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
             messages = c.fetchall()
         conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. If you don’t know the answer or the query is complex, respond with 'I’m sorry, I don’t have that information. I’ll connect you with a team member to assist you.' Do not mention room types or pricing unless specifically asked."}
+            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. Detect the user's language (English or Spanish) based on their input and respond in the same language. If you don’t know the answer or the query is complex, respond with the appropriate escalation message in the user's language. Do not mention room types or pricing unless specifically asked."}
         ]
         for msg in messages:
             user, message_text, sender = msg
@@ -549,19 +605,21 @@ def ai_respond(message, convo_id):
                 ai_reply = response.choices[0].message.content.strip()
                 model_used = response.model
                 logger.info(f"✅ AI reply: {ai_reply}, Model: {model_used}")
-                if "sorry" in ai_reply.lower():
+                if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
                     return ai_reply  # Trigger handoff if OpenAI apologizes
                 return ai_reply
             except Exception as e:
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retry_attempts - 1:
                     logger.info("✅ Setting default AI reply due to repeated errors")
-                    return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
+                    return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
+                           "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
                 time.sleep(1)
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
+        return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
+               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
     
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
@@ -590,8 +648,10 @@ def chat():
         sender = "agent" if current_user.is_authenticated else "user"
         logger.info(f"✅ Processing /chat message as sender: {sender}")
         
-        prefixed_username = username  # Already prefixed (e.g., telegram_123456789)
+        prefixed_username = username
         log_message(convo_id, prefixed_username, user_message, sender)
+
+        language = detect_language(user_message, convo_id)
 
         if sender == "agent":
             logger.info("✅ Sender is agent, emitting new_message event")
@@ -613,8 +673,9 @@ def chat():
         logger.info(f"✅ Checking if AI is enabled: ai_enabled={ai_enabled}")
         if ai_enabled:
             logger.info("✅ AI is enabled, proceeding with AI response")
-            if booking_intent and ("yes" in user_message.lower() or "proceed" in user_message.lower()):
-                response = f"Great! An agent will assist you with booking a room for {booking_intent}. Please wait."
+            if booking_intent and ("yes" in user_message.lower() or "proceed" in user_message.lower() or "sí" in user_message.lower()):
+                response = f"Great! An agent will assist you with booking a room for {booking_intent}. Please wait." if language == "en" else \
+                          f"¡Excelente! Un agente te ayudará con la reserva de una habitación para {booking_intent}. Por favor, espera."
                 log_message(convo_id, "AI", response, "ai")
                 socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": channel})
                 if channel == "telegram":
@@ -644,8 +705,9 @@ def chat():
                 logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 return jsonify({"reply": response})
 
-            if "book" in user_message.lower():
-                ai_reply = "I’ll connect you with a team member who can assist with your booking."
+            if "book" in user_message.lower() or "reservar" in user_message.lower():
+                ai_reply = "I’ll connect you with a team member who can assist with your booking." if language == "en" else \
+                          "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
                 logger.info(f"✅ Detected booking request, handing off to dashboard: {ai_reply}")
                 log_message(convo_id, "AI", ai_reply, "ai")
                 socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
@@ -676,9 +738,10 @@ def chat():
                 logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 return jsonify({"reply": ai_reply})
 
-            if "HELP" in user_message.upper():
-                ai_reply = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you."
-                logger.info("✅ Forcing handoff for keyword 'HELP', AI reply set to: " + ai_reply)
+            if "HELP" in user_message.upper() or "AYUDA" in user_message.upper():
+                ai_reply = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en" else \
+                          "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
+                logger.info("✅ Forcing handoff for keyword 'HELP/AYUDA', AI reply set to: " + ai_reply)
             else:
                 ai_reply = ai_respond(user_message, convo_id)
 
@@ -694,7 +757,7 @@ def chat():
                         socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to Telegram", "channel": channel})
                     else:
                         logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {ai_reply}")
-            if "sorry" in ai_reply.lower():
+            if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
                 try:
                     with get_db_connection() as conn:
                         c = conn.cursor()
@@ -786,12 +849,13 @@ def telegram():
             handoff_notified = 0
             assigned_agent = None
             booking_intent = None
-            welcome_message = "Thank you for contacting us."
+            language = detect_language(text, convo_id)
+            welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
             log_message(convo_id, chat_id, welcome_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
             if not send_telegram_message(chat_id, welcome_message):
                 logger.error(f"❌ Failed to send welcome message to Telegram for chat_id {chat_id}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram", "channel": "telegram"})
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to Telegram", "channel": "telegram"})
         else:
             convo_id, ai_enabled, handoff_notified, assigned_agent, booking_intent = result
 
@@ -807,13 +871,15 @@ def telegram():
         response = ai_respond(text, convo_id)
 
         # Handle handoff if booking intent is set and user confirms
-        if booking_intent and ("yes" in text.lower() or "proceed" in text.lower()):
-            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait."
+        language = detect_language(text, convo_id)
+        if booking_intent and ("yes" in text.lower() or "proceed" in text.lower() or "sí" in text.lower()):
+            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \
+                             f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
             log_message(convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": handoff_message, "sender": "ai", "channel": "telegram"})
             if not send_telegram_message(chat_id, handoff_message):
                 logger.error(f"❌ Failed to send handoff message to Telegram for chat_id {chat_id}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handoff message to Telegram", "channel": "telegram"})
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handoff message to Telegram", "channel": "telegram"})
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
@@ -832,13 +898,14 @@ def telegram():
             return jsonify({}), 200
 
         # Handle direct booking request
-        if "book" in text.lower() or "booking" in text.lower():
-            handoff_message = "I’ll connect you with a team member to assist with your booking."
+        if "book" in text.lower() or "booking" in text.lower() or "reservar" in text.lower():
+            handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
+                             "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
             log_message(convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": handoff_message, "sender": "ai", "channel": "telegram"})
             if not send_telegram_message(chat_id, handoff_message):
                 logger.error(f"❌ Failed to send booking handoff message to Telegram for chat_id {chat_id}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send booking handoff message to Telegram", "channel": "telegram"})
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send booking handoff message to Telegram", "channel": "telegram"})
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
@@ -862,9 +929,9 @@ def telegram():
             socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
             if not send_telegram_message(chat_id, response):
                 logger.error(f"❌ Failed to send AI response to Telegram for chat_id {chat_id}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send AI response to Telegram", "channel": "telegram"})
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to Telegram", "channel": "telegram"})
 
-        if "sorry" in response.lower():
+        if "sorry" in response.lower() or "lo siento" in response.lower():
             if not handoff_notified:
                 with get_db_connection() as conn:
                     c = conn.cursor()
@@ -875,7 +942,7 @@ def telegram():
                         if "database is locked" in str(e):
                             time.sleep(1)
                             c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                            # conn.commit()
+                            conn.commit()
                         else:
                             logger.error(f"❌ Database error: {e}")
                             raise
@@ -1210,16 +1277,18 @@ def send_welcome():
         logger.error(f"❌ No chat_id found for convo_id {convo_id} in /send-welcome")
         return jsonify({"error": "No chat_id found for this conversation"}), 404
     try:
+        language = detect_language("", convo_id)  # Use conversation history for language detection
         logger.info(f"✅ Sending welcome message to Telegram chat {chat_id}")
-        welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
+        welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance." if language == "en" else \
+                         f"¡Bienvenido a nuestro hotel, {user_name}! Estamos aquí para ayudarte con tus reservas. Responde 'RESERVAR' para comenzar o 'AYUDA' para asistencia."
         if not send_telegram_message(chat_id, welcome_message):
             logger.error(f"❌ Failed to send welcome message to Telegram for chat_id {chat_id}")
             socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to Telegram", "channel": "telegram"})
             return jsonify({"error": "Failed to send welcome message"}), 500
         logger.info("✅ Logging welcome message in /send-welcome")
-        log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
+        log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!" if language == "en" else f"¡Bienvenido a nuestro hotel, {user_name}!", "ai")
         logger.info("✅ Emitting new_message event in /send-welcome")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!", "sender": "ai", "channel": "telegram"})
+        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!" if language == "en" else f"¡Bienvenido a nuestro hotel, {user_name}!", "sender": "ai", "channel": "telegram"})
         logger.info("✅ Welcome message sent successfully")
         return jsonify({"message": "Welcome message sent"}), 200
     except Exception as e:
@@ -1267,7 +1336,6 @@ def handback_to_ai():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Fetch conversation details
             c.execute("SELECT username, chat_id, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
             result = c.fetchone()
             if not result:
@@ -1275,16 +1343,13 @@ def handback_to_ai():
                 return jsonify({"error": "Conversation not found"}), 404
             username, chat_id, channel, assigned_agent = result
 
-            # Check if the current agent is assigned to this conversation
             if assigned_agent != current_user.username:
                 logger.error(f"❌ Agent {current_user.username} is not assigned to convo_id {convo_id}")
                 return jsonify({"error": "You are not assigned to this conversation"}), 403
 
-            # Re-enable AI and clear the assigned agent, ensure visible_in_conversations remains 0
             c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0, visible_in_conversations = 0 WHERE id = ?", (convo_id,))
             conn.commit()
 
-            # Verify the update
             c.execute("SELECT ai_enabled FROM conversations WHERE id = ?", (convo_id,))
             updated_result = c.fetchone()
             if updated_result:
@@ -1293,8 +1358,9 @@ def handback_to_ai():
             else:
                 logger.error(f"❌ Failed to verify ai_enabled for convo_id {convo_id} after handback")
 
-        # Notify the user that the AI has taken over
-        handback_message = "The sales agent has handed the conversation back to me. Anything else I can help you with?"
+        language = detect_language("", convo_id)  # Use conversation history
+        handback_message = "The sales agent has handed the conversation back to me. Anything else I can help you with?" if language == "en" else \
+                          "El agente de ventas ha devuelto la conversación a mí. ¿Hay algo más en lo que pueda ayudarte?"
         log_message(convo_id, "AI", handback_message, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": handback_message, "sender": "ai", "channel": channel})
         if channel == "telegram":
@@ -1325,7 +1391,6 @@ def handback_to_ai():
                 logger.error(f"Instagram error sending handback message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Instagram: {str(e)}", "channel": channel})
 
-        # Emit a refresh event to update the conversation list in the dashboard
         socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
         logger.info(f"✅ Chat {convo_id} handed back to AI by {current_user.username}")
         return jsonify({"message": "Chat handed back to AI successfully"})
