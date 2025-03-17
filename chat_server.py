@@ -373,66 +373,94 @@ def send_whatsapp_message(phone_number, text):
 # Placeholder for Instagram message sending (to be implemented later)
 def send_instagram_message(user_id, text):
     raise NotImplementedError("Instagram messaging not yet implemented")
-
-def check_room_availability(date_str):
-    logger.info(f"✅ Checking room availability for date: {date_str}")
+    
+def check_availability(check_in, check_out):
+    """
+    Check availability between check-in and check-out dates by iterating through each day.
+    Returns a string message indicating availability or unavailability.
+    """
+    logger.info(f"✅ Checking availability from {check_in} to {check_out}")
     try:
-        # Parse the date (support multiple formats)
-        try:
-            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-        except ValueError:
-            try:
-                date_obj = datetime.strptime(date_str, '%B %d, %Y')  # e.g., "March 17, 2025"
-            except ValueError:
-                logger.error(f"❌ Invalid date format: {date_str}")
-                return "Sorry, I couldn’t understand the date. Please use a format like 'YYYY-MM-DD' or 'Month DD, YYYY'."
+        # Ensure check-in and check-out are datetime objects
+        if not isinstance(check_in, datetime):
+            check_in = datetime.strptime(check_in, '%Y-%m-%d')
+        if not isinstance(check_out, datetime):
+            check_out = datetime.strptime(check_out, '%Y-%m-%d')
 
-        # Define the time range for the full day
-        start_time = date_obj.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-        end_time = (date_obj + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
+        # Iterate through each day in the range
+        current_date = check_in
+        while current_date < check_out:
+            start_time = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
+            end_time = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
 
-        # Call the Calendar API
-        events_result = service.events().list(
-            calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',  # Use your specific calendar ID if not 'primary'
-            timeMin=start_time,
-            timeMax=end_time,
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        events = events_result.get('items', [])
+            # Check for events on this day
+            events_result = service.events().list(
+                calendarId='primary',  # Use your specific calendar ID if not 'primary'
+                timeMin=start_time,
+                timeMax=end_time,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+            events = events_result.get('items', [])
 
-        # Assume events with "Fully Booked" summary indicate no availability
-        if any(event.get('summary') == "Fully Booked" for event in events):
-            logger.info(f"✅ Found 'Fully Booked' event on {date_str}, room unavailable")
-            return "Sorry, no rooms are available on that date. It’s fully booked."
-        else:
-            logger.info(f"✅ No 'Fully Booked' event found on {date_str}, room available")
-            return f"Yes, a room is available on {date_obj.strftime('%B %d, %Y')}. Would you like to proceed with booking?"
+            # If any "Fully Booked" event is found on this day, the range is unavailable
+            if any(event.get('summary') == "Fully Booked" for event in events):
+                logger.info(f"✅ Found 'Fully Booked' event on {current_date.strftime('%Y-%m-%d')}, range unavailable")
+                return f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
+
+            current_date += timedelta(days=1)
+
+        # If no "Fully Booked" events were found, the range is available
+        logger.info(f"✅ No 'Fully Booked' events found from {check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}, range available")
+        return f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {check_out.strftime('%B %d, %Y')} are available."
     except Exception as e:
         logger.error(f"❌ Google Calendar API error: {str(e)}")
         return "Sorry, I’m having trouble checking availability right now. Please try again later or contact an agent."
-
+        
 def ai_respond(message, convo_id):
     """
     Generate an AI response for the given message and conversation ID using OpenAI,
-    with added logic to handle room availability checks.
+    with added logic to handle availability checks based on Google Calendar.
     """
     logger.info(f"✅ Generating AI response for convo_id {convo_id}: {message}")
     try:
-        # Check for room availability query
-        date_match = re.search(r'(?:are rooms available on|rooms on)\s+([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{4}-\d{2}-\d{2})', message.lower())
+        # Check for availability query with date range
+        date_match = re.search(r'(?:are rooms available|availability) from\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4})\s+to\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4}|\d{4}-\d{2}-\d{2})', message.lower())
         if date_match:
-            date_str = date_match.group(1)
-            availability = check_room_availability(date_str)
-            if "available" in availability.lower() and "would you like to proceed" in availability.lower():
-                # Store the intent for follow-up
+            check_in_str, check_out_str = date_match.groups()
+            # Parse dates (supporting formats like "March 17, 2025" to "March 20, 2025")
+            try:
+                check_in = datetime.strptime(check_in_str, '%B %d, %Y')
+                check_out = datetime.strptime(check_out_str, '%B %d, %Y')
+            except ValueError:
+                try:
+                    check_in = datetime.strptime(check_in_str, '%B %d, %Y')
+                    check_out = datetime.strptime(check_out_str, '%Y-%m-%d')
+                except ValueError:
+                    logger.error(f"❌ Invalid date format in range: {check_in_str} to {check_out_str}")
+                    return "Sorry, I couldn’t understand the dates. Please use a format like 'March 17, 2025 to March 20, 2025'."
+
+            if check_out <= check_in:
+                return "The check-out date must be after the check-in date. Please provide a valid range."
+
+            # Check availability using the updated function
+            availability = check_availability(check_in, check_out)
+            if "are available" in availability.lower():
+                # Dates are available, store the intent and prompt to proceed
+                booking_intent = f"{check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}"
                 with get_db_connection() as conn:
                     c = conn.cursor()
-                    c.execute("UPDATE conversations SET booking_intent = ? WHERE id = ?", (date_str, convo_id))
+                    c.execute("UPDATE conversations SET booking_intent = ? WHERE id = ?", (booking_intent, convo_id))
                     conn.commit()
-            return availability
+                response = f"{availability} Would you like to proceed with booking?"
+            else:
+                # Dates are not available, return the message directly
+                response = availability
 
-        # Fetch conversation history
+            logger.info(f"✅ Availability check result: {response}")
+            return response
+
+        # Fetch conversation history for other queries
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute("SELECT user, message, sender FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 10", (convo_id,))
@@ -446,7 +474,7 @@ def ai_respond(message, convo_id):
             conversation_history.append({"role": role, "content": message_text})
         conversation_history.append({"role": "user", "content": message})
 
-        # Call OpenAI
+        # Call OpenAI for non-availability queries
         retry_attempts = 2
         for attempt in range(retry_attempts):
             try:
