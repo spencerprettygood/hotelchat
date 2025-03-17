@@ -285,7 +285,19 @@ def get_conversations():
             raw_conversions = c.fetchall()
             logger.info(f"✅ Raw conversations from database: {raw_conversions}")
             c.execute("SELECT id, username, chat_id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
-            conversations = [{"id": row[0], "username": row[1], "chat_id": row[2], "channel": row[3], "assigned_agent": row[4]} for row in c.fetchall()]
+            conversations = []
+            for row in c.fetchall():
+                convo_id, username, chat_id, channel, assigned_agent = row
+                # Create a display_name by removing the 'telegram_' prefix if channel is 'telegram'
+                display_name = chat_id if channel == "telegram" else username
+                conversations.append({
+                    "id": convo_id,
+                    "username": username,
+                    "chat_id": chat_id,
+                    "channel": channel,
+                    "assigned_agent": assigned_agent,
+                    "display_name": f"{display_name} ({channel})" if channel else display_name
+                })
             logger.info(f"✅ Fetched conversations for dashboard: {conversations}")
         return jsonify(conversations)
     except Exception as e:
