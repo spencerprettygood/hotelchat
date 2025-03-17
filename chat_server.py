@@ -175,6 +175,7 @@ def initialize_database():
         c.execute('''CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
+            chat_id TEXT,  -- Add this line to store the raw chat_id
             latest_message TEXT,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             assigned_agent TEXT DEFAULT NULL,
@@ -183,7 +184,7 @@ def initialize_database():
             ai_enabled INTEGER DEFAULT 1,
             handoff_notified INTEGER DEFAULT 0,
             visible_in_conversations INTEGER DEFAULT 0,
-            booking_intent TEXT DEFAULT NULL  -- Add this line
+            booking_intent TEXT DEFAULT NULL
         )''')
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute('''CREATE TABLE messages (
@@ -283,8 +284,8 @@ def get_conversations():
             c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
             raw_conversions = c.fetchall()
             logger.info(f"✅ Raw conversations from database: {raw_conversions}")
-            c.execute("SELECT id, username, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
-            conversations = [{"id": row[0], "username": row[1], "channel": row[2], "assigned_agent": row[3]} for row in c.fetchall()]
+            c.execute("SELECT id, username, chat_id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
+            conversations = [{"id": row[0], "username": row[1], "chat_id": row[2], "channel": row[3], "assigned_agent": row[4]} for row in c.fetchall()]
             logger.info(f"✅ Fetched conversations for dashboard: {conversations}")
         return jsonify(conversations)
     except Exception as e:
@@ -323,15 +324,16 @@ def get_messages():
         # Fetch messages
         c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
         messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
-        # Fetch username
-        c.execute("SELECT username FROM conversations WHERE id = ?", (convo_id,))
-        username_result = c.fetchone()
-        username = username_result[0] if username_result else "Unknown"
+        # Fetch username and chat_id
+        c.execute("SELECT username, chat_id FROM conversations WHERE id = ?", (convo_id,))
+        result = c.fetchone()
+        username = result[0] if result else "Unknown"
+        chat_id = result[1] if result else None
         conn.close()
-        logger.info(f"✅ Fetched {len(messages)} messages for convo ID {convo_id}")
-        return jsonify({"messages": messages, "username": username})
+        logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
+        return jsonify({"messages": messages, "username": username, "chat_id": chat_id})
     except Exception as e:
-        logger.error(f"❌ Error fetching messages for convo ID {convo_id}: {e}")
+        logger.error(f"❌ Error fetching messages for convo_id {convo_id}: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
 
 def log_message(convo_id, user, message, sender):
@@ -566,9 +568,9 @@ def chat():
         logger.info(f"✅ Fetching conversation details for convo_id {convo_id}")
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT username, channel, assigned_agent, ai_enabled, booking_intent FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT username, chat_id, channel, assigned_agent, ai_enabled, booking_intent FROM conversations WHERE id = ?", (convo_id,))
             result = c.fetchone()
-            username, channel, assigned_agent, ai_enabled, booking_intent = result if result else (None, None, None, None, None)
+            username, chat_id, channel, assigned_agent, ai_enabled, booking_intent = result if result else (None, None, None, None, None, None)
         if not username:
             logger.error(f"❌ Conversation not found: {convo_id}")
             return jsonify({"error": "Conversation not found"}), 404
@@ -576,20 +578,23 @@ def chat():
         sender = "agent" if current_user.is_authenticated else "user"
         logger.info(f"✅ Processing /chat message as sender: {sender}")
         
-        prefixed_username = f"{channel}_{username}" if channel and not username.startswith(channel) else username
+        prefixed_username = username  # Already prefixed (e.g., telegram_123456789)
         log_message(convo_id, prefixed_username, user_message, sender)
 
         if sender == "agent":
             logger.info("✅ Sender is agent, emitting new_message event")
             socketio.emit("new_message", {"convo_id": convo_id, "message": user_message, "sender": "agent", "channel": channel})
             if channel == "telegram":
-                try:
-                    logger.info(f"Sending agent message to Telegram - To: {username}, Body: {user_message}")
-                    send_telegram_message(username, user_message)
-                    logger.info("✅ Agent message sent to Telegram: " + user_message)
-                except Exception as e:
-                    logger.error(f"❌ Telegram error sending agent message: {str(e)}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
+                if not chat_id:
+                    logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram: No chat_id found", "channel": channel})
+                else:
+                    logger.info(f"Sending agent message to Telegram - To: {chat_id}, Body: {user_message}")
+                    if not send_telegram_message(chat_id, user_message):
+                        logger.error(f"❌ Failed to send agent message to Telegram for chat_id {chat_id}")
+                        socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram", "channel": channel})
+                    else:
+                        logger.info("✅ Agent message sent to Telegram: " + user_message)
             logger.info("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
 
@@ -601,12 +606,15 @@ def chat():
                 log_message(convo_id, "AI", response, "ai")
                 socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": channel})
                 if channel == "telegram":
-                    try:
-                        send_telegram_message(username, response)
-                        logger.info(f"✅ Telegram message sent - To: {username}, Body: {response}")
-                    except Exception as e:
-                        logger.error(f"❌ Telegram error sending message: {str(e)}")
-                        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
+                    if not chat_id:
+                        logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                        socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handoff message to Telegram: No chat_id found", "channel": channel})
+                    else:
+                        if not send_telegram_message(chat_id, response):
+                            logger.error(f"❌ Failed to send handoff message to Telegram for chat_id {chat_id}")
+                            socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handoff message to Telegram", "channel": channel})
+                        else:
+                            logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
                 with get_db_connection() as conn:
                     c = conn.cursor()
                     try:
@@ -620,7 +628,7 @@ def chat():
                         else:
                             logger.error(f"❌ Database error: {e}")
                             raise
-                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
                 logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 return jsonify({"reply": response})
 
@@ -630,12 +638,15 @@ def chat():
                 log_message(convo_id, "AI", ai_reply, "ai")
                 socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
                 if channel == "telegram":
-                    try:
-                        send_telegram_message(username, ai_reply)
-                        logger.info(f"✅ Telegram message sent - To: {username}, Body: {ai_reply}")
-                    except Exception as e:
-                        logger.error(f"❌ Telegram error sending message: {str(e)}")
-                        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
+                    if not chat_id:
+                        logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                        socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send booking handoff message to Telegram: No chat_id found", "channel": channel})
+                    else:
+                        if not send_telegram_message(chat_id, ai_reply):
+                            logger.error(f"❌ Failed to send booking handoff message to Telegram for chat_id {chat_id}")
+                            socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send booking handoff message to Telegram", "channel": channel})
+                        else:
+                            logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {ai_reply}")
                 with get_db_connection() as conn:
                     c = conn.cursor()
                     try:
@@ -649,7 +660,7 @@ def chat():
                         else:
                             logger.error(f"❌ Database error: {e}")
                             raise
-                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
                 logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 return jsonify({"reply": ai_reply})
 
@@ -662,12 +673,15 @@ def chat():
             log_message(convo_id, "AI", ai_reply, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": ai_reply, "sender": "ai", "channel": channel})
             if channel == "telegram":
-                try:
-                    send_telegram_message(username, ai_reply)
-                    logger.info(f"✅ Telegram message sent - To: {username}, Body: {ai_reply}")
-                except Exception as e:
-                    logger.error(f"❌ Telegram error sending AI message: {str(e)}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": channel})
+                if not chat_id:
+                    logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to Telegram: No chat_id found", "channel": channel})
+                else:
+                    if not send_telegram_message(chat_id, ai_reply):
+                        logger.error(f"❌ Failed to send AI response to Telegram for chat_id {chat_id}")
+                        socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to Telegram", "channel": channel})
+                    else:
+                        logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {ai_reply}")
             if "sorry" in ai_reply.lower():
                 try:
                     with get_db_connection() as conn:
@@ -688,7 +702,7 @@ def chat():
                                 else:
                                     logger.error(f"❌ Database error: {e}")
                                     raise
-                        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+                        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
                         logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
                 except Exception as e:
                     logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
@@ -745,12 +759,12 @@ def telegram():
 
         if not result:
             try:
-                c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations) VALUES (?, 'telegram', 1, 0)", (prefixed_chat_id,))
+                c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 'telegram', 1, 0)", (prefixed_chat_id, chat_id))
                 conn.commit()
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e):
                     time.sleep(1)
-                    c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations) VALUES (?, 'telegram', 1, 0)", (prefixed_chat_id,))
+                    c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 'telegram', 1, 0)", (prefixed_chat_id, chat_id))
                     conn.commit()
                 else:
                     logger.error(f"❌ Database error: {e}")
@@ -763,12 +777,9 @@ def telegram():
             welcome_message = "Thank you for contacting us."
             log_message(convo_id, chat_id, welcome_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "telegram"})
-            try:
-                send_telegram_message(chat_id, welcome_message)
-                logger.info("✅ Welcome message sent to Telegram: " + welcome_message)
-            except Exception as e:
-                logger.error(f"❌ Telegram error sending welcome message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
+            if not send_telegram_message(chat_id, welcome_message):
+                logger.error(f"❌ Failed to send welcome message to Telegram for chat_id {chat_id}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram", "channel": "telegram"})
         else:
             convo_id, ai_enabled, handoff_notified, assigned_agent, booking_intent = result
 
@@ -788,12 +799,9 @@ def telegram():
             handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait."
             log_message(convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": handoff_message, "sender": "ai", "channel": "telegram"})
-            try:
-                send_telegram_message(chat_id, handoff_message)
-                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {handoff_message}")
-            except Exception as e:
-                logger.error(f"❌ Telegram error sending message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
+            if not send_telegram_message(chat_id, handoff_message):
+                logger.error(f"❌ Failed to send handoff message to Telegram for chat_id {chat_id}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handoff message to Telegram", "channel": "telegram"})
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
@@ -816,12 +824,9 @@ def telegram():
             handoff_message = "I’ll connect you with a team member to assist with your booking."
             log_message(convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": handoff_message, "sender": "ai", "channel": "telegram"})
-            try:
-                send_telegram_message(chat_id, handoff_message)
-                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {handoff_message}")
-            except Exception as e:
-                logger.error(f"❌ Telegram error sending message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
+            if not send_telegram_message(chat_id, handoff_message):
+                logger.error(f"❌ Failed to send booking handoff message to Telegram for chat_id {chat_id}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send booking handoff message to Telegram", "channel": "telegram"})
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
@@ -843,12 +848,9 @@ def telegram():
         if response:
             log_message(convo_id, "AI", response, "ai")
             socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "telegram"})
-            try:
-                send_telegram_message(chat_id, response)
-                logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {response}")
-            except Exception as e:
-                logger.error(f"❌ Telegram error: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Telegram: {str(e)}", "channel": "telegram"})
+            if not send_telegram_message(chat_id, response):
+                logger.error(f"❌ Failed to send AI response to Telegram for chat_id {chat_id}")
+                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send AI response to Telegram", "channel": "telegram"})
 
         if "sorry" in response.lower():
             if not handoff_notified:
@@ -861,7 +863,7 @@ def telegram():
                         if "database is locked" in str(e):
                             time.sleep(1)
                             c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                            conn.commit()
+                            # conn.commit()
                         else:
                             logger.error(f"❌ Database error: {e}")
                             raise
@@ -1186,16 +1188,22 @@ def send_welcome():
         return jsonify({"error": "Missing to_number"}), 400
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id FROM conversations WHERE username = ? AND channel = ?", (to_number, "telegram"))
+        c.execute("SELECT id, chat_id FROM conversations WHERE username = ? AND channel = 'telegram'", (to_number,))
         convo = c.fetchone()
     if not convo:
         logger.error("❌ Conversation not found in /send-welcome")
         return jsonify({"error": "Conversation not found"}), 404
-    convo_id = convo[0]
+    convo_id, chat_id = convo
+    if not chat_id:
+        logger.error(f"❌ No chat_id found for convo_id {convo_id} in /send-welcome")
+        return jsonify({"error": "No chat_id found for this conversation"}), 404
     try:
-        logger.info(f"✅ Sending welcome message to Telegram chat {to_number}")
+        logger.info(f"✅ Sending welcome message to Telegram chat {chat_id}")
         welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance."
-        send_telegram_message(to_number, welcome_message)
+        if not send_telegram_message(chat_id, welcome_message):
+            logger.error(f"❌ Failed to send welcome message to Telegram for chat_id {chat_id}")
+            socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to Telegram", "channel": "telegram"})
+            return jsonify({"error": "Failed to send welcome message"}), 500
         logger.info("✅ Logging welcome message in /send-welcome")
         log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!", "ai")
         logger.info("✅ Emitting new_message event in /send-welcome")
@@ -1218,18 +1226,18 @@ def handoff():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT username, channel FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT username, chat_id, channel FROM conversations WHERE id = ?", (convo_id,))
             result = c.fetchone()
             if not result:
                 logger.error(f"❌ Conversation not found: {convo_id}")
                 return jsonify({"error": "Conversation not found"}), 404
-            username, channel = result
+            username, chat_id, channel = result
             c.execute("UPDATE conversations SET assigned_agent = ?, ai_enabled = 0 WHERE id = ?", (current_user.username, convo_id))
             conn.commit()
             c.execute("SELECT assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
             updated_result = c.fetchone()
             logger.info(f"✅ After handoff for convo_id {convo_id}: assigned_agent={updated_result[0]}, ai_enabled={updated_result[1]}")
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
         logger.info(f"✅ Agent {current_user.username} took over convo_id {convo_id}, AI disabled")
         return jsonify({"status": "success", "message": f"Agent {current_user.username} has taken over the conversation"})
     except Exception as e:
@@ -1248,12 +1256,12 @@ def handback_to_ai():
         with get_db_connection() as conn:
             c = conn.cursor()
             # Fetch conversation details
-            c.execute("SELECT username, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
+            c.execute("SELECT username, chat_id, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
             result = c.fetchone()
             if not result:
                 logger.error(f"❌ Conversation not found: {convo_id}")
                 return jsonify({"error": "Conversation not found"}), 404
-            username, channel, assigned_agent = result
+            username, chat_id, channel, assigned_agent = result
 
             # Check if the current agent is assigned to this conversation
             if assigned_agent != current_user.username:
@@ -1278,13 +1286,16 @@ def handback_to_ai():
         log_message(convo_id, "AI", handback_message, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": handback_message, "sender": "ai", "channel": channel})
         if channel == "telegram":
-            try:
-                logger.info(f"Sending handback message to Telegram - To: {username}, Body: {handback_message}")
-                send_telegram_message(username, handback_message)
-                logger.info("✅ Handback message sent to Telegram: " + handback_message)
-            except Exception as e:
-                logger.error(f"❌ Telegram error sending handback message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Telegram: {str(e)}", "channel": channel})
+            if not chat_id:
+                logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handback message to Telegram: No chat_id found", "channel": channel})
+            else:
+                logger.info(f"Sending handback message to Telegram - To: {chat_id}, Body: {handback_message}")
+                if not send_telegram_message(chat_id, handback_message):
+                    logger.error(f"❌ Failed to send handback message to Telegram for chat_id {chat_id}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handback message to Telegram", "channel": channel})
+                else:
+                    logger.info("✅ Handback message sent to Telegram: " + handback_message)
         elif channel == "whatsapp":
             try:
                 logger.info(f"Sending handback message to WhatsApp - To: {username}, Body: {handback_message}")
@@ -1303,7 +1314,7 @@ def handback_to_ai():
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Instagram: {str(e)}", "channel": channel})
 
         # Emit a refresh event to update the conversation list in the dashboard
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": username, "channel": channel})
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
         logger.info(f"✅ Chat {convo_id} handed back to AI by {current_user.username}")
         return jsonify({"message": "Chat handed back to AI successfully"})
     except Exception as e:
