@@ -388,7 +388,7 @@ def check_availability(check_in, check_out):
 
             logger.info(f"✅ Checking calendar for {current_date.strftime('%Y-%m-%d')}")
             events_result = service.events().list(
-                calendarId='primary',  # Replace with your calendar ID if not 'primary'
+                calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',  # Replace with your calendar ID if not 'primary'
                 timeMin=start_time,
                 timeMax=end_time,
                 singleEvents=True,
