@@ -355,16 +355,60 @@ def log_message(convo_id, user, message, sender):
         raise
 
 def send_telegram_message(chat_id, text):
-    try:
-        url = f"{TELEGRAM_API_URL}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text}
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
-        time.sleep(0.5)
-    except Exception as e:
-        logger.error(f"❌ Failed to send Telegram message to {chat_id}: {str(e)}")
-        raise
+    """
+    Send a message to a Telegram chat using the bot API.
+    Args:
+        chat_id (str): The Telegram chat ID.
+        text (str): The message text to send.
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    # Ensure TELEGRAM_API_URL includes the bot token
+    if not TELEGRAM_API_URL or not TELEGRAM_API_URL.startswith("https://api.telegram.org/bot"):
+        logger.error(f"❌ TELEGRAM_API_URL is invalid or missing bot token: {TELEGRAM_API_URL}")
+        return False
+
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    if not chat_id or not isinstance(chat_id, str):
+        logger.error(f"❌ Invalid chat_id: {chat_id}")
+        return False
+    if not text or not isinstance(text, str):
+        logger.error(f"❌ Invalid text: {text}")
+        return False
+    if len(text) > 4096:
+        logger.error(f"❌ Text exceeds 4096 characters: {len(text)}")
+        text = text[:4093] + "..."  # Truncate to fit within limit
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"  # Optional: Add if you use Markdown formatting
+    }
+    headers = {"Content-Type": "application/json"}
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            response.raise_for_status()
+            logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
+            time.sleep(0.5)  # Small delay to avoid rate limiting
+            return True
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"❌ Telegram API error (Attempt {attempt + 1}/{max_retries}): {str(e)}, Response: {e.response.text}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                continue
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Telegram request failed (Attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+                continue
+            return False
+
+    logger.error(f"❌ Failed to send Telegram message after {max_retries} attempts")
+    return False
 
 # Placeholder for WhatsApp message sending (to be implemented later)
 def send_whatsapp_message(phone_number, text):
