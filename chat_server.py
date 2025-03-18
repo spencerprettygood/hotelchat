@@ -249,26 +249,6 @@ def load_user(agent_id):
             return Agent(agent[0], agent[1])
     return None
 
-def detect_language(message, convo_id):
-    """
-    Detect the user's language (English or Spanish) based on the message or conversation history.
-    Returns 'es' for Spanish, 'en' for English.
-    """
-    spanish_keywords = ["hola", "gracias", "reservar", "habitación", "disponibilidad", "marzo", "abril"]
-    if any(keyword in message.lower() for keyword in spanish_keywords):
-        return "es"
-    
-    # Check conversation history for language cues
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT message FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 5", (convo_id,))
-        messages = c.fetchall()
-        for msg in messages:
-            if any(keyword in msg[0].lower() for keyword in spanish_keywords):
-                return "es"
-    
-    return "en"
-
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -621,6 +601,26 @@ def ai_respond(message, convo_id):
         return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
     
+def detect_language(message, convo_id):
+    """
+    Detect the user's language (English or Spanish) based on the message or conversation history.
+    Returns 'es' for Spanish, 'en' for English.
+    """
+    spanish_keywords = ["hola", "gracias", "reservar", "habitación", "disponibilidad", "marzo", "abril"]
+    if any(keyword in message.lower() for keyword in spanish_keywords):
+        return "es"
+    
+    # Check conversation history for language cues
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT message FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 5", (convo_id,))
+        messages = c.fetchall()
+        for msg in messages:
+            if any(keyword in msg[0].lower() for keyword in spanish_keywords):
+                return "es"
+    
+    return "en"
+
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
     return jsonify({"is_authenticated": current_user.is_authenticated, "agent": current_user.username if current_user.is_authenticated else None})
