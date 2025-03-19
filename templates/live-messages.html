@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live WhatsApp Messages - Amapola Resort</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+        .sidebar {
+            width: 30%;
+            background-color: #fff;
+            border-right: 1px solid #ddd;
+            overflow-y: auto;
+        }
+        .conversation-item {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+        .conversation-item:hover {
+            background-color: #f5f5f5;
+        }
+        .conversation-item.active {
+            background-color: #e9ecef;
+        }
+        .conversation-item img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .conversation-info {
+            flex: 1;
+        }
+        .conversation-info h3 {
+            margin: 0;
+            font-size: 16px;
+            color: #111;
+        }
+        .conversation-info p {
+            margin: 5px 0 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-header {
+            background-color: #075e54;
+            color: white;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .chat-header img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .chat-header h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .chat-messages {
+            flex: 1;
+            background: url('https://i.imgur.com/5yZ1q1B.png'); /* WhatsApp background */
+            padding: 20px;
+            overflow-y: auto;
+        }
+        .message {
+            max-width: 70%;
+            margin: 5px 0;
+            padding: 8px 12px;
+            border-radius: 7.5px;
+            position: relative;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .message.user {
+            background-color: #e9ecef;
+            margin-left: auto;
+            text-align: left;
+        }
+        .message.ai, .message.agent {
+            background-color: #dcf8c6;
+            margin-right: auto;
+        }
+        .message.ai-activity {
+            color: #6c757d;
+            font-style: italic;
+            text-align: center;
+            background: none;
+        }
+        .message .timestamp {
+            font-size: 10px;
+            color: #999;
+            position: absolute;
+            bottom: 2px;
+            right: 5px;
+        }
+        .chat-input {
+            display: flex;
+            padding: 10px;
+            background-color: #fff;
+            border-top: 1px solid #ddd;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            font-size: 14px;
+            outline: none;
+        }
+        .chat-input button {
+            background-color: #075e54;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            margin-left: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .controls {
+            padding: 10px;
+            background-color: #fff;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .ai-toggle-btn {
+            padding: 8px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .ai-toggle-btn.disabled {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="controls">
+                <button id="ai-toggle-btn" class="ai-toggle-btn">Turn AI Off</button>
+                <span id="ai-status">AI is currently enabled</span>
+            </div>
+            <div id="conversation-list"></div>
+        </div>
+        <div class="chat-area">
+            <div class="chat-header" id="chat-header">
+                <img src="https://via.placeholder.com/40" alt="User">
+                <h2>Select a conversation</h2>
+            </div>
+            <div class="chat-messages" id="chat-messages"></div>
+            <div class="chat-input" id="chat-input" style="display: none;">
+                <input type="text" id="message-input" placeholder="Type a message...">
+                <button onclick="sendMessage()"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io.connect('http://' + document.domain + ':' + location.port);
+        let currentConvoId = null;
+
+        // Load AI state on page load
+        function loadAiState() {
+            fetch('/get-ai-state')
+                .then(response => response.json())
+                .then(data => {
+                    updateAiButton(data.ai_enabled);
+                })
+                .catch(error => console.error('Error loading AI state:', error));
+        }
+
+        // Update AI toggle button and status
+        function updateAiButton(aiEnabled) {
+            const button = document.getElementById('ai-toggle-btn');
+            const status = document.getElementById('ai-status');
+            if (aiEnabled) {
+                button.textContent = 'Turn AI Off';
+                button.classList.remove('disabled');
+                status.textContent = 'AI is currently enabled';
+            } else {
+                button.textContent = 'Turn AI On';
+                button.classList.add('disabled');
+                status.textContent = 'AI is currently disabled';
+            }
+        }
+
+        // Toggle AI state
+        document.getElementById('ai-toggle-btn').addEventListener('click', () => {
+            fetch('/toggle-ai', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    updateAiButton(data.ai_enabled);
+                })
+                .catch(error => console.error('Error toggling AI:', error));
+        });
+
+        // Listen for AI state changes
+        socket.on('ai_state_changed', function(data) {
+            updateAiButton(data.ai_enabled);
+        });
+
+        // Load all conversations
+        function loadConversations() {
+            fetch('/all-whatsapp-messages')
+                .then(response => response.json())
+                .then(data => {
+                    const convoList = document.getElementById('conversation-list');
+                    convoList.innerHTML = '';
+                    data.conversations.forEach(convo => {
+                        const convoDiv = document.createElement('div');
+                        convoDiv.className = 'conversation-item';
+                        convoDiv.dataset.convoId = convo.convo_id;
+                        const lastMessage = convo.messages.length > 0 ? convo.messages[convo.messages.length - 1] : null;
+                        convoDiv.innerHTML = `
+                            <img src="https://via.placeholder.com/40" alt="User">
+                            <div class="conversation-info">
+                                <h3>${convo.username}</h3>
+                                <p>${lastMessage ? lastMessage.message.substring(0, 50) + (lastMessage.message.length > 50 ? '...' : '') : 'No messages'}</p>
+                            </div>
+                        `;
+                        convoDiv.addEventListener('click', () => selectConversation(convo.convo_id, convo.username, convo.messages));
+                        convoList.appendChild(convoDiv);
+                    });
+                })
+                .catch(error => console.error('Error loading conversations:', error));
+        }
+
+        // Select a conversation
+        function selectConversation(convoId, username, messages) {
+            currentConvoId = convoId;
+            const convoItems = document.querySelectorAll('.conversation-item');
+            convoItems.forEach(item => item.classList.remove('active'));
+            document.querySelector(`.conversation-item[data-convo-id="${convoId}"]`).classList.add('active');
+
+            const header = document.getElementById('chat-header');
+            header.innerHTML = `
+                <img src="https://via.placeholder.com/40" alt="User">
+                <h2>${username}</h2>
+            `;
+
+            const messagesDiv = document.getElementById('chat-messages');
+            messagesDiv.innerHTML = '';
+            messages.forEach(msg => {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = `message ${msg.sender === 'user' ? 'user' : msg.sender === 'ai' ? 'ai' : 'agent'}`;
+                msgDiv.innerHTML = `
+                    ${msg.message}
+                    <span class="timestamp">${new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                `;
+                messagesDiv.appendChild(msgDiv);
+            });
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+            const chatInput = document.getElementById('chat-input');
+            chatInput.style.display = 'flex';
+            chatInput.dataset.convoId = convoId;
+        }
+
+        // Send message
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            if (!message || !currentConvoId) return;
+            fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: currentConvoId,
+                    message: message,
+                    channel: 'whatsapp'
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        input.value = '';
+                    } else {
+                        console.error('Error sending message:', data.error);
+                    }
+                })
+                .catch(error => console.error('Error sending message:', error));
+        }
+
+        // Handle Enter key to send message
+        document.getElementById('message-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Handle new live messages
+        socket.on('live_message', function(data) {
+            if (data.convo_id === currentConvoId) {
+                const messagesDiv = document.getElementById('chat-messages');
+                const msgDiv = document.createElement('div');
+                msgDiv.className = `message ${data.sender === 'user' ? 'user' : data.sender === 'ai' ? 'ai' : 'agent'}`;
+                msgDiv.innerHTML = `
+                    ${data.message}
+                    <span class="timestamp">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                `;
+                messagesDiv.appendChild(msgDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+            // Update conversation list preview
+            const convoItem = document.querySelector(`.conversation-item[data-convo-id="${data.convo_id}"]`);
+            if (convoItem) {
+                const preview = convoItem.querySelector('p');
+                preview.textContent = data.message.substring(0, 50) + (data.message.length > 50 ? '...' : '');
+            }
+        });
+
+        // Handle AI activity
+        socket.on('ai_activity', function(data) {
+            if (data.convo_id === currentConvoId) {
+                const messagesDiv = document.getElementById('chat-messages');
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message ai-activity';
+                msgDiv.textContent = data.message;
+                messagesDiv.appendChild(msgDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        });
+
+        // Initial load
+        window.onload = function() {
+            loadAiState();
+            loadConversations();
+        };
+    </script>
+</body>
+</html>
