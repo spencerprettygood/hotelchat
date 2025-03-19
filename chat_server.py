@@ -1229,27 +1229,46 @@ def assign_agent():
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     if request.method == 'GET':
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-            result = c.fetchone()
-            ai_enabled = result[0] if result else '1'  # Default to enabled
-            return jsonify({'ai_enabled': ai_enabled})
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+                result = c.fetchone()
+                ai_enabled = result[0] if result else '1'  # Default to enabled
+                return jsonify({'ai_enabled': ai_enabled})
+        except Exception as e:
+            logger.error(f"❌ Error fetching settings: {e}")
+            return jsonify({'error': 'Failed to fetch settings'}), 500
     else:  # POST
-        data = request.get_json()
-        key = data.get('key')
-        value = data.get('value')
-        if not key or value is None:
-            logger.error("❌ Missing key or value in /settings POST request")
-            return jsonify({'error': 'Missing key or value'}), 400
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-            conn.commit()
-        # Emit settings_updated event to all clients
-        socketio.emit('settings_updated', {'ai_enabled': value}, broadcast=True)
-        logger.info(f"✅ Updated setting {key} to {value} and emitted settings_updated event")
-        return jsonify({'status': 'success'})
+        try:
+            data = request.get_json()
+            key = data.get('key')
+            value = data.get('value')
+            if not key or value is None:
+                logger.error("❌ Missing key or value in /settings POST request")
+                return jsonify({'error': 'Missing key or value'}), 400
+
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                try:
+                    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+                    conn.commit()
+                except sqlite3.OperationalError as db_e:
+                    if "database is locked" in str(db_e):
+                        time.sleep(1)  # Wait and retry
+                        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+                        conn.commit()
+                    else:
+                        logger.error(f"❌ Database error updating settings: {db_e}")
+                        return jsonify({'error': 'Database error updating settings'}), 500
+
+            # Emit settings_updated event to all clients
+            socketio.emit('settings_updated', {'ai_enabled': value}, broadcast=True)
+            logger.info(f"✅ Updated setting {key} to {value} and emitted settings_updated event")
+            return jsonify({'status': 'success'})
+        except Exception as e:
+            logger.error(f"❌ Error updating settings: {e}")
+            return jsonify({'error': 'Failed to update settings'}), 500
 
 @app.route("/test-ai", methods=["POST"])
 def test_ai():
