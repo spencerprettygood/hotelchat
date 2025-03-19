@@ -344,6 +344,33 @@ def logout():
 def live_messages_page():
     return render_template("live-messages.html")
 
+@app.route("/all-whatsapp-messages", methods=["GET"])
+def get_all_whatsapp_messages():
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        # Fetch all WhatsApp conversations
+        c.execute("SELECT id, username FROM conversations WHERE channel = 'whatsapp' ORDER BY last_updated DESC")
+        conversations = []
+        for row in c.fetchall():
+            convo_id, username = row
+            # Fetch messages for this conversation
+            c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
+            messages = [{"message": msg[0], "sender": msg[1], "timestamp": msg[2]} for msg in c.fetchall()]
+            conversations.append({
+                "convo_id": convo_id,
+                "username": username,
+                "messages": messages
+            })
+        logger.info(f"✅ Fetched {len(conversations)} WhatsApp conversations")
+        return jsonify({"conversations": conversations})
+    except Exception as e:
+        logger.error(f"❌ Error fetching WhatsApp messages: {str(e)}")
+        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+    finally:
+        conn.close()
+        logger.info("✅ Closed database connection")
+
 @app.route("/conversations", methods=["GET"])
 def get_conversations():
     try:
