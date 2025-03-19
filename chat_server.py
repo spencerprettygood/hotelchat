@@ -1299,33 +1299,22 @@ def handle_agent_message(data):
             "sender": "agent",
             "channel": convo_channel
         }, room=convo_id)
+        emit("live_message", {
+            "convo_id": convo_id,
+            "message": message,
+            "sender": "agent",
+            "username": username
+        })
 
-        if convo_channel == "telegram":
-            if not chat_id:
-                emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram: No chat_id found", "channel": convo_channel})
-            else:
-                if not send_telegram_message(chat_id, message):
-                    emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram", "channel": convo_channel})
-        elif convo_channel == "whatsapp":
+        if convo_channel == "whatsapp":
             if not chat_id:
                 emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp: No chat_id found", "channel": convo_channel})
             else:
                 if not send_whatsapp_message(chat_id, message):
                     emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": convo_channel})
-        elif convo_channel == "instagram":
-            if not chat_id:
-                emit("error", {"convo_id": convo_id, "message": "Failed to send message to Instagram: No chat_id found", "channel": convo_channel})
-            else:
-                try:
-                    requests.post(
-                        f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
-                        json={"recipient": {"id": chat_id}, "message": {"text": message}}
-                    )
-                except Exception as e:
-                    emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Instagram: {str(e)}", "channel": convo_channel})
     except Exception as e:
         logger.error(f"❌ Error in agent_message event for convo_id {convo_id}: {e}")
-                emit("error", {"convo_id": convo_id, "message": f"Failed to process agent message: {str(e)}", "channel": convo_channel})
+        emit("error", {"convo_id": convo_id, "message": f"Failed to process agent message: {str(e)}", "channel": convo_channel})
 
 @socketio.on("hand_back_to_ai")
 def handle_hand_back_to_ai(data):
