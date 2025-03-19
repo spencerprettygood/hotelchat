@@ -1085,26 +1085,26 @@ def whatsapp():
         else:
             convo_id, ai_enabled, handoff_notified, assigned_agent = result
 
-        global_ai_enabled = 1
-        try:
-            c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-            global_ai_result = c.fetchone()
-            global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
-        except sqlite3.OperationalError as e:
-            logger.error(f"❌ Error querying settings table: {str(e)}. Defaulting to global_ai_enabled=1")
-            c.execute('''CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )''')
-            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
-            conn.commit()
+    global_ai_enabled = 1
+    try:
+        c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+        global_ai_result = c.fetchone()
+        global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
+    except sqlite3.OperationalError as e:
+        logger.error(f"❌ Error querying settings table: {str(e)}. Defaulting to global_ai_enabled=1")
+        c.execute('''CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )''')
+        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
+        conn.commit()
 
-        log_message(convo_id, from_number, message_body, "user")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "channel": "whatsapp"})
-        socketio.emit("live_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "username": prefixed_from})
+    log_message(convo_id, from_number, message_body, "user")
+    socketio.emit("new_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "channel": "whatsapp"})
+    socketio.emit("live_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "username": prefixed_from})
 
-        if not global_ai_enabled or not ai_enabled:
-            return jsonify({}), 200
+    if not global_ai_enabled or not ai_enabled:
+        return jsonify({}), 200
 
         response = ai_respond(message_body, convo_id)
         socketio.emit("ai_activity", {"convo_id": convo_id, "message": f"AI processing: {response}", "channel": "whatsapp"})
