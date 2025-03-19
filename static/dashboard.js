@@ -319,7 +319,6 @@ function loadConversation(convoId) {
         .catch(error => console.error('Error loading messages:', error));
 }
 
-// Send a message
 function sendMessage() {
     if (!currentConversationId) {
         alert('Please select a conversation.');
@@ -329,11 +328,15 @@ function sendMessage() {
     const messageInput = document.getElementById('messageInput');
     if (!messageInput) {
         console.error('Message input not found.');
+        alert('Error: Message input field not found.');
         return;
     }
 
     const message = messageInput.value.trim();
-    if (!message) return;
+    if (!message) {
+        alert('Please enter a message to send.');
+        return;
+    }
 
     fetch('/chat', {
         method: 'POST',
@@ -341,27 +344,41 @@ function sendMessage() {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            conversation_id: currentConversationId,
+            convo_id: currentConversationId, // Changed from conversation_id to convo_id
             message: message,
+            channel: 'whatsapp' // Added the channel field
         }),
     })
         .then(response => {
             if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
             }
             return response.json();
         })
         .then(data => {
-            if (data.reply) {
-                // If AI responds, it will be handled via Socket.IO
-            } else if (data.status === 'success') {
-                // Agent message sent successfully
+            if (data.status === 'success') {
+                // Message sent successfully
                 messageInput.value = ''; // Clear the input after sending
+                // Optionally, add the sent message to the chat area immediately
+                const chatMessages = document.getElementById('chat-messages');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message user-message';
+                messageDiv.textContent = message;
+                messageDiv.dataset.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                chatMessages.appendChild(messageDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else if (data.reply) {
+                // If AI responds, it will be handled via Socket.IO
+                console.log('AI response will be handled via Socket.IO:', data.reply);
             } else {
                 console.error('Error sending message:', data.error);
+                alert('Failed to send message: ' + (data.error || 'Unknown error'));
             }
         })
-        .catch(error => console.error('Error sending message:', error));
+        .catch(error => {
+            console.error('Error sending message:', error);
+            alert('Error sending message: ' + error.message);
+        });
 }
 
 // Hand back to AI
