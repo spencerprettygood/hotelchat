@@ -295,9 +295,9 @@ function loadConversation(convoId) {
             messages.forEach(msg => {
                 const div = document.createElement('div');
                 const isUser = msg.sender === 'user';
+                const isAgent = msg.sender === 'agent';
                 div.className = 'message'; // Add the base message class
-                div.classList.add(isUser ? 'user-message' : 'agent-message');
-
+                div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
                 // Message text
                 const textSpan = document.createElement('span');
                 textSpan.textContent = msg.message;
@@ -420,8 +420,9 @@ socket.on('new_message', (data) => {
         if (chatBox) {
             const div = document.createElement('div');
             const isUser = data.sender === 'user';
+            const isAgent = data.sender === 'agent';
             div.className = 'message'; // Add the base message class
-            div.classList.add(isUser ? 'user-message' : 'agent-message');
+            div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
 
             const textSpan = document.createElement('span');
             textSpan.textContent = data.message;
