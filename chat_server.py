@@ -1292,8 +1292,8 @@ def settings():
                         logger.error(f"❌ Database error updating settings: {db_e}")
                         return jsonify({'error': f'Database error updating settings: {str(db_e)}'}), 500
 
-            # Emit settings_updated event to all clients
-            socketio.emit('settings_updated', {'ai_enabled': value}, broadcast=True)
+            # Emit settings_updated event to all clients (remove broadcast argument)
+            socketio.emit('settings_updated', {'ai_enabled': value})
             logger.info(f"✅ Updated setting {key} to {value} and emitted settings_updated event")
             return jsonify({'status': 'success'})
         except Exception as e:
