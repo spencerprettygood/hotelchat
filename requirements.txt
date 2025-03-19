@@ -4,6 +4,7 @@ flask-socketio==5.3.6
 flask-login
 gevent
 openai==0.27.8
+twilio==9.3.0  # Or the version you installed
 requests
 gunicorn==22.0.0
 python-socketio==5.11.0
