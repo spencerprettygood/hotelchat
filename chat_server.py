@@ -213,6 +213,13 @@ def initialize_database():
             sender TEXT NOT NULL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
+        # Create settings table
+        c.execute('''CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )''')
+        # Insert default value for ai_enabled
+        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
         c.execute("SELECT COUNT(*) FROM agents")
         if c.fetchone()[0] == 0:
             c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
@@ -468,6 +475,11 @@ def send_whatsapp_message(phone_number, text):
         bool: True if successful, False otherwise.
     """
     try:
+        # Validate TWILIO_WHATSAPP_NUMBER format
+        if not TWILIO_WHATSAPP_NUMBER.startswith("whatsapp:"):
+            logger.error(f"❌ TWILIO_WHATSAPP_NUMBER must start with 'whatsapp:': {TWILIO_WHATSAPP_NUMBER}")
+            return False
+
         # Initialize Twilio client
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -491,6 +503,7 @@ def send_whatsapp_message(phone_number, text):
     except Exception as e:
         logger.error(f"❌ Error sending WhatsApp message: {str(e)}")
         return False
+        
 # Placeholder for Instagram message sending (to be implemented later)
 def send_instagram_message(user_id, text):
     raise NotImplementedError("Instagram messaging not yet implemented")
@@ -1236,9 +1249,20 @@ def whatsapp():
             convo_id, ai_enabled, handoff_notified, assigned_agent = result
 
         # Check global AI state
-        c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-        global_ai_result = c.fetchone()
-        global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
+        global_ai_enabled = 1  # Default to enabled
+        try:
+            c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+            global_ai_result = c.fetchone()
+            global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
+        except sqlite3.OperationalError as e:
+            logger.error(f"❌ Error querying settings table: {str(e)}. Defaulting to global_ai_enabled=1")
+            # Optionally, attempt to create the settings table if it doesn't exist
+            c.execute('''CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )''')
+            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
+            conn.commit()
 
         log_message(convo_id, from_number, message_body, "user")
         socketio.emit("new_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "channel": "whatsapp"})
