@@ -186,7 +186,7 @@ def get_db_connection():
         conn.close()
         logger.info("✅ Closed database connection")
 
-# Initialize the database (create tables if they dont exist)
+# Initialize the database (create tables if they don't exist)
 def init_db():
     try:
         with get_db_connection() as conn:
@@ -204,13 +204,16 @@ def init_db():
                     assigned_agent TEXT,
                     booking_intent TEXT,
                     visible_in_conversations INTEGER DEFAULT 0,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_updated TIMESTAMP
                 )
             """)
             # Add last_updated column if it doesn't exist (for existing databases)
             try:
-                c.execute("ALTER TABLE conversations ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                c.execute("ALTER TABLE conversations ADD COLUMN last_updated TIMESTAMP")
                 logger.info("✅ Added last_updated column to conversations table")
+                # Populate last_updated for existing rows
+                c.execute("UPDATE conversations SET last_updated = CURRENT_TIMESTAMP WHERE last_updated IS NULL")
+                logger.info("✅ Populated last_updated for existing conversations")
             except sqlite3.OperationalError as e:
                 if "duplicate column name" not in str(e).lower():
                     raise  # Re-raise if it's not a "column already exists" error
@@ -246,7 +249,7 @@ def init_db():
                 )
             """)
             # Add a default agent for testing (username: admin, password: password)
-            c.execute("INSERT OR IGNORE INTO agents (username, password) VALUES (?, ?)", ('admin1', 'password123'))
+            c.execute("INSERT OR IGNORE INTO agents (username, password) VALUES (?, ?)", ('admin', 'password'))
 
             conn.commit()
             logger.info("✅ Database initialized")
@@ -265,7 +268,7 @@ def add_test_conversations():
             if count == 0:
                 # Add 5 test conversations
                 for i in range(1, 6):
-                    c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 1, 0)", 
+                    c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations, last_updated) VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP)", 
                               (f"test_user_{i}", "test"))
                     convo_id = c.lastrowid
                     # Add a test message for each conversation
