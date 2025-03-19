@@ -1,197 +1,356 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const socket = io({
-        transports: ['websocket'],
-        reconnection: true,
-        reconnectionAttempts: Infinity,
-        reconnectionDelay: 1000
-    });
-
-    let currentConversationId = null;
-    let currentAgent = null;
-
-    // Socket.IO event handlers
-    socket.on('connect', () => {
-        console.log('Connected to Socket.IO server');
-        checkAuth();
-        fetchConversations();
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Disconnected from Socket.IO server');
-        showNotification('Disconnected from server. Attempting to reconnect...', 'error');
-    });
-
-    socket.on('reconnect', (attempt) => {
-        console.log(`Reconnected to Socket.IO server after ${attempt} attempts`);
-        showNotification('Reconnected to server!', 'success');
-        checkAuth();
-        fetchConversations();
-        if (currentConversationId) {
-            socket.emit('join_conversation', { conversation_id: currentConversationId });
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Messages - Amapola Resort</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: #f0f2f5;
         }
-    });
-
-    socket.on('new_message', (data) => {
-        console.log('New message received:', data);
-        if (data.convo_id === currentConversationId) {
-            appendMessage(data.message, data.sender);
+        .header {
+            background-color: #075E54;
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
         }
-    });
-
-    socket.on('refresh_conversations', (data) => {
-        console.log('Refreshing conversations:', data);
-        fetchConversations();
-    });
-
-    socket.on('ai_status', (data) => {
-        if (data.convo_id === currentConversationId) {
-            const aiToggle = document.getElementById('ai-toggle');
-            aiToggle.checked = data.ai_enabled;
-            showNotification(data.ai_enabled ? 'AI has been enabled for this conversation.' : 'AI has been disabled for this conversation.', 'info');
+        .header .profile-pic {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: #ddd;
+            margin-right: 10px;
         }
-    });
-
-    socket.on('error', (data) => {
-        console.error('Socket.IO error:', data);
-        showNotification(data.message || 'An error occurred.', 'error');
-    });
-
-    // Authentication check
-    async function checkAuth() {
-        const response = await fetch('/check-auth');
-        const data = await response.json();
-        if (!data.is_authenticated) {
-            window.location.href = '/login.html';
-        } else {
-            currentAgent = data.agent;
-            document.getElementById('agent-name').textContent = `Agent: ${currentAgent}`;
+        .header .contact-info {
+            flex-grow: 1;
         }
-    }
-
-    // Fetch conversations
-    async function fetchConversations() {
-        try {
-            const response = await fetch('/conversations');
-            const data = await response.json();
-            const conversationList = document.getElementById('conversation-list');
-            conversationList.innerHTML = '';
-
-            const visibleConversations = data.filter(convo => convo.channel !== 'test');
-            visibleConversations.forEach(convo => {
-                const li = document.createElement('li');
-                li.className = 'p-2 hover:bg-gray-200 cursor-pointer';
-                li.textContent = convo.display_name || convo.username;
-                if (convo.assigned_agent) {
-                    li.textContent += ` (Assigned to ${convo.assigned_agent})`;
-                }
-                li.addEventListener('click', () => loadConversation(convo.id));
-                conversationList.appendChild(li);
-            });
-        } catch (error) {
-            console.error('Error fetching conversations:', error);
-            showNotification('Failed to load conversations.', 'error');
+        .header .contact-info h1 {
+            font-size: 16px;
+            margin: 0;
+            font-weight: 500;
         }
-    }
-
-    // Load a specific conversation
-    async function loadConversation(convoId) {
-        if (currentConversationId) {
-            socket.emit('leave_conversation', { conversation_id: currentConversationId });
+        .header .contact-info p {
+            font-size: 12px;
+            margin: 0;
+            opacity: 0.7;
         }
-        currentConversationId = convoId;
-        socket.emit('join_conversation', { conversation_id: convoId });
-
-        try {
-            const response = await fetch(`/messages?conversation_id=${convoId}`);
-            const data = await response.json();
-            const chatBox = document.getElementById('chat-box');
-            chatBox.innerHTML = '';
-
-            document.getElementById('conversation-title').textContent = `Conversation with ${data.username || data.chat_id || 'Unknown'}`;
-            data.messages.forEach(msg => {
-                appendMessage(msg.message, msg.sender);
-            });
-
-            const assignButton = document.getElementById('assign-button');
-            assignButton.onclick = () => assignAgent(convoId);
-
-            const handBackButton = document.getElementById('hand-back-button');
-            handBackButton.onclick = () => handBackToAI(convoId);
-        } catch (error) {
-            console.error('Error loading conversation:', error);
-            showNotification('Failed to load conversation.', 'error');
+        .header .icons {
+            display: flex;
+            gap: 20px;
         }
-    }
-
-    // Append a message to the chat box
-    function appendMessage(message, sender) {
-        const chatBox = document.getElementById('chat-box');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${sender === 'user' ? 'user-message' : 'ai-message'}`;
-        messageDiv.innerHTML = `<strong>${sender}:</strong> ${message}`;
-        chatBox.appendChild(messageDiv);
-        chatBox.scrollTop = chatBox.scrollHeight;
-    }
-
-    // Send a message
-    document.getElementById('send-button').addEventListener('click', sendMessage);
-    document.getElementById('message-input').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            sendMessage();
+        .header .icons span {
+            font-size: 20px;
+            cursor: pointer;
         }
-    });
-
-    function sendMessage() {
-        const input = document.getElementById('message-input');
-        const message = input.value.trim();
-        if (message && currentConversationId) {
-            socket.emit('agent_message', {
-                conversation_id: currentConversationId,
-                message: message,
-                channel: 'dashboard'
-            });
-            input.value = '';
+        .chat-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 70px 10px 80px;
+            background: url('https://i.imgur.com/5y5Lh1N.png') repeat;
+            background-size: auto;
         }
-    }
+        .message {
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            max-width: 70%;
+        }
+        .user-message {
+            align-self: flex-end;
+            margin-left: auto;
+        }
+        .ai-message {
+            align-self: flex-start;
+            margin-right: auto;
+        }
+        .message-bubble {
+            padding: 8px 12px;
+            border-radius: 7.5px;
+            position: relative;
+            word-wrap: break-word;
+            font-size: 14.2px;
+            line-height: 1.4;
+        }
+        .user-message .message-bubble {
+            background-color: #DCF8C6;
+            border-bottom-right-radius: 2px;
+        }
+        .user-message .message-bubble::after {
+            content: '';
+            position: absolute;
+            right: -5px;
+            bottom: 0;
+            width: 10px;
+            height: 10px;
+            background: radial-gradient(circle at bottom left, transparent 50%, #DCF8C6 50%);
+        }
+        .ai-message .message-bubble {
+            background-color: #FFFFFF;
+            border-bottom-left-radius: 2px;
+            box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+        }
+        .ai-message .message-bubble::after {
+            content: '';
+            position: absolute;
+            left: -5px;
+            bottom: 0;
+            width: 10px;
+            height: 10px;
+            background: radial-gradient(circle at bottom right, transparent 50%, #FFFFFF 50%);
+        }
+        .message-meta {
+            font-size: 11px;
+            color: #666;
+            margin-top: 2px;
+            align-self: flex-end;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .message-meta .checkmark {
+            font-size: 12px;
+            color: #34B7F1;
+        }
+        .input-container {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background-color: #F0F2F5;
+            border-top: 1px solid #ddd;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+        }
+        #message-input {
+            flex-grow: 1;
+            padding: 10px 40px 10px 15px;
+            border: none;
+            border-radius: 20px;
+            background-color: #FFFFFF;
+            margin: 0 10px;
+            outline: none;
+            font-size: 14px;
+        }
+        .input-container .icon {
+            font-size: 20px;
+            color: #54656F;
+            cursor: pointer;
+        }
+        #send-button {
+            background-color: #00AF9C;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        #send-button:hover {
+            background-color: #009688;
+        }
+        #send-button::before {
+            content: "➤";
+            font-size: 18px;
+            transform: rotate(-45deg);
+        }
+        .ai-toggle-container {
+            display: flex;
+            align-items: center;
+            margin-left: 10px;
+        }
+        .ai-toggle-container label {
+            font-size: 12px;
+            margin-right: 5px;
+        }
+        .ai-toggle-container input[type="checkbox"] {
+            appearance: none;
+            width: 34px;
+            height: 20px;
+            background-color: #ccc;
+            border-radius: 10px;
+            position: relative;
+            cursor: pointer;
+            outline: none;
+        }
+        .ai-toggle-container input[type="checkbox"]:checked {
+            background-color: #34C759;
+        }
+        .ai-toggle-container input[type="checkbox"]::before {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background-color: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+        .ai-toggle-container input[type="checkbox"]:checked::before {
+            transform: translateX(14px);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="profile-pic"></div>
+        <div class="contact-info">
+            <h1>Live WhatsApp Messages</h1>
+            <p>End-to-end encrypted</p>
+        </div>
+        <div class="ai-toggle-container">
+            <label for="ai-toggle">AI</label>
+            <input type="checkbox" id="ai-toggle" checked>
+        </div>
+        <div class="icons">
+            <span>📹</span>
+            <span>📞</span>
+            <span>⋮</span>
+        </div>
+    </div>
+    <div class="chat-container" id="chat-box">
+        <!-- Messages will be appended here -->
+    </div>
+    <div class="input-container">
+        <span class="icon">😊</span>
+        <span class="icon">📎</span>
+        <input type="text" id="message-input" placeholder="Message">
+        <button id="send-button"></button>
+    </div>
 
-    // Assign agent to conversation
-    async function assignAgent(convoId) {
-        try {
-            const response = await fetch('/assign-agent', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ conversation_id: convoId, agent: currentAgent })
-            });
-            const data = await response.json();
-            if (data.status === 'success') {
-                showNotification('Assigned to conversation.', 'success');
-                fetchConversations();
-            } else {
-                showNotification('Failed to assign agent.', 'error');
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        const socket = io({ transports: ['websocket'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000 });
+
+        socket.on('connect', () => {
+            console.log('Connected to Socket.IO server');
+            fetchConversations();
+            fetchSettings();
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from Socket.IO server');
+        });
+
+        socket.on('reconnect', (attempt) => {
+            console.log(`Reconnected to Socket.IO server after ${attempt} attempts`);
+            fetchConversations();
+            fetchSettings();
+        });
+
+        socket.on('live_message', (data) => {
+            console.log('Received live message:', data);
+            appendMessage(data.username, data.message, data.sender);
+        });
+
+        socket.on('settings_updated', (settings) => {
+            if ('ai_enabled' in settings) {
+                const aiToggle = document.getElementById('ai-toggle');
+                aiToggle.checked = settings.ai_enabled === '1';
             }
-        } catch (error) {
-            console.error('Error assigning agent:', error);
-            showNotification('Failed to assign agent.', 'error');
+        });
+
+        async function fetchConversations() {
+            try {
+                const response = await fetch('/all-whatsapp-messages');
+                const data = await response.json();
+                if (data.conversations) {
+                    const chatBox = document.getElementById('chat-box');
+                    chatBox.innerHTML = '';
+                    data.conversations.forEach(convo => {
+                        convo.messages.forEach(msg => {
+                            appendMessage(convo.username, msg.message, msg.sender, msg.timestamp);
+                        });
+                    });
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+            } catch (error) {
+                console.error('Error fetching conversations:', error);
+            }
         }
-    }
 
-    // Hand back to AI
-    function handBackToAI(convoId) {
-        socket.emit('hand_back_to_ai', { conversation_id: convoId });
-    }
+        async function fetchSettings() {
+            try {
+                const response = await fetch('/settings');
+                const settings = await response.json();
+                const aiToggle = document.getElementById('ai-toggle');
+                aiToggle.checked = settings.ai_enabled === '1';
+            } catch (error) {
+                console.error('Error fetching settings:', error);
+            }
+        }
 
-    // Show notification
-    function showNotification(message, type) {
-        const notification = document.createElement('div');
-        notification.className = `notification ${type}`;
-        notification.textContent = message;
-        document.body.appendChild(notification);
-        setTimeout(() => notification.remove(), 3000);
-    }
+        function appendMessage(username, message, sender, timestamp = new Date().toISOString()) {
+            const chatBox = document.getElementById('chat-box');
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', sender === 'user' ? 'user-message' : 'ai-message');
 
-    // Logout
-    document.getElementById('logout-button').addEventListener('click', async () => {
-        await fetch('/logout', { method: 'POST' });
-        window.location.href = '/login.html';
-    });
-});
+            const messageBubble = document.createElement('div');
+            messageBubble.classList.add('message-bubble');
+            messageBubble.innerHTML = `<strong>${username}:</strong> ${message}`;
+
+            const messageMeta = document.createElement('div');
+            messageMeta.classList.add('message-meta');
+            const time = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            messageMeta.innerHTML = `${time}${sender === 'agent' ? '<span class="checkmark">✓✓</span>' : ''}`;
+
+            messageDiv.appendChild(messageBubble);
+            messageDiv.appendChild(messageMeta);
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        document.getElementById('send-button').addEventListener('click', sendMessage);
+        document.getElementById('message-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        document.getElementById('ai-toggle').addEventListener('change', async (e) => {
+            const aiEnabled = e.target.checked ? '1' : '0';
+            try {
+                const response = await fetch('/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: 'ai_enabled', value: aiEnabled })
+                });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    console.error('Failed to update AI settings');
+                    e.target.checked = !e.target.checked; // Revert on failure
+                }
+            } catch (error) {
+                console.error('Error updating AI settings:', error);
+                e.target.checked = !e.target.checked; // Revert on failure
+            }
+        });
+
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            if (message) {
+                appendMessage('You', message, 'agent');
+                input.value = '';
+            }
+        }
+    </script>
+</body>
+</html>
