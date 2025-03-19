@@ -6,83 +6,169 @@
     <title>Live Messages</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            display: flex;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             margin: 0;
             height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: #f0f0f0;
+        }
+        #header {
+            background-color: #075e54;
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        #header h2 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: normal;
+        }
+        #main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
         }
         #sidebar {
             width: 300px;
-            background-color: #f4f4f4;
-            border-right: 1px solid #ccc;
+            background-color: white;
+            border-right: 1px solid #e0e0e0;
             overflow-y: auto;
-            padding: 10px;
         }
         #conversation-list div {
-            padding: 10px;
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
             cursor: pointer;
-            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
         }
         #conversation-list div:hover {
-            background-color: #e0e0e0;
+            background-color: #f5f5f5;
+        }
+        .convo-info {
+            flex: 1;
+        }
+        .convo-info strong {
+            font-size: 16px;
+            color: #111;
+        }
+        .convo-info p {
+            margin: 2px 0 0;
+            font-size: 14px;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         #chat-area {
             flex: 1;
             display: flex;
             flex-direction: column;
+            background: url('https://i.imgur.com/5y5Lh1N.png') repeat;
+            background-color: #e5ddd5;
         }
         #chat-messages {
             flex: 1;
             overflow-y: auto;
-            padding: 10px;
+            padding: 20px 10px;
+            display: flex;
+            flex-direction: column;
+        }
+        .message {
+            max-width: 70%;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.4;
+            position: relative;
         }
         .user-message {
-            background-color: #d1e7dd;
-            padding: 5px 10px;
-            margin: 5px;
-            border-radius: 5px;
+            background-color: #dcf8c6;
             align-self: flex-end;
+            margin-left: 50px;
+            border-bottom-right-radius: 2px;
         }
         .ai-message {
-            background-color: #f8d7da;
-            padding: 5px 10px;
-            margin: 5px;
-            border-radius: 5px;
+            background-color: white;
             align-self: flex-start;
+            margin-right: 50px;
+            border-bottom-left-radius: 2px;
+        }
+        .message::after {
+            content: attr(data-timestamp);
+            position: absolute;
+            bottom: 2px;
+            right: 8px;
+            font-size: 10px;
+            color: #999;
         }
         #message-input {
             display: flex;
             padding: 10px;
-            border-top: 1px solid #ccc;
+            background-color: white;
+            border-top: 1px solid #e0e0e0;
         }
         #message-input input {
             flex: 1;
-            padding: 5px;
+            padding: 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 20px;
+            font-size: 14px;
             margin-right: 10px;
+            outline: none;
+        }
+        #message-input button {
+            background-color: #075e54;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        #message-input button:hover {
+            background-color: #064c44;
         }
         .no-conversations {
-            padding: 10px;
+            padding: 15px;
             color: #666;
             font-style: italic;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
-    <div id="sidebar">
-        <h2>Select a conversation</h2>
-        <div id="conversation-list"></div>
+    <div id="header">
+        <h2 id="conversation-name">Select a conversation</h2>
     </div>
-    <div id="chat-area" data-convo-id="">
-        <div id="chat-messages"></div>
-        <div id="message-input">
-            <input type="text" id="message-text" placeholder="Type a message...">
-            <button onclick="sendMessage()">Send</button>
+    <div id="main-container">
+        <div id="sidebar">
+            <div id="conversation-list"></div>
+        </div>
+        <div id="chat-area" data-convo-id="">
+            <div id="chat-messages"></div>
+            <div id="message-input">
+                <input type="text" id="messageInput" placeholder="Type a message...">
+                <button onclick="sendMessage()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.js"></script>
     <script>
         const socket = io();
+        let currentConversationId = null;
 
         // Load conversations on page load
         document.addEventListener("DOMContentLoaded", () => {
@@ -96,8 +182,13 @@
                         data.conversations.forEach(convo => {
                             const convoItem = document.createElement("div");
                             convoItem.dataset.convoId = convo.convo_id;
-                            convoItem.innerHTML = `<strong>${convo.username}</strong>: ${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}`;
-                            convoItem.onclick = () => loadConversation(convo.convo_id);
+                            convoItem.innerHTML = `
+                                <div class="convo-info">
+                                    <strong>${convo.username}</strong>
+                                    <p>${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}</p>
+                                </div>
+                            `;
+                            convoItem.onclick = () => loadConversation(convo.convo_id, convo.username);
                             sidebar.appendChild(convoItem);
                         });
                     }
@@ -117,19 +208,28 @@
             for (let item of sidebar.children) {
                 if (item.dataset.convoId === data.convo_id.toString()) {
                     conversationExists = true;
-                    item.innerHTML = `<strong>${data.username}</strong>: ${data.message}`;
+                    item.innerHTML = `
+                        <div class="convo-info">
+                            <strong>${data.username}</strong>
+                            <p>${data.message}</p>
+                        </div>
+                    `;
                     break;
                 }
             }
             if (!conversationExists) {
-                // Remove "no conversations" message if it exists
                 if (sidebar.querySelector(".no-conversations")) {
                     sidebar.innerHTML = "";
                 }
                 const convoItem = document.createElement("div");
                 convoItem.dataset.convoId = data.convo_id;
-                convoItem.innerHTML = `<strong>${data.username}</strong>: ${data.message}`;
-                convoItem.onclick = () => loadConversation(data.convo_id);
+                convoItem.innerHTML = `
+                    <div class="convo-info">
+                        <strong>${data.username}</strong>
+                        <p>${data.message}</p>
+                    </div>
+                `;
+                convoItem.onclick = () => loadConversation(data.convo_id, data.username);
                 sidebar.appendChild(convoItem);
             }
 
@@ -137,19 +237,23 @@
             if (currentConvoId === data.convo_id.toString()) {
                 const chatArea = document.querySelector("#chat-messages");
                 const messageDiv = document.createElement("div");
-                messageDiv.className = data.sender === "user" ? "user-message" : "ai-message";
-                messageDiv.textContent = `${data.sender}: ${data.message}`;
+                messageDiv.className = data.sender === "user" ? "message user-message" : "message ai-message";
+                messageDiv.textContent = data.message;
+                messageDiv.dataset.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 chatArea.appendChild(messageDiv);
                 chatArea.scrollTop = chatArea.scrollHeight;
             }
         });
 
         // Load a conversation's messages
-        function loadConversation(convoId) {
+        function loadConversation(convoId, username) {
+            currentConversationId = convoId; // Set the global currentConversationId
             const chatArea = document.querySelector("#chat-area");
             chatArea.dataset.convoId = convoId;
             const chatMessages = document.querySelector("#chat-messages");
             chatMessages.innerHTML = "";
+
+            document.getElementById("conversation-name").textContent = username;
 
             fetch("/all-whatsapp-messages")
                 .then(response => response.json())
@@ -158,8 +262,9 @@
                     if (convo) {
                         convo.messages.forEach(msg => {
                             const messageDiv = document.createElement("div");
-                            messageDiv.className = msg.sender === "user" ? "user-message" : "ai-message";
-                            messageDiv.textContent = `${msg.sender}: ${msg.message}`;
+                            messageDiv.className = msg.sender === "user" ? "message user-message" : "message ai-message";
+                            messageDiv.textContent = msg.message;
+                            messageDiv.dataset.timestamp = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                             chatMessages.appendChild(messageDiv);
                         });
                         chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -169,23 +274,63 @@
 
         // Send a message
         function sendMessage() {
-            const convoId = document.querySelector("#chat-area").dataset.convoId;
-            const messageText = document.getElementById("message-text").value;
-            if (!convoId || !messageText) return;
+            if (!currentConversationId) {
+                alert('Please select a conversation.');
+                return;
+            }
 
-            fetch("/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ convo_id: convoId, message: messageText, channel: "whatsapp" })
+            const messageInput = document.getElementById('messageInput');
+            if (!messageInput) {
+                console.error('Message input not found.');
+                alert('Error: Message input field not found.');
+                return;
+            }
+
+            const message = messageInput.value.trim();
+            if (!message) {
+                alert('Please enter a message to send.');
+                return;
+            }
+
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    convo_id: currentConversationId,
+                    message: message,
+                    channel: 'whatsapp'
+                }),
             })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === "success") {
-                        document.getElementById("message-text").value = "";
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
                     }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        messageInput.value = '';
+                        const chatMessages = document.getElementById('chat-messages');
+                        const messageDiv = document.createElement('div');
+                        messageDiv.className = 'message user-message';
+                        messageDiv.textContent = message;
+                        messageDiv.dataset.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        chatMessages.appendChild(messageDiv);
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                    } else if (data.reply) {
+                        console.log('AI response will be handled via Socket.IO:', data.reply);
+                    } else {
+                        console.error('Error sending message:', data.error);
+                        alert('Failed to send message: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error sending message:', error);
+                    alert('Error sending message: ' + error.message);
                 });
         }
-        
         // Handle Enter key to send message
         document.getElementById('message-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
