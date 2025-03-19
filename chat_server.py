@@ -171,59 +171,68 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
+# Database connection
 @contextmanager
 def get_db_connection():
-    conn = sqlite3.connect("/var/data/chat.db")
-    conn.row_factory = sqlite3.Row
     try:
+        conn = sqlite3.connect("/var/data/chat.db")
+        conn.row_factory = sqlite3.Row
+        logger.info("✅ Opened database connection")
         yield conn
+    except Exception as e:
+        logger.error(f"❌ Error opening database connection: {e}")
+        raise
     finally:
         conn.close()
+        logger.info("✅ Closed database connection")
 
+# Initialize the database (create tables if they don't exist)
 def init_db():
     try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        # Create conversations table
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL,
-                chat_id TEXT,
-                channel TEXT NOT NULL,
-                ai_enabled INTEGER DEFAULT 1,
-                handoff_notified INTEGER DEFAULT 0,
-                assigned_agent TEXT,
-                booking_intent TEXT,
-                visible_in_conversations INTEGER DEFAULT 0
-            )
-        """)
-        # Create messages table
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id INTEGER,
-                sender TEXT NOT NULL,
-                message TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            )
-        """)
-        # Create settings table
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-        # Ensure ai_enabled has a default value
-        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
-        conn.commit()
-        logger.info("✅ Database initialized")
+        with get_db_connection() as conn:
+            logger.info(f"Connection object: {type(conn)}")  # Debug: Log the type of conn
+            c = conn.cursor()
+            # Create conversations table
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    chat_id TEXT,
+                    channel TEXT NOT NULL,
+                    ai_enabled INTEGER DEFAULT 1,
+                    handoff_notified INTEGER DEFAULT 0,
+                    assigned_agent TEXT,
+                    booking_intent TEXT,
+                    visible_in_conversations INTEGER DEFAULT 0
+                )
+            """)
+            # Create messages table
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER,
+                    sender TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                )
+            """)
+            # Create settings table
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            # Ensure ai_enabled has a default value
+            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
+            conn.commit()
+            logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ Error initializing database: {e}")
         raise
 
+# Run database initialization on startup
 init_db()
 
 def add_test_conversations():
