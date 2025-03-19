@@ -13,7 +13,7 @@ import json
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.base.exceptions import TwilioRestException
-from twilio.request_validator import RequestValidator  # Add this line if missing
+from twilio.request_validator import RequestValidator
 from datetime import datetime, timedelta
 import time
 import logging
@@ -24,6 +24,7 @@ from contextlib import contextmanager
 import json
 from googleapiclient.discovery import build
 from googleapiclient.discovery_cache.base import Cache
+
 class NullCache(Cache):
     def get(self, url):
         return None
@@ -176,66 +177,63 @@ except FileNotFoundError:
 
 @contextmanager
 def get_db_connection():
+    conn = None
     try:
         conn = sqlite3.connect("chatbot.db")
         conn.row_factory = sqlite3.Row
         logger.info("✅ Successfully connected to database")
-        return conn
+        yield conn  # This makes it a proper context manager
     except sqlite3.Error as e:
         logger.error(f"❌ Failed to connect to database: {str(e)}")
         raise
+    finally:
+        if conn:
+            conn.close()
+            logger.info("✅ Closed database connection")
 
 def initialize_database():
     logger.info("Starting database initialization")
-    conn = get_db_connection()
-    try:
-        with conn as connection:
-            c = connection.cursor()
-            logger.info("✅ Entered database connection context")
-            c.execute('''CREATE TABLE IF NOT EXISTS agents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL)''')
-            c.execute('''CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL,
-                chat_id TEXT,
-                latest_message TEXT,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                assigned_agent TEXT DEFAULT NULL,
-                channel TEXT DEFAULT 'dashboard',
-                opted_in INTEGER DEFAULT 0,
-                ai_enabled INTEGER DEFAULT 1,
-                handoff_notified INTEGER DEFAULT 0,
-                visible_in_conversations INTEGER DEFAULT 0,
-                booking_intent TEXT DEFAULT NULL
-            )''')
-            c.execute("DROP TABLE IF EXISTS messages")
-            c.execute('''CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id INTEGER NOT NULL,
-                user TEXT NOT NULL,
-                message TEXT NOT NULL,
-                sender TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
-            c.execute('''CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )''')
-            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
-            c.execute("SELECT COUNT(*) FROM agents")
-            if c.fetchone()[0] == 0:
-                c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
-                logger.info("✅ Added test agent: agent1/password123")
-            conn.commit()
-            logger.info("✅ Database tables created successfully")
-    except Exception as e:
-        logger.error(f"❌ Error during database initialization: {str(e)}")
-        raise
-    finally:
-        conn.close()
-        logger.info("✅ Closed database connection")
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        logger.info("✅ Entered database connection context")
+        c.execute('''CREATE TABLE IF NOT EXISTS agents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            chat_id TEXT,
+            latest_message TEXT,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            assigned_agent TEXT DEFAULT NULL,
+            channel TEXT DEFAULT 'dashboard',
+            opted_in INTEGER DEFAULT 0,
+            ai_enabled INTEGER DEFAULT 1,
+            handoff_notified INTEGER DEFAULT 0,
+            visible_in_conversations INTEGER DEFAULT 0,
+            booking_intent TEXT DEFAULT NULL
+        )''')
+        c.execute("DROP TABLE IF EXISTS messages")
+        c.execute('''CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            user TEXT NOT NULL,
+            message TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )''')
+        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
+        c.execute("SELECT COUNT(*) FROM agents")
+        if c.fetchone()[0] == 0:
+            c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
+            logger.info("✅ Added test agent: agent1/password123")
+        conn.commit()
+        logger.info("✅ Database tables created successfully")
     logger.info("✅ Database initialized")
 
 initialize_database()
@@ -270,21 +268,34 @@ def add_test_conversations():
 
 add_test_conversations()
 
+
 # Helper functions (e.g., log_message, ai_respond, etc.)
 def log_message(convo_id, user, message, sender):
-    conn = get_db_connection()
-    try:
-        with conn as connection:
-            c = connection.cursor()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        try:
             c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", (convo_id, user, message, sender))
             c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (message, convo_id))
+            if sender == "agent":
+                c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
+                logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
             conn.commit()
-            logger.info(f"✅ Logged message for convo_id {convo_id}")
-    except sqlite3.Error as e:
-        logger.error(f"❌ Database error in log_message: {str(e)}")
-        raise
-    finally:
-        conn.close()
+            logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                time.sleep(1)
+                c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
+                          (convo_id, user, message, sender))
+                c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
+                          (message, convo_id))
+                if sender == "agent":
+                    c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
+                    logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
+                conn.commit()
+                logger.info(f"✅ Logged message for convo_id {convo_id} after retry")
+            else:
+                logger.error(f"❌ Database error in log_message: {str(e)}")
+                raise
 
 class Agent(UserMixin):
     def __init__(self, id, username):
@@ -388,42 +399,22 @@ def get_messages():
         logger.error("❌ Missing conversation ID in get-messages request")
         return jsonify({"error": "Missing conversation ID"}), 400
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        # Fetch messages
-        c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
-        messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
-        # Fetch username and chat_id
-        c.execute("SELECT username, chat_id FROM conversations WHERE id = ?", (convo_id,))
-        result = c.fetchone()
-        username = result[0] if result else "Unknown"
-        chat_id = result[1] if result else None
-        conn.close()
-        logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
-        return jsonify({"messages": messages, "username": username, "chat_id": chat_id})
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Fetch messages
+            c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
+            messages = [{"message": row[0], "sender": row[1], "timestamp": row[2]} for row in c.fetchall()]
+            # Fetch username and chat_id
+            c.execute("SELECT username, chat_id FROM conversations WHERE id = ?", (convo_id,))
+            result = c.fetchone()
+            username = result[0] if result else "Unknown"
+            chat_id = result[1] if result else None
+            logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
+            return jsonify({"messages": messages, "username": username, "chat_id": chat_id})
     except Exception as e:
         logger.error(f"❌ Error fetching messages for convo_id {convo_id}: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
 
-def log_message(convo_id, user, message, sender):
-    try:
-        if message is None:
-            logger.error(f"❌ Attempted to log a None message for convo_id {convo_id}, user {user}, sender {sender}")
-            message = "Error: Message content unavailable"
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
-                      (convo_id, user, message, sender))
-            c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
-                      (message, convo_id))
-            if sender == "agent":
-                c.execute("UPDATE conversations SET ai_enabled = 0 WHERE id = ?", (convo_id,))
-                logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
-            conn.commit()
-        logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
-    except Exception as e:
-        logger.error(f"❌ Error logging message for convo_id {convo_id}: {e}")
-        raise
 
 def send_telegram_message(chat_id, text):
     """
@@ -520,11 +511,11 @@ def send_whatsapp_message(phone_number, text):
     except Exception as e:
         logger.error(f"❌ Error sending WhatsApp message: {str(e)}")
         return False
-        
+
 # Placeholder for Instagram message sending (to be implemented later)
 def send_instagram_message(user_id, text):
     raise NotImplementedError("Instagram messaging not yet implemented")
-    
+
 def check_availability(check_in, check_out):
     """
     Check availability between check-in and check-out dates by iterating through each day.
@@ -560,7 +551,7 @@ def check_availability(check_in, check_out):
     except Exception as e:
         logger.error(f"❌ Google Calendar API error: {str(e)}")
         return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
-        
+
 def ai_respond(message, convo_id):
     """
     Generate an AI response for the given message and conversation ID using OpenAI,
@@ -693,7 +684,7 @@ def ai_respond(message, convo_id):
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
         return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-    
+
 def detect_language(message, convo_id):
     """
     Detect the user's language (English or Spanish) based on the message or conversation history.
@@ -713,6 +704,8 @@ def detect_language(message, convo_id):
                 return "es"
     
     return "en"
+
+
 
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
@@ -755,12 +748,12 @@ def chat():
                 if not chat_id:
                     logger.error(f"❌ No chat_id found for convo_id {convo_id}")
                     socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp: No chat_id found", "channel": channel})
-            else:
-                if send_whatsapp_message(chat_id, user_message):
-                    logger.info(f"✅ Sent WhatsApp message from agent to {chat_id}: {user_message}")
                 else:
-                    logger.error(f"❌ Failed to send WhatsApp message to {chat_id}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": channel})
+                    if send_whatsapp_message(chat_id, user_message):
+                        logger.info(f"✅ Sent WhatsApp message from agent to {chat_id}: {user_message}")
+                    else:
+                        logger.error(f"❌ Failed to send WhatsApp message to {chat_id}")
+                        socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": channel})
             logger.info("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
             
@@ -852,29 +845,26 @@ def chat():
                     else:
                         logger.info(f"✅ Telegram message sent - To: {chat_id}, Body: {ai_reply}")
             if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
-                try:
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
+                    handoff_notified = c.fetchone()[0]
+                if not handoff_notified:
                     with get_db_connection() as conn:
                         c = conn.cursor()
-                        c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
-                        handoff_notified = c.fetchone()[0]
-                    if not handoff_notified:
-                        with get_db_connection() as conn:
-                            c = conn.cursor()
-                            try:
+                        try:
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            conn.commit()
+                        except sqlite3.OperationalError as e:
+                            if "database is locked" in str(e):
+                                time.sleep(1)
                                 c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
                                 conn.commit()
-                            except sqlite3.OperationalError as e:
-                                if "database is locked" in str(e):
-                                    time.sleep(1)
-                                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                                    conn.commit()
-                                else:
-                                    logger.error(f"❌ Database error: {e}")
-                                    raise
-                        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
-                        logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
-                except Exception as e:
-                    logger.error(f"❌ Error during handoff for convo_id {convo_id}: {e}")
+                            else:
+                                logger.error(f"❌ Database error: {e}")
+                                raise
+                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
+                    logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
             logger.info("✅ AI response processed successfully")
             return jsonify({"reply": ai_reply})
         else:
@@ -884,27 +874,6 @@ def chat():
         logger.error(f"❌ Error in /chat endpoint: {str(e)}")
         return jsonify({"error": "Failed to process chat message"}), 500
 
-def log_message(convo_id, user, message, sender):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        try:
-            c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
-                      (convo_id, user, message, sender))
-            c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
-                      (message, convo_id))
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
-                time.sleep(1)  # Retry after a short delay
-                c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)", 
-                          (convo_id, user, message, sender))
-                c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", 
-                          (message, convo_id))
-                conn.commit()
-            else:
-                logger.error(f"❌ Database error: {e}")
-                raise
-        
 @app.route("/telegram", methods=["POST"])
 def telegram():
     update = request.get_json()
@@ -1026,6 +995,10 @@ def telegram():
                 socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to Telegram", "channel": "telegram"})
 
         if "sorry" in response.lower() or "lo siento" in response.lower():
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
+                handoff_notified = c.fetchone()[0]
             if not handoff_notified:
                 with get_db_connection() as conn:
                     c = conn.cursor()
@@ -1044,8 +1017,7 @@ def telegram():
                 logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
 
         return jsonify({}), 200
-    
-        
+
 @app.route("/instagram", methods=["POST"])
 def instagram():
     logger.info("✅ Entering /instagram endpoint")
@@ -1195,16 +1167,6 @@ def instagram():
     logger.info("✅ Returning EVENT_RECEIVED for Instagram")
     return "EVENT_RECEIVED", 200
 
-@app.route("/instagram", methods=["GET"])
-def instagram_verify():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == os.getenv("VERIFY_TOKEN", "mysecretverifytoken"):
-        logger.info("✅ Instagram verification successful")
-        return challenge, 200
-    logger.error("❌ Instagram verification failed")
-    return "Verification failed", 403
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
@@ -1229,172 +1191,292 @@ def whatsapp():
 
     # Create or retrieve conversation ID
     prefixed_from = f"whatsapp_{from_number.replace('whatsapp:', '')}"
-    conn = get_db_connection()
-    try:
-        with conn as connection:
-            c = connection.cursor()
-            c.execute("SELECT id, ai_enabled, handoff_notified, assigned_agent FROM conversations WHERE username = ? AND channel = 'whatsapp'", (prefixed_from,))
-            result = c.fetchone()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, ai_enabled, handoff_notified, assigned_agent FROM conversations WHERE username = ? AND channel = 'whatsapp'", (prefixed_from,))
+        result = c.fetchone()
 
-            if not result:
-                logger.info(f"Creating new conversation for {prefixed_from}")
-                try:
+        if not result:
+            logger.info(f"Creating new conversation for {prefixed_from}")
+            try:
+                c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 'whatsapp', 1, 0)", (prefixed_from, from_number))
+                conn.commit()
+                convo_id = c.lastrowid
+                logger.info(f"✅ Created new conversation with ID {convo_id}")
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e):
+                    logger.warning("Database locked, retrying after 1 second")
+                    time.sleep(1)
                     c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 'whatsapp', 1, 0)", (prefixed_from, from_number))
                     conn.commit()
                     convo_id = c.lastrowid
-                    logger.info(f"✅ Created new conversation with ID {convo_id}")
-                except sqlite3.OperationalError as e:
-                    if "database is locked" in str(e):
-                        logger.warning("Database locked, retrying after 1 second")
-                        time.sleep(1)
-                        c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 'whatsapp', 1, 0)", (prefixed_from, from_number))
-                        conn.commit()
-                        convo_id = c.lastrowid
-                        logger.info(f"✅ Created new conversation with ID {convo_id} after retry")
-                    else:
-                        logger.error(f"❌ Database error during conversation insertion: {e}")
-                        return jsonify({"error": "Database error"}), 500
-                except Exception as e:
-                    logger.error(f"❌ Unexpected error during conversation insertion: {e}")
-                    return jsonify({"error": "Unexpected error"}), 500
-                ai_enabled = 1
-                handoff_notified = 0
-                assigned_agent = None
+                    logger.info(f"✅ Created new conversation with ID {convo_id} after retry")
+                else:
+                    logger.error(f"❌ Database error during conversation insertion: {e}")
+                    return jsonify({"error": "Database error"}), 500
+            except Exception as e:
+                logger.error(f"❌ Unexpected error during conversation insertion: {e}")
+                return jsonify({"error": "Unexpected error"}), 500
+            ai_enabled = 1
+            handoff_notified = 0
+            assigned_agent = None
 
-                # Send welcome message for new conversations
-                language = detect_language(message_body, convo_id)
-                welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
-                log_message(convo_id, "AI", welcome_message, "ai")
-                socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "whatsapp"})
-                socketio.emit("live_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "username": prefixed_from})
-
-                # Send welcome message via WhatsApp
-                if not send_whatsapp_message(from_number, welcome_message):
-                    logger.error(f"❌ Failed to send welcome message to WhatsApp for {from_number}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to WhatsApp", "channel": "whatsapp"})
-            else:
-                convo_id, ai_enabled, handoff_notified, assigned_agent = result
-                logger.info(f"Found existing conversation with ID {convo_id}")
-
-            # Check global AI state
-            global_ai_enabled = 1  # Default to enabled
-            try:
-                c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-                global_ai_result = c.fetchone()
-                global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
-            except sqlite3.OperationalError as e:
-                logger.error(f"❌ Error querying settings table: {str(e)}. Defaulting to global_ai_enabled=1")
-                c.execute('''CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )''')
-                c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
-                conn.commit()
-
-            log_message(convo_id, from_number, message_body, "user")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "channel": "whatsapp"})
-            socketio.emit("live_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "username": prefixed_from})
-
-            # Generate AI response if both global and conversation AI are enabled
+            # Send welcome message for new conversations
             language = detect_language(message_body, convo_id)
-            if not global_ai_enabled or not ai_enabled:
-                logger.info(f"❌ AI disabled (global: {global_ai_enabled}, convo: {ai_enabled}) for convo_id: {convo_id}, awaiting agent response")
-                return jsonify({}), 200  # No handoff to dashboard
+            welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
+            log_message(convo_id, "AI", welcome_message, "ai")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "whatsapp"})
+            socketio.emit("live_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "username": prefixed_from})
 
-            response = ai_respond(message_body, convo_id)
-            socketio.emit("ai_activity", {"convo_id": convo_id, "message": f"AI processing: {response}", "channel": "whatsapp"})
-            socketio.emit("live_message", {"convo_id": convo_id, "message": response, "sender": "ai", "username": prefixed_from})
+            # Send welcome message via WhatsApp
+            if not send_whatsapp_message(from_number, welcome_message):
+                logger.error(f"❌ Failed to send welcome message to WhatsApp for {from_number}")
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to WhatsApp", "channel": "whatsapp"})
+        else:
+            convo_id, ai_enabled, handoff_notified, assigned_agent = result
+            logger.info(f"Found existing conversation with ID {convo_id}")
 
-            # Send response back to WhatsApp
-            resp = MessagingResponse()
-            resp.message(response)
-            if "sorry" in response.lower() or "lo siento" in response.lower():
-                if not handoff_notified:
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
-                    conn.commit()
-                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
-                    logger.info(f"✅ Refresh triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+        # Check global AI state
+        global_ai_enabled = 1  # Default to enabled
+        try:
+            c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+            global_ai_result = c.fetchone()
+            global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
+        except sqlite3.OperationalError as e:
+            logger.error(f"❌ Error querying settings table: {str(e)}. Defaulting to global_ai_enabled=1")
+            c.execute('''CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )''')
+            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
+            conn.commit()
 
-            log_message(convo_id, "AI", response, "ai")
-            socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "whatsapp"})
-            return str(resp), 200
-    except Exception as e:
-        logger.error(f"❌ Error in /whatsapp endpoint: {str(e)}")
-        return jsonify({"error": "Server error"}), 500
-    finally:
-        conn.close()
+        log_message(convo_id, from_number, message_body, "user")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "channel": "whatsapp"})
+        socketio.emit("live_message", {"convo_id": convo_id, "message": message_body, "sender": "user", "username": prefixed_from})
 
-@app.route("/all-whatsapp-messages", methods=["GET"])
-def get_all_whatsapp_messages():
+        # Generate AI response if both global and conversation AI are enabled
+        language = detect_language(message_body, convo_id)
+        if not global_ai_enabled or not ai_enabled:
+            logger.info(f"❌ AI disabled (global: {global_ai_enabled}, convo: {ai_enabled}) for convo_id: {convo_id}, awaiting agent response")
+            return jsonify({}), 200  # No handoff to dashboard
+
+        response = ai_respond(message_body, convo_id)
+        socketio.emit("ai_activity", {"convo_id": convo_id, "message": f"AI processing: {response}", "channel": "whatsapp"})
+        socketio.emit("live_message", {"convo_id": convo_id, "message": response, "sender": "ai", "username": prefixed_from})
+        # Log the AI response
+        log_message(convo_id, "AI", response, "ai")
+        socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "whatsapp"})
+
+        # Send AI response back to WhatsApp
+        if not send_whatsapp_message(from_number, response):
+            logger.error(f"❌ Failed to send AI response to WhatsApp for {from_number}")
+            socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to WhatsApp", "channel": "whatsapp"})
+        else:
+            logger.info(f"✅ Sent WhatsApp message - To: {from_number}, Body: {response}")
+
+        # Check if the AI response indicates a handoff (e.g., "sorry" or "lo siento")
+        if "sorry" in response.lower() or "lo siento" in response.lower():
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT handoff_notified FROM conversations WHERE id = ?", (convo_id,))
+                handoff_notified = c.fetchone()[0]
+            if not handoff_notified:
+                with get_db_connection() as conn:
+                    c = conn.cursor()
+                    try:
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                        conn.commit()
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e):
+                            time.sleep(1)
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            conn.commit()
+                        else:
+                            logger.error(f"❌ Database error during handoff update: {e}")
+                            raise
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+                logger.info(f"✅ Handoff triggered for convo_id {convo_id}, chat now visible in Conversations (unassigned)")
+
+        return jsonify({}), 200
+
+@app.route("/whatsapp", methods=["GET"])
+def whatsapp_verify():
+    """
+    Handle WhatsApp webhook verification for Twilio.
+    """
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    verify_token = os.getenv("VERIFY_TOKEN", "mysecretverifytoken")
+    
+    if mode == "subscribe" and token == verify_token:
+        logger.info("✅ WhatsApp webhook verification successful")
+        return challenge, 200
+    logger.error("❌ WhatsApp webhook verification failed")
+    return "Verification failed", 403
+
+@app.route("/assign-agent", methods=["POST"])
+@login_required
+def assign_agent():
+    """
+    Assign an agent to a conversation.
+    """
+    data = request.get_json()
+    convo_id = data.get("conversation_id")
+    agent = data.get("agent")  # Should match current_user.username
+
+    if not convo_id or not agent:
+        logger.error("❌ Missing conversation_id or agent in /assign-agent request")
+        return jsonify({"error": "Missing required fields"}), 400
+
+    if agent != current_user.username:
+        logger.error(f"❌ Agent mismatch: {agent} != {current_user.username}")
+        return jsonify({"error": "Agent mismatch"}), 403
+
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Fetch all WhatsApp conversations
-            c.execute("SELECT id, username FROM conversations WHERE channel = 'whatsapp' ORDER BY last_updated DESC")
-            conversations = []
-            for row in c.fetchall():
-                convo_id, username = row
-                # Fetch messages for this conversation
-                c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
-                messages = [{"message": msg[0], "sender": msg[1], "timestamp": msg[2]} for msg in c.fetchall()]
-                conversations.append({
-                    "convo_id": convo_id,
-                    "username": username,
-                    "messages": messages
-                })
-            logger.info(f"✅ Fetched {len(conversations)} WhatsApp conversations")
-            return jsonify({"conversations": conversations})
+            c.execute("UPDATE conversations SET assigned_agent = ?, visible_in_conversations = 1 WHERE id = ?", (agent, convo_id))
+            conn.commit()
+            logger.info(f"✅ Assigned agent {agent} to conversation {convo_id}")
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "agent": agent})
+        return jsonify({"status": "success"})
     except Exception as e:
-        logger.error(f"❌ Error fetching WhatsApp messages: {str(e)}")
-        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
-        
-@app.route("/send-welcome", methods=["POST"])
-def send_welcome():
-    data = request.get_json()
-    to_number = data.get("to_number")
-    user_name = data.get("user_name", "Guest")
-    if not to_number:
-        logger.error("❌ Missing to_number in /send-welcome request")
-        return jsonify({"error": "Missing to_number"}), 400
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, chat_id FROM conversations WHERE username = ? AND channel = 'telegram'", (to_number,))
-        convo = c.fetchone()
-    if not convo:
-        logger.error("❌ Conversation not found in /send-welcome")
-        return jsonify({"error": "Conversation not found"}), 404
-    convo_id, chat_id = convo
-    if not chat_id:
-        logger.error(f"❌ No chat_id found for convo_id {convo_id} in /send-welcome")
-        return jsonify({"error": "No chat_id found for this conversation"}), 404
-    try:
-        language = detect_language("", convo_id)  # Use conversation history for language detection
-        logger.info(f"✅ Sending welcome message to Telegram chat {chat_id}")
-        welcome_message = f"Welcome to our hotel, {user_name}! We're here to assist with your bookings. Reply 'BOOK' to start or 'HELP' for assistance." if language == "en" else \
-                         f"¡Bienvenido a nuestro hotel, {user_name}! Estamos aquí para ayudarte con tus reservas. Responde 'RESERVAR' para comenzar o 'AYUDA' para asistencia."
-        if not send_telegram_message(chat_id, welcome_message):
-            logger.error(f"❌ Failed to send welcome message to Telegram for chat_id {chat_id}")
-            socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to Telegram", "channel": "telegram"})
-            return jsonify({"error": "Failed to send welcome message"}), 500
-        logger.info("✅ Logging welcome message in /send-welcome")
-        log_message(convo_id, "AI", f"Welcome to our hotel, {user_name}!" if language == "en" else f"¡Bienvenido a nuestro hotel, {user_name}!", "ai")
-        logger.info("✅ Emitting new_message event in /send-welcome")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": f"Welcome to our hotel, {user_name}!" if language == "en" else f"¡Bienvenido a nuestro hotel, {user_name}!", "sender": "ai", "channel": "telegram"})
-        logger.info("✅ Welcome message sent successfully")
-        return jsonify({"message": "Welcome message sent"}), 200
-    except Exception as e:
-        logger.error(f"❌ Telegram error in send-welcome: {str(e)}")
-        socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send welcome message to Telegram: {str(e)}", "channel": "telegram"})
-        return jsonify({"error": "Failed to send message"}), 500
+        logger.error(f"❌ Error assigning agent to convo_id {convo_id}: {e}")
+        return jsonify({"error": "Failed to assign agent"}), 500
 
-@app.route("/handoff", methods=["POST"])
-@login_required
-def handoff():
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    """
+    Manage global settings, such as enabling/disabling AI globally.
+    """
+    if request.method == "GET":
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT key, value FROM settings")
+                settings_dict = dict(c.fetchall())
+            logger.info(f"✅ Fetched settings: {settings_dict}")
+            return jsonify(settings_dict)
+        except Exception as e:
+            logger.error(f"❌ Error fetching settings: {e}")
+            return jsonify({"error": "Failed to fetch settings"}), 500
+
+    elif request.method == "POST":
+        data = request.get_json()
+        key = data.get("key")
+        value = data.get("value")
+
+        if not key or value is None:
+            logger.error("❌ Missing key or value in /settings POST request")
+            return jsonify({"error": "Missing key or value"}), 400
+
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+                conn.commit()
+            logger.info(f"✅ Updated setting: {key} = {value}")
+            socketio.emit("settings_updated", {key: value})
+            return jsonify({"status": "success"})
+        except Exception as e:
+            logger.error(f"❌ Error updating settings: {e}")
+            return jsonify({"error": "Failed to update settings"}), 500
+
+@app.route("/test-ai", methods=["POST"])
+def test_ai():
+    """
+    Test the AI response without affecting any conversation.
+    """
     data = request.get_json()
+    message = data.get("message")
+    if not message:
+        logger.error("❌ Missing message in /test-ai request")
+        return jsonify({"error": "Missing message"}), 400
+
+    try:
+        # Create a temporary conversation for testing
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                      ("test_user", message, "test",))
+            temp_convo_id = c.lastrowid
+            conn.commit()
+
+        # Log the test message
+        log_message(temp_convo_id, "test_user", message, "user")
+        
+        # Generate AI response
+        response = ai_respond(message, temp_convo_id)
+
+        # Clean up the temporary conversation
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM conversations WHERE id = ?", (temp_convo_id,))
+            c.execute("DELETE FROM messages WHERE conversation_id = ?", (temp_convo_id,))
+            conn.commit()
+
+        logger.info(f"✅ Test AI response: {response}")
+        return jsonify({"response": response})
+    except Exception as e:
+        logger.error(f"❌ Error in /test-ai endpoint: {e}")
+        return jsonify({"error": "Failed to test AI"}), 500
+
+@app.route("/")
+def index():
+    """
+    Serve the main dashboard page.
+    """
+    return render_template("dashboard.html")
+
+
+# SocketIO event handlers
+@socketio.on("connect")
+def handle_connect():
+    logger.info("✅ Client connected to SocketIO")
+    emit("connection_status", {"status": "connected"})
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    logger.info("❌ Client disconnected from SocketIO")
+
+@socketio.on("join_conversation")
+def handle_join_conversation(data):
+    """
+    Join a SocketIO room for a specific conversation.
+    """
     convo_id = data.get("conversation_id")
-    if not convo_id:
-        logger.error("❌ Missing conversation_id in /handoff request")
-        return jsonify({"error": "Missing conversation_id"}), 400
+    if convo_id:
+        join_room(convo_id)
+        logger.info(f"✅ Client joined conversation room: {convo_id}")
+        emit("joined_conversation", {"conversation_id": convo_id})
+
+@socketio.on("leave_conversation")
+def handle_leave_conversation(data):
+    """
+    Leave a SocketIO room for a specific conversation.
+    """
+    convo_id = data.get("conversation_id")
+    if convo_id:
+        leave_room(convo_id)
+        logger.info(f"✅ Client left conversation room: {convo_id}")
+        emit("left_conversation", {"conversation_id": convo_id})
+
+@socketio.on("agent_message")
+def handle_agent_message(data):
+    """
+    Handle messages sent by an agent through SocketIO.
+    """
+    convo_id = data.get("conversation_id")
+    message = data.get("message")
+    channel = data.get("channel", "dashboard")
+
+    if not convo_id or not message:
+        logger.error("❌ Missing conversation_id or message in agent_message event")
+        emit("error", {"message": "Missing required fields"})
+        return
+
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -1402,130 +1484,58 @@ def handoff():
             result = c.fetchone()
             if not result:
                 logger.error(f"❌ Conversation not found: {convo_id}")
-                return jsonify({"error": "Conversation not found"}), 404
-            username, chat_id, channel = result
-            c.execute("UPDATE conversations SET assigned_agent = ?, ai_enabled = 0 WHERE id = ?", (current_user.username, convo_id))
-            conn.commit()
-            c.execute("SELECT assigned_agent, ai_enabled FROM conversations WHERE id = ?", (convo_id,))
-            updated_result = c.fetchone()
-            logger.info(f"✅ After handoff for convo_id {convo_id}: assigned_agent={updated_result[0]}, ai_enabled={updated_result[1]}")
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
-        logger.info(f"✅ Agent {current_user.username} took over convo_id {convo_id}, AI disabled")
-        return jsonify({"status": "success", "message": f"Agent {current_user.username} has taken over the conversation"})
-    except Exception as e:
-        logger.error(f"❌ Error in /handoff endpoint: {str(e)}")
-        return jsonify({"error": "Failed to process handoff"}), 500
+                emit("error", {"message": "Conversation not found"})
+                return
+            username, chat_id, convo_channel = result
 
-@app.route("/handback-to-ai", methods=["POST"])
-@login_required
-def handback_to_ai():
-    data = request.get_json()
-    convo_id = data.get("conversation_id")
-    if not convo_id:
-        logger.error("❌ Missing conversation ID in /handback-to-ai request")
-        return jsonify({"message": "Missing conversation ID"}), 400
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT username, chat_id, channel, assigned_agent FROM conversations WHERE id = ?", (convo_id,))
-            result = c.fetchone()
-            if not result:
-                logger.error(f"❌ Conversation not found: {convo_id}")
-                return jsonify({"error": "Conversation not found"}), 404
-            username, chat_id, channel, assigned_agent = result
+        # Log the agent's message
+        log_message(convo_id, username, message, "agent")
+        
+        # Broadcast the message to the conversation room
+        emit("new_message", {
+            "convo_id": convo_id,
+            "message": message,
+            "sender": "agent",
+            "channel": convo_channel
+        }, room=convo_id)
 
-            if assigned_agent != current_user.username:
-                logger.error(f"❌ Agent {current_user.username} is not assigned to convo_id {convo_id}")
-                return jsonify({"error": "You are not assigned to this conversation"}), 403
-
-            c.execute("UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, handoff_notified = 0, visible_in_conversations = 0 WHERE id = ?", (convo_id,))
-            conn.commit()
-
-            c.execute("SELECT ai_enabled FROM conversations WHERE id = ?", (convo_id,))
-            updated_result = c.fetchone()
-            if updated_result:
-                ai_enabled = updated_result[0]
-                logger.info(f"✅ After handback, ai_enabled for convo_id {convo_id} is {ai_enabled}")
-            else:
-                logger.error(f"❌ Failed to verify ai_enabled for convo_id {convo_id} after handback")
-
-        language = detect_language("", convo_id)  # Use conversation history
-        handback_message = "The sales agent has handed the conversation back to me. Anything else I can help you with?" if language == "en" else \
-                          "El agente de ventas ha devuelto la conversación a mí. ¿Hay algo más en lo que pueda ayudarte?"
-        log_message(convo_id, "AI", handback_message, "ai")
-        socketio.emit("new_message", {"convo_id": convo_id, "message": handback_message, "sender": "ai", "channel": channel})
-        if channel == "telegram":
+        # Send the message to the appropriate channel (e.g., Telegram, WhatsApp)
+        if convo_channel == "telegram":
             if not chat_id:
                 logger.error(f"❌ No chat_id found for convo_id {convo_id}")
-                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handback message to Telegram: No chat_id found", "channel": channel})
+                emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram: No chat_id found", "channel": convo_channel})
             else:
-                logger.info(f"Sending handback message to Telegram - To: {chat_id}, Body: {handback_message}")
-                if not send_telegram_message(chat_id, handback_message):
-                    logger.error(f"❌ Failed to send handback message to Telegram for chat_id {chat_id}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handback message to Telegram", "channel": channel})
+                if not send_telegram_message(chat_id, message):
+                    logger.error(f"❌ Failed to send agent message to Telegram for chat_id {chat_id}")
+                    emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram", "channel": convo_channel})
                 else:
-                    logger.info("✅ Handback message sent to Telegram: " + handback_message)
-        elif channel == "whatsapp":
-            try:
-                logger.info(f"Sending handback message to WhatsApp - To: {username}, Body: {handback_message}")
-                if send_whatsapp_message(username, handback_message):
-                    logger.info("✅ Handback message sent to WhatsApp: " + handback_message)
+                    logger.info(f"✅ Sent Telegram message from agent - To: {chat_id}, Body: {message}")
+        elif convo_channel == "whatsapp":
+            if not chat_id:
+                logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp: No chat_id found", "channel": convo_channel})
+            else:
+                if not send_whatsapp_message(chat_id, message):
+                    logger.error(f"❌ Failed to send agent message to WhatsApp for {chat_id}")
+                    emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": convo_channel})
                 else:
-                    logger.error(f"❌ Failed to send handback message to WhatsApp for {username}")
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handback message to WhatsApp", "channel": channel})
-            except Exception as e:
-                logger.error(f"❌ WhatsApp error sending handback message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to WhatsApp: {str(e)}", "channel": channel})
-        elif channel == "instagram":
-            try:
-                logger.info(f"Sending handback message to Instagram - To: {username}, Body: {handback_message}")
-                send_instagram_message(username, handback_message)
-                logger.info("Handback message sent to Instagram: " + handback_message)
-            except Exception as e:
-                logger.error(f"Instagram error sending handback message: {str(e)}")
-                socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to Instagram: {str(e)}", "channel": channel})
+                    logger.info(f"✅ Sent WhatsApp message from agent - To: {chat_id}, Body: {message}")
+        elif convo_channel == "instagram":
+            if not chat_id:
+                logger.error(f"❌ No chat_id found for convo_id {convo_id}")
+                emit("error", {"convo_id": convo_id, "message": "Failed to send message to Instagram: No chat_id found", "channel": convo_channel})
+            else:
+                try:
+                    requests.post(
+                        f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
+                        json={"recipient": {"id": chat_id}, "message": {"text": message}}
+                    )
+                    logger.info(f"✅ Sent Instagram message from agent - To: {chat_id}, Body: {message}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send agent message to Instagram: {str(e)}")
+                    emit("error", {"convo_id": convo_id, "message": f"Failed to send message to Instagram: {str(e)}", "channel": convo_channel})
 
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": chat_id or username, "channel": channel})
-        logger.info(f"✅ Chat {convo_id} handed back to AI by {current_user.username}")
-        return jsonify({"message": "Chat handed back to AI successfully"})
+        logger.info(f"✅ Agent message processed for convo_id {convo_id}")
     except Exception as e:
-        logger.error(f"❌ Error in /handback-to-ai endpoint: {e}")
-        return jsonify({"error": "Failed to hand back to AI"}), 500
-        
-@app.route("/test-openai", methods=["GET"])
-def test_openai():
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=10
-        )
-        ai_reply = response.choices[0].message.content.strip()
-        model_used = response.model
-        logger.info(f"✅ OpenAI test successful: {ai_reply}, Model: {model_used}")
-        return jsonify({"status": "success", "reply": ai_reply, "model": model_used}), 200
-    except Exception as e:
-        logger.error(f"❌ OpenAI test failed: {str(e)}")
-        logger.error(f"❌ OpenAI test error type: {type(e).__name__}")
-        return jsonify({"status": "failed", "error": str(e)}), 500
-
-@app.route("/clear-database", methods=["POST"])
-def clear_database():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("DELETE FROM conversations")
-            c.execute("DELETE FROM messages")
-            conn.commit()
-        logger.info("✅ Database cleared successfully")
-        return jsonify({"message": "Database cleared successfully"}), 200
-    except Exception as e:
-        logger.error(f"❌ Error clearing database: {str(e)}")
-        return jsonify({"error": "Failed to clear database"}), 500
-
-@app.route("/")
-def index():
-    return render_template("dashboard.html")
-
-if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
+        logger.error(f"❌ Error in agent_message event for convo_id {convo_id}: {e}")
+        emit("error", {"message": "Failed to process agent message"})
