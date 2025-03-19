@@ -1178,38 +1178,14 @@ def assign_agent():
         logger.error(f"❌ Error assigning agent to convo_id {convo_id}: {e}")
         return jsonify({"error": "Failed to assign agent"}), 500
 
-@app.route("/settings", methods=["GET", "POST"])
-def settings():
-    if request.method == "GET":
-        try:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("SELECT key, value FROM settings")
-                settings_dict = dict(c.fetchall())
-            return jsonify(settings_dict)
-        except Exception as e:
-            logger.error(f"❌ Error fetching settings: {e}")
-            return jsonify({"error": "Failed to fetch settings"}), 500
-
-    elif request.method == "POST":
-        data = request.get_json()
-        key = data.get("key")
-        value = data.get("value")
-
-        if not key or value is None:
-            logger.error("❌ Missing key or value in /settings POST request")
-            return jsonify({"error": "Missing key or value"}), 400
-
-        try:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-                conn.commit()
-            socketio.emit("settings_updated", {key: value})
-            return jsonify({"status": "success"})
-        except Exception as e:
-            logger.error(f"❌ Error updating settings: {e}")
-            return jsonify({"error": "Failed to update settings"}), 500
+@app.route('/settings', methods=['GET'])
+def get_settings():
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+        result = c.fetchone()
+        ai_enabled = result[0] if result else '1'  # Default to enabled
+        return jsonify({'ai_enabled': ai_enabled})
 
 @app.route("/test-ai", methods=["POST"])
 def test_ai():
