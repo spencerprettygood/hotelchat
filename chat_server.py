@@ -192,7 +192,7 @@ def init_db():
         with get_db_connection() as conn:
             logger.info(f"Connection object: {type(conn)}")  # Debug: Log the type of conn
             c = conn.cursor()
-            # Create conversations table with latest_message column
+            # Create conversations table with last_updated column
             c.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,16 +204,17 @@ def init_db():
                     assigned_agent TEXT,
                     booking_intent TEXT,
                     visible_in_conversations INTEGER DEFAULT 0,
-                    latest_message TEXT
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            # Add latest_message column if it doesnt exist (for existing databases)
+            # Add last_updated column if it doesn't exist (for existing databases)
             try:
-                c.execute("ALTER TABLE conversations ADD COLUMN latest_message TEXT")
-                logger.info("✅ Added latest_message column to conversations table")
+                c.execute("ALTER TABLE conversations ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                logger.info("✅ Added last_updated column to conversations table")
             except sqlite3.OperationalError as e:
                 if "duplicate column name" not in str(e).lower():
-                    raise  
+                    raise  # Re-raise if it's not a "column already exists" error
+
             # Create messages table
             c.execute("""
                 CREATE TABLE IF NOT EXISTS messages (
@@ -225,6 +226,7 @@ def init_db():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id)
                 )
             """)
+
             # Create settings table
             c.execute("""
                 CREATE TABLE IF NOT EXISTS settings (
@@ -234,6 +236,18 @@ def init_db():
             """)
             # Ensure ai_enabled has a default value
             c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
+
+            # Create agents table
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS agents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password TEXT NOT NULL
+                )
+            """)
+            # Add a default agent for testing (username: admin, password: password)
+            c.execute("INSERT OR IGNORE INTO agents (username, password) VALUES (?, ?)", ('admin1', 'password123'))
+
             conn.commit()
             logger.info("✅ Database initialized")
     except Exception as e:
