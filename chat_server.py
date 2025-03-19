@@ -73,6 +73,20 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
+
+if not TWILIO_ACCOUNT_SID:
+    logger.error("⚠️ TWILIO_ACCOUNT_SID not set in environment variables")
+    raise ValueError("TWILIO_ACCOUNT_SID not set")
+if not TWILIO_AUTH_TOKEN:
+    logger.error("⚠️ TWILIO_AUTH_TOKEN not set in environment variables")
+    raise ValueError("TWILIO_AUTH_TOKEN not set")
+if not TWILIO_WHATSAPP_NUMBER:
+    logger.error("⚠️ TWILIO_WHATSAPP_NUMBER not set in environment variables")
+    raise ValueError("TWILIO_WHATSAPP_NUMBER not set")
+
 # Placeholder for WhatsApp API (to be configured later)
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", None)
 WHATSAPP_API_URL = "https://api.whatsapp.com"  # Update with actual URL
@@ -439,10 +453,40 @@ def send_telegram_message(chat_id, text):
     logger.error(f"❌ Failed to send Telegram message after {max_retries} attempts")
     return False
 
-# Placeholder for WhatsApp message sending (to be implemented later)
+# WhatsApp message sending
 def send_whatsapp_message(phone_number, text):
-    raise NotImplementedError("WhatsApp messaging not yet implemented")
+    """
+    Send a message to a WhatsApp number using Twilio.
+    Args:
+        phone_number (str): The recipient's phone number (e.g., 'whatsapp:+1234567890').
+        text (str): The message text to send.
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    try:
+        # Initialize Twilio client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
+        # Ensure the phone number is in the correct format
+        if not phone_number.startswith("whatsapp:"):
+            phone_number = f"whatsapp:{phone_number}"
+
+        # Send the message
+        message = client.messages.create(
+            body=text,
+            from_=TWILIO_WHATSAPP_NUMBER,
+            to=phone_number
+        )
+
+        logger.info(f"✅ Sent WhatsApp message to {phone_number}: {text}, SID: {message.sid}")
+        return True
+
+    except TwilioRestException as e:
+        logger.error(f"❌ Twilio error sending WhatsApp message: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Error sending WhatsApp message: {str(e)}")
+        return False
 # Placeholder for Instagram message sending (to be implemented later)
 def send_instagram_message(user_id, text):
     raise NotImplementedError("Instagram messaging not yet implemented")
@@ -677,8 +721,12 @@ def chat():
                 if not chat_id:
                     logger.error(f"❌ No chat_id found for convo_id {convo_id}")
                     socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp: No chat_id found", "channel": channel})
+            else:
+                if send_whatsapp_message(chat_id, user_message):
+                    logger.info(f"✅ Sent WhatsApp message from agent to {chat_id}: {user_message}")
                 else:
-                    send_whatsapp_message(chat_id, user_message)
+                    logger.error(f"❌ Failed to send WhatsApp message to {chat_id}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": channel})
             logger.info("✅ Agent message processed successfully")
             return jsonify({"status": "success"})
             
@@ -1168,6 +1216,18 @@ def whatsapp():
             ai_enabled = 1
             handoff_notified = 0
             assigned_agent = None
+
+            # Send welcome message for new conversations
+            language = detect_language(message_body, convo_id)
+            welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
+            log_message(convo_id, "AI", welcome_message, "ai")
+            socketio.emit("new_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "channel": "whatsapp"})
+            socketio.emit("live_message", {"convo_id": convo_id, "message": welcome_message, "sender": "ai", "username": prefixed_from})
+
+            # Send welcome message via WhatsApp
+            if not send_whatsapp_message(from_number, welcome_message):
+                logger.error(f"❌ Failed to send welcome message to WhatsApp for {from_number}")
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to WhatsApp", "channel": "whatsapp"})
         else:
             convo_id, ai_enabled, handoff_notified, assigned_agent = result
 
@@ -1203,7 +1263,31 @@ def whatsapp():
         log_message(convo_id, "AI", response, "ai")
         socketio.emit("new_message", {"convo_id": convo_id, "message": response, "sender": "ai", "channel": "whatsapp"})
         return str(resp), 200
-    
+
+@app.route("/all-whatsapp-messages", methods=["GET"])
+def get_all_whatsapp_messages():
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Fetch all WhatsApp conversations
+            c.execute("SELECT id, username FROM conversations WHERE channel = 'whatsapp' ORDER BY last_updated DESC")
+            conversations = []
+            for row in c.fetchall():
+                convo_id, username = row
+                # Fetch messages for this conversation
+                c.execute("SELECT message, sender, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (convo_id,))
+                messages = [{"message": msg[0], "sender": msg[1], "timestamp": msg[2]} for msg in c.fetchall()]
+                conversations.append({
+                    "convo_id": convo_id,
+                    "username": username,
+                    "messages": messages
+                })
+            logger.info(f"✅ Fetched {len(conversations)} WhatsApp conversations")
+            return jsonify({"conversations": conversations})
+    except Exception as e:
+        logger.error(f"❌ Error fetching WhatsApp messages: {str(e)}")
+        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+        
 @app.route("/send-welcome", methods=["POST"])
 def send_welcome():
     data = request.get_json()
@@ -1324,10 +1408,13 @@ def handback_to_ai():
         elif channel == "whatsapp":
             try:
                 logger.info(f"Sending handback message to WhatsApp - To: {username}, Body: {handback_message}")
-                send_whatsapp_message(username, handback_message)
-                logger.info("Handback message sent to WhatsApp: " + handback_message)
+                if send_whatsapp_message(username, handback_message):
+                    logger.info("✅ Handback message sent to WhatsApp: " + handback_message)
+                else:
+                    logger.error(f"❌ Failed to send handback message to WhatsApp for {username}")
+                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handback message to WhatsApp", "channel": channel})
             except Exception as e:
-                logger.error(f"WhatsApp error sending handback message: {str(e)}")
+                logger.error(f"❌ WhatsApp error sending handback message: {str(e)}")
                 socketio.emit("error", {"convo_id": convo_id, "message": f"Failed to send handback message to WhatsApp: {str(e)}", "channel": channel})
         elif channel == "instagram":
             try:
