@@ -176,12 +176,14 @@ except FileNotFoundError:
 
 @contextmanager
 def get_db_connection():
-    """Context manager for SQLite database connection to ensure proper handling."""
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)  # Allow connection from any thread
     try:
-        yield conn
-    finally:
-        conn.close()
+        conn = sqlite3.connect("chatbot.db")
+        conn.row_factory = sqlite3.Row
+        logger.info("✅ Successfully connected to database")
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"❌ Failed to connect to database: {str(e)}")
+        raise
 
 def initialize_database():
     with get_db_connection() as conn:
