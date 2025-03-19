@@ -1258,10 +1258,11 @@ def settings():
                 c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
                 result = c.fetchone()
                 ai_enabled = result[0] if result else '1'  # Default to enabled
+                logger.info(f"✅ Fetched ai_enabled setting: {ai_enabled}")
                 return jsonify({'ai_enabled': ai_enabled})
         except Exception as e:
             logger.error(f"❌ Error fetching settings: {e}")
-            return jsonify({'error': 'Failed to fetch settings'}), 500
+            return jsonify({'error': f'Failed to fetch settings: {str(e)}'}), 500
     else:  # POST
         try:
             data = request.get_json()
@@ -1271,6 +1272,11 @@ def settings():
                 logger.error("❌ Missing key or value in /settings POST request")
                 return jsonify({'error': 'Missing key or value'}), 400
 
+            # Ensure value is a string
+            if not isinstance(value, str):
+                value = str(value)
+                logger.info(f"Converted value to string: {value}")
+
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
@@ -1278,12 +1284,13 @@ def settings():
                     conn.commit()
                 except sqlite3.OperationalError as db_e:
                     if "database is locked" in str(db_e):
-                        time.sleep(1)  # Wait and retry
+                        logger.warning("Database locked, retrying after 1 second...")
+                        time.sleep(1)
                         c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
                         conn.commit()
                     else:
                         logger.error(f"❌ Database error updating settings: {db_e}")
-                        return jsonify({'error': 'Database error updating settings'}), 500
+                        return jsonify({'error': f'Database error updating settings: {str(db_e)}'}), 500
 
             # Emit settings_updated event to all clients
             socketio.emit('settings_updated', {'ai_enabled': value}, broadcast=True)
@@ -1291,7 +1298,7 @@ def settings():
             return jsonify({'status': 'success'})
         except Exception as e:
             logger.error(f"❌ Error updating settings: {e}")
-            return jsonify({'error': 'Failed to update settings'}), 500
+            return jsonify({'error': f'Failed to update settings: {str(e)}'}), 500
 
 @app.route("/test-ai", methods=["POST"])
 def test_ai():
