@@ -10,6 +10,10 @@ import sqlite3
 import os
 import requests
 import json
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
+from twilio.base.exceptions import TwilioRestException
+from twilio.request_validator import RequestValidator  # Add this line if missing
 from datetime import datetime, timedelta
 import time
 import logging
