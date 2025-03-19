@@ -172,6 +172,100 @@ except FileNotFoundError:
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
 # Database connection
+The error in your Render deployment logs indicates that the add_test_conversations function in chat_server.py is trying to insert data into the conversations table with a column named latest_message, but the conversations table schema defined in the init_db function does not include this column. This mismatch causes the sqlite3.OperationalError: table conversations has no column named latest_message.
+
+Let’s fix this by aligning the table schema with the data being inserted. We’ll also ensure the database initialization and test data insertion are consistent.
+
+Root Cause
+Schema Mismatch:
+The init_db function creates the conversations table with the following columns:
+sql
+
+Collapse
+
+Wrap
+
+Copy
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    chat_id TEXT,
+    channel TEXT NOT NULL,
+    ai_enabled INTEGER DEFAULT 1,
+    handoff_notified INTEGER DEFAULT 0,
+    assigned_agent TEXT,
+    booking_intent TEXT,
+    visible_in_conversations INTEGER DEFAULT 0
+)
+There is no latest_message column in this schema.
+However, the add_test_conversations function tries to insert data into the conversations table with a latest_message column:
+python
+
+Collapse
+
+Wrap
+
+Copy
+c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+          (f"test_user_{i}", f"Test message {i}", "test",))
+Since the latest_message column doesn’t exist, SQLite throws the error table conversations has no column named latest_message.
+Test Data Insertion:
+The add_test_conversations function is likely called during startup (as indicated by the traceback), but it’s using an outdated schema that expects a latest_message column.
+Solution
+We have two options to fix this:
+
+Remove the latest_message Column from the Insert Statement:
+If the latest_message column is not needed (since it’s not in the schema), we can update the add_test_conversations function to remove references to latest_message.
+Add the latest_message Column to the conversations Table:
+If the latest_message column is required for your application (e.g., to display the most recent message in the conversation list), we can add it to the conversations table schema in init_db.
+Let’s explore both options and decide based on your application’s requirements.
+
+Option 1: Remove latest_message from add_test_conversations
+If the latest_message column is not needed, we can modify the add_test_conversations function to match the current schema of the conversations table.
+
+Here’s the updated chat_server.py with the add_test_conversations function adjusted:
+
+python
+
+Collapse
+
+Wrap
+
+Copy
+import sqlite3
+import os
+import time
+import logging
+from contextlib import contextmanager
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
+from twilio.request_validator import RequestValidator
+import eventlet
+import openai
+import requests
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+
+eventlet.monkey_patch()
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Twilio setup
+twilio_client = Client(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN"))
+
+# Database connection
 @contextmanager
 def get_db_connection():
     try:
@@ -232,8 +326,180 @@ def init_db():
         logger.error(f"❌ Error initializing database: {e}")
         raise
 
-# Run database initialization on startup
+# Add test conversations (for development purposes)
+def add_test_conversations():
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Check if test conversations already exist
+            c.execute("SELECT COUNT(*) FROM conversations WHERE channel = 'test'")
+            count = c.fetchone()[0]
+            if count == 0:
+                # Add 5 test conversations
+                for i in range(1, 6):
+                    c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, 1, 0)", 
+                              (f"test_user_{i}", "test"))
+                    convo_id = c.lastrowid
+                    # Add a test message for each conversation
+                    c.execute("INSERT INTO messages (conversation_id, sender, message) VALUES (?, ?, ?)",
+                              (convo_id, "user", f"Test message {i}"))
+                conn.commit()
+                logger.info("✅ Added test conversations")
+            else:
+                logger.info("✅ Test conversations already exist, skipping insertion")
+    except Exception as e:
+        logger.error(f"❌ Error adding test conversations: {e}")
+        raise
+
+# Run database initialization and add test conversations on startup
 init_db()
+add_test_conversations()
+
+# Rest of your chat_server.py code remains unchanged...
+# (Include the rest of your existing endpoints and Socket.IO handlers here)
+Changes Made:
+
+Updated add_test_conversations:
+Removed the latest_message column from the INSERT INTO conversations statement, since it’s not part of the conversations table schema.
+Instead, added a test message to the messages table for each test conversation, which is a more appropriate way to store messages.
+Added a check to avoid inserting test conversations if they already exist (based on the channel = 'test' condition).
+Kept the Schema Unchanged:
+The conversations table schema in init_db remains as is, since latest_message isn’t needed in the table.
+Option 2: Add latest_message to the conversations Table
+If your application needs the latest_message column in the conversations table (e.g., to display the most recent message in the conversation list on the live-messages page), we can add it to the schema. This is likely the case, as the latest_message column is often used in chat applications to show a preview of the most recent message in the conversation list.
+
+Here’s the updated chat_server.py with the latest_message column added:
+
+python
+
+Collapse
+
+Wrap
+
+Copy
+import sqlite3
+import os
+import time
+import logging
+from contextlib import contextmanager
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
+from twilio.request_validator import RequestValidator
+import eventlet
+import openai
+import requests
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+
+eventlet.monkey_patch()
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Twilio setup
+twilio_client = Client(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN"))
+
+# Database connection
+@contextmanager
+def get_db_connection():
+    try:
+        conn = sqlite3.connect("/var/data/chat.db")
+        conn.row_factory = sqlite3.Row
+        logger.info("✅ Opened database connection")
+        yield conn
+    except Exception as e:
+        logger.error(f"❌ Error opening database connection: {e}")
+        raise
+    finally:
+        conn.close()
+        logger.info("✅ Closed database connection")
+
+# Initialize the database (create tables if they don't exist)
+def init_db():
+    try:
+        with get_db_connection() as conn:
+            logger.info(f"Connection object: {type(conn)}")  # Debug: Log the type of conn
+            c = conn.cursor()
+            # Create conversations table with latest_message column
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    chat_id TEXT,
+                    channel TEXT NOT NULL,
+                    ai_enabled INTEGER DEFAULT 1,
+                    handoff_notified INTEGER DEFAULT 0,
+                    assigned_agent TEXT,
+                    booking_intent TEXT,
+                    visible_in_conversations INTEGER DEFAULT 0,
+                    latest_message TEXT
+                )
+            """)
+            # Create messages table
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER,
+                    sender TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                )
+            """)
+            # Create settings table
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            # Ensure ai_enabled has a default value
+            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
+            conn.commit()
+            logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.error(f"❌ Error initializing database: {e}")
+        raise
+
+# Add test conversations (for development purposes)
+def add_test_conversations():
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Check if test conversations already exist
+            c.execute("SELECT COUNT(*) FROM conversations WHERE channel = 'test'")
+            count = c.fetchone()[0]
+            if count == 0:
+                # Add 5 test conversations
+                for i in range(1, 6):
+                    c.execute("INSERT INTO conversations (username, latest_message, channel, ai_enabled, visible_in_conversations) VALUES (?, ?, ?, 1, 0)", 
+                              (f"test_user_{i}", f"Test message {i}", "test"))
+                    convo_id = c.lastrowid
+                    # Add a test message for each conversation
+                    c.execute("INSERT INTO messages (conversation_id, sender, message) VALUES (?, ?, ?)",
+                              (convo_id, "user", f"Test message {i}"))
+                conn.commit()
+                logger.info("✅ Added test conversations")
+            else:
+                logger.info("✅ Test conversations already exist, skipping insertion")
+    except Exception as e:
+        logger.error(f"❌ Error adding test conversations: {e}")
+        raise
+
+# Run database initialization and add test conversations on startup
+init_db()
+add_test_conversations()
 
 def add_test_conversations():
     with get_db_connection() as conn:
