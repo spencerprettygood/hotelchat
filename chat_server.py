@@ -1256,7 +1256,6 @@ def whatsapp():
             global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
         except sqlite3.OperationalError as e:
             logger.error(f"❌ Error querying settings table: {str(e)}. Defaulting to global_ai_enabled=1")
-            # Optionally, attempt to create the settings table if it doesn't exist
             c.execute('''CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
