@@ -1426,6 +1426,15 @@ def handle_new_message(data):
             global_ai_result = c.fetchone()
             global_ai_enabled = int(global_ai_result[0]) if global_ai_result else 1
 
+            # Insert the new message into the messages table
+            c.execute("INSERT INTO messages (conversation_id, sender, message) VALUES (?, ?, ?)",
+                      (convo_id, sender, message))
+            # Update the last_updated timestamp in the conversations table
+            c.execute("UPDATE conversations SET last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+                      (convo_id,))
+            conn.commit()
+            logger.info(f"✅ Logged message for convo_id {convo_id} from {sender}")
+
         if sender == "agent":
             return  # Agent messages are already handled by the agent_message event
 
@@ -1461,12 +1470,12 @@ def handle_new_message(data):
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (convo_id,))
                     conn.commit()
                 except sqlite3.OperationalError as e:
                     if "database is locked" in str(e):
                         time.sleep(1)
-                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (convo_id,))
                         conn.commit()
                     else:
                         logger.error(f"❌ Database error: {e}")
@@ -1492,12 +1501,12 @@ def handle_new_message(data):
             with get_db_connection() as conn:
                 c = conn.cursor()
                 try:
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (convo_id,))
                     conn.commit()
                 except sqlite3.OperationalError as e:
                     if "database is locked" in str(e):
                         time.sleep(1)
-                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (convo_id,))
                         conn.commit()
                     else:
                         logger.error(f"❌ Database error: {e}")
@@ -1527,12 +1536,12 @@ def handle_new_message(data):
                 handoff_notified = c.fetchone()[0]
                 if not handoff_notified:
                     try:
-                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (convo_id,))
                         conn.commit()
                     except sqlite3.OperationalError as e:
                         if "database is locked" in str(e):
                             time.sleep(1)
-                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1 WHERE id = ?", (convo_id,))
+                            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (convo_id,))
                             conn.commit()
                         else:
                             logger.error(f"❌ Database error: {e}")
