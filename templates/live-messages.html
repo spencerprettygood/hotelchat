@@ -11,54 +11,168 @@
             margin: 0;
             height: 100vh;
             display: flex;
-            flex-direction: column;
             background-color: #f0f2f5;
         }
-        .header {
+        .container {
+            display: flex;
+            height: 100vh;
+            width: 100%;
+        }
+        .sidebar {
+            width: 30%;
+            min-width: 300px;
+            background-color: #f0f2f5;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
             background-color: #075E54;
             color: white;
             padding: 10px 15px;
             display: flex;
             align-items: center;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 10;
         }
-        .header .profile-pic {
+        .sidebar-header .profile-pic {
             width: 40px;
             height: 40px;
             border-radius: 50%;
             background-color: #ddd;
             margin-right: 10px;
         }
-        .header .contact-info {
+        .sidebar-header .title {
+            flex-grow: 1;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        .sidebar-header .icons {
+            display: flex;
+            gap: 20px;
+        }
+        .sidebar-header .icons span {
+            font-size: 20px;
+            cursor: pointer;
+        }
+        .ai-toggle-container {
+            display: flex;
+            align-items: center;
+            margin-right: 10px;
+        }
+        .ai-toggle-container label {
+            font-size: 12px;
+            margin-right: 5px;
+        }
+        .ai-toggle-container input[type="checkbox"] {
+            appearance: none;
+            width: 34px;
+            height: 20px;
+            background-color: #ccc;
+            border-radius: 10px;
+            position: relative;
+            cursor: pointer;
+            outline: none;
+        }
+        .ai-toggle-container input[type="checkbox"]:checked {
+            background-color: #34C759;
+        }
+        .ai-toggle-container input[type="checkbox"]::before {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background-color: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+        .ai-toggle-container input[type="checkbox"]:checked::before {
+            transform: translateX(14px);
+        }
+        .conversation-list {
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+        .conversation-item {
+            display: flex;
+            padding: 10px 15px;
+            border-bottom: 1px solid #e0e0e0;
+            cursor: pointer;
+            background-color: #fff;
+        }
+        .conversation-item:hover {
+            background-color: #f5f5f5;
+        }
+        .conversation-item.active {
+            background-color: #ebebeb;
+        }
+        .conversation-item .avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background-color: #ddd;
+            margin-right: 10px;
+        }
+        .conversation-item .info {
             flex-grow: 1;
         }
-        .header .contact-info h1 {
+        .conversation-item .info .name {
+            font-size: 16px;
+            font-weight: 500;
+        }
+        .conversation-item .info .last-message {
+            font-size: 14px;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .chat-area {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-header {
+            background-color: #075E54;
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        .chat-header .profile-pic {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: #ddd;
+            margin-right: 10px;
+        }
+        .chat-header .contact-info {
+            flex-grow: 1;
+        }
+        .chat-header .contact-info h1 {
             font-size: 16px;
             margin: 0;
             font-weight: 500;
         }
-        .header .contact-info p {
+        .chat-header .contact-info p {
             font-size: 12px;
             margin: 0;
             opacity: 0.7;
         }
-        .header .icons {
+        .chat-header .icons {
             display: flex;
             gap: 20px;
         }
-        .header .icons span {
+        .chat-header .icons span {
             font-size: 20px;
             cursor: pointer;
         }
         .chat-container {
             flex-grow: 1;
             overflow-y: auto;
-            padding: 70px 10px 80px;
+            padding: 20px 10px;
             background: url('https://i.imgur.com/5y5Lh1N.png') repeat;
             background-size: auto;
         }
@@ -130,10 +244,6 @@
             padding: 10px;
             background-color: #F0F2F5;
             border-top: 1px solid #ddd;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
         }
         #message-input {
             flex-grow: 1;
@@ -170,74 +280,54 @@
             font-size: 18px;
             transform: rotate(-45deg);
         }
-        .ai-toggle-container {
-            display: flex;
-            align-items: center;
-            margin-left: 10px;
-        }
-        .ai-toggle-container label {
-            font-size: 12px;
-            margin-right: 5px;
-        }
-        .ai-toggle-container input[type="checkbox"] {
-            appearance: none;
-            width: 34px;
-            height: 20px;
-            background-color: #ccc;
-            border-radius: 10px;
-            position: relative;
-            cursor: pointer;
-            outline: none;
-        }
-        .ai-toggle-container input[type="checkbox"]:checked {
-            background-color: #34C759;
-        }
-        .ai-toggle-container input[type="checkbox"]::before {
-            content: '';
-            position: absolute;
-            width: 16px;
-            height: 16px;
-            background-color: white;
-            border-radius: 50%;
-            top: 2px;
-            left: 2px;
-            transition: transform 0.2s;
-        }
-        .ai-toggle-container input[type="checkbox"]:checked::before {
-            transform: translateX(14px);
-        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="profile-pic"></div>
-        <div class="contact-info">
-            <h1>Live WhatsApp Messages</h1>
-            <p>End-to-end encrypted</p>
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="profile-pic"></div>
+                <div class="title">Amapola Resort</div>
+                <div class="ai-toggle-container">
+                    <label for="ai-toggle">AI</label>
+                    <input type="checkbox" id="ai-toggle" checked>
+                </div>
+                <div class="icons">
+                    <span>⋮</span>
+                </div>
+            </div>
+            <div class="conversation-list" id="conversation-list">
+                <!-- Conversations will be appended here -->
+            </div>
         </div>
-        <div class="ai-toggle-container">
-            <label for="ai-toggle">AI</label>
-            <input type="checkbox" id="ai-toggle" checked>
+        <div class="chat-area">
+            <div class="chat-header" id="chat-header" style="display: none;">
+                <div class="profile-pic"></div>
+                <div class="contact-info">
+                    <h1 id="chat-title">Select a conversation</h1>
+                    <p>End-to-end encrypted</p>
+                </div>
+                <div class="icons">
+                    <span>⋮</span>
+                </div>
+            </div>
+            <div class="chat-container" id="chat-box">
+                <!-- Messages will be appended here -->
+            </div>
+            <div class="input-container" id="input-container" style="display: none;">
+                <span class="icon">😊</span>
+                <span class="icon">📎</span>
+                <input type="text" id="message-input" placeholder="Message">
+                <button id="send-button"></button>
+            </div>
         </div>
-        <div class="icons">
-            <span>📹</span>
-            <span>📞</span>
-            <span>⋮</span>
-        </div>
-    </div>
-    <div class="chat-container" id="chat-box">
-        <!-- Messages will be appended here -->
-    </div>
-    <div class="input-container">
-        <span class="icon">😊</span>
-        <span class="icon">📎</span>
-        <input type="text" id="message-input" placeholder="Message">
-        <button id="send-button"></button>
     </div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io({ transports: ['websocket'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000 });
+
+        let currentConversationId = null;
 
         socket.on('connect', () => {
             console.log('Connected to Socket.IO server');
@@ -253,11 +343,18 @@
             console.log(`Reconnected to Socket.IO server after ${attempt} attempts`);
             fetchConversations();
             fetchSettings();
+            if (currentConversationId) {
+                socket.emit('join_conversation', { conversation_id: currentConversationId });
+            }
         });
 
         socket.on('live_message', (data) => {
             console.log('Received live message:', data);
-            appendMessage(data.username, data.message, data.sender);
+            if (data.convo_id === currentConversationId) {
+                appendMessage(data.username, data.message, data.sender);
+            }
+            // Refresh conversation list to update last message
+            fetchConversations();
         });
 
         socket.on('settings_updated', (settings) => {
@@ -272,14 +369,24 @@
                 const response = await fetch('/all-whatsapp-messages');
                 const data = await response.json();
                 if (data.conversations) {
-                    const chatBox = document.getElementById('chat-box');
-                    chatBox.innerHTML = '';
+                    const conversationList = document.getElementById('conversation-list');
+                    conversationList.innerHTML = '';
                     data.conversations.forEach(convo => {
-                        convo.messages.forEach(msg => {
-                            appendMessage(convo.username, msg.message, msg.sender, msg.timestamp);
-                        });
+                        const convoItem = document.createElement('div');
+                        convoItem.classList.add('conversation-item');
+                        if (currentConversationId === convo.convo_id) {
+                            convoItem.classList.add('active');
+                        }
+                        convoItem.innerHTML = `
+                            <div class="avatar"></div>
+                            <div class="info">
+                                <div class="name">${convo.username}</div>
+                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
+                            </div>
+                        `;
+                        convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
+                        conversationList.appendChild(convoItem);
                     });
-                    chatBox.scrollTop = chatBox.scrollHeight;
                 }
             } catch (error) {
                 console.error('Error fetching conversations:', error);
@@ -294,6 +401,42 @@
                 aiToggle.checked = settings.ai_enabled === '1';
             } catch (error) {
                 console.error('Error fetching settings:', error);
+            }
+        }
+
+        async function loadConversation(convoId, username) {
+            if (currentConversationId) {
+                socket.emit('leave_conversation', { conversation_id: currentConversationId });
+            }
+            currentConversationId = convoId;
+            socket.emit('join_conversation', { conversation_id: convoId });
+
+            // Update UI to show chat area
+            document.getElementById('chat-header').style.display = 'flex';
+            document.getElementById('input-container').style.display = 'flex';
+            document.getElementById('chat-title').textContent = username;
+
+            // Highlight selected conversation
+            const conversationItems = document.querySelectorAll('.conversation-item');
+            conversationItems.forEach(item => item.classList.remove('active'));
+            const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username));
+            if (selectedItem) selectedItem.classList.add('active');
+
+            // Fetch and display messages
+            try {
+                const response = await fetch('/all-whatsapp-messages');
+                const data = await response.json();
+                const chatBox = document.getElementById('chat-box');
+                chatBox.innerHTML = '';
+                const convo = data.conversations.find(c => c.convo_id === convoId);
+                if (convo) {
+                    convo.messages.forEach(msg => {
+                        appendMessage(convo.username, msg.message, msg.sender, msg.timestamp);
+                    });
+                }
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } catch (error) {
+                console.error('Error loading conversation:', error);
             }
         }
 
@@ -346,8 +489,13 @@
         function sendMessage() {
             const input = document.getElementById('message-input');
             const message = input.value.trim();
-            if (message) {
+            if (message && currentConversationId) {
                 appendMessage('You', message, 'agent');
+                socket.emit('agent_message', {
+                    conversation_id: currentConversationId,
+                    message: message,
+                    channel: 'whatsapp'
+                });
                 input.value = '';
             }
         }
