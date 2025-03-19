@@ -395,398 +395,363 @@
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io({
-            transports: ["websocket", "polling"],
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000
-        });
+    const socket = io({
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000
+    });
 
-        let currentConversationId = null;
-        let currentAgent = null;
+    let currentConversationId = null;
+    let currentAgent = null;
 
-        function showToast(message, type = 'info') {
-            const toastContainer = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = `toast ${type}`;
-            toast.setAttribute('role', 'alert');
-            toast.setAttribute('aria-live', 'assertive');
-            toast.textContent = message;
-            toastContainer.appendChild(toast);
+    function showToast(message, type = 'info') {
+        const toastContainer = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.setAttribute('role', 'alert');
+        toast.setAttribute('aria-live', 'assertive');
+        toast.textContent = message;
+        toastContainer.appendChild(toast);
 
+        setTimeout(() => {
+            toast.classList.add('show');
+        }, 100);
+
+        setTimeout(() => {
+            toast.classList.remove('show');
             setTimeout(() => {
-                toast.classList.add('show');
-            }, 100);
+                toast.remove();
+            }, 300);
+        }, 3000);
+    }
 
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => {
-                    toast.remove();
-                }, 300);
-            }, 3000);
+    document.addEventListener('DOMContentLoaded', () => {
+        const loginPage = document.getElementById('loginPage');
+        const dashboardSection = document.getElementById('dashboard');
+        if (!loginPage || !dashboardSection) {
+            console.error('Required DOM elements (loginPage, dashboard) are missing.');
+            return;
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            const loginPage = document.getElementById('loginPage');
-            const dashboardSection = document.getElementById('dashboard');
-            if (!loginPage || !dashboardSection) {
-                console.error('Required DOM elements (loginPage, dashboard) are missing.');
-                return;
-            }
+        checkAuthStatus();
+        fetchConversations();
+        setInterval(fetchConversations, 10000);
 
-            checkAuthStatus();
-            fetchConversations();
-            setInterval(fetchConversations, 10000);
-
-            const messageInput = document.getElementById('message-input');
-            if (messageInput) {
-                messageInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter' || e.keyCode === 13) {
-                        e.preventDefault();
-                        sendMessage();
-                    }
-                });
-            } else {
-                console.error('Message input not found for adding Enter key listener.');
-            }
-        });
-
-        function checkAuthStatus() {
-            fetch('/check-auth')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const loginPage = document.getElementById('loginPage');
-                    const dashboardSection = document.getElementById('dashboard');
-                    if (data.is_authenticated) {
-                        currentAgent = data.agent;
-                        console.log("Current Agent:", currentAgent);
-                        loginPage.style.display = 'none';
-                        dashboardSection.style.display = 'flex';
-                        fetchConversations();
-                        fetchSettings();
-                    } else {
-                        loginPage.style.display = 'flex';
-                        dashboardSection.style.display = 'none';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking auth status:', error);
-                    showToast('Error checking authentication status', 'error');
-                });
-        }
-
-        function login() {
-            const usernameInput = document.getElementById('username');
-            const passwordInput = document.getElementById('password');
-            if (!usernameInput || !passwordInput) {
-                console.error('Username or password input missing.');
-                showToast('Username or password input missing', 'error');
-                return;
-            }
-
-            const username = usernameInput.value;
-            const password = passwordInput.value;
-
-            fetch('/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ username, password }),
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.message === 'Login successful') {
-                        currentAgent = data.agent;
-                        console.log("Current Agent:", currentAgent);
-                        document.getElementById('loginPage').style.display = 'none';
-                        document.getElementById('dashboard').style.display = 'flex';
-                        fetchConversations();
-                        fetchSettings();
-                        showToast('Login successful', 'success');
-                    } else {
-                        showToast('Login failed: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error during login:', error);
-                    showToast('Error during login', 'error');
-                });
-        }
-
-        function fetchConversations() {
-            fetch('/all-whatsapp-messages')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const conversationList = document.getElementById('conversation-list');
-                    conversationList.innerHTML = '';
-                    if (data.conversations) {
-                        data.conversations.forEach(convo => {
-                            const convoItem = document.createElement('div');
-                            convoItem.classList.add('conversation-item');
-                            if (currentConversationId === convo.convo_id) {
-                                convoItem.classList.add('active');
-                            }
-                            convoItem.innerHTML = `
-                                <div class="avatar"></div>
-                                <div class="info">
-                                    <div class="name">${convo.username}</div>
-                                    <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
-                                </div>
-                            `;
-                            convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
-                            conversationList.appendChild(convoItem);
-                        });
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching conversations:', error);
-                    showToast('Error fetching conversations', 'error');
-                });
-        }
-
-        async function fetchSettings() {
-            try {
-                const response = await fetch('/settings');
-                const settings = await response.json();
-                const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
-            } catch (error) {
-                console.error('Error fetching settings:', error);
-                showToast('Error fetching settings', 'error');
-            }
-        }
-
-        function loadConversation(convoId, username) {
-            if (currentConversationId) {
-                socket.emit('leave_conversation', { conversation_id: currentConversationId });
-            }
-            currentConversationId = convoId;
-            socket.emit('join_conversation', { conversation_id: convoId });
-
-            document.getElementById('chat-header').style.display = 'flex';
-            document.getElementById('input-container').style.display = 'flex';
-            document.getElementById('chat-title').textContent = username;
-
-            const conversationItems = document.querySelectorAll('.conversation-item');
-            conversationItems.forEach(item => item.classList.remove('active'));
-            const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username));
-            if (selectedItem) selectedItem.classList.add('active');
-
-            fetch(`/messages?conversation_id=${convoId}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const chatBox = document.getElementById('chat-box');
-                    chatBox.innerHTML = '';
-                    const messages = data.messages;
-                    messages.forEach(msg => {
-                        const div = document.createElement('div');
-                        const isUser = msg.sender === 'user';
-                        div.className = 'message';
-                        div.classList.add(isUser ? 'user-message' : 'ai-message');
-
-                        const bubble = document.createElement('div');
-                        bubble.className = 'message-bubble';
-                        bubble.textContent = msg.message;
-                        div.appendChild(bubble);
-
-                        const meta = document.createElement('div');
-                        meta.className = 'message-meta';
-                        const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
-                        meta.innerHTML = `${timeMatch ? timeMatch[0] : msg.timestamp}${msg.sender === 'agent' ? '<span class="checkmark">✓✓</span>' : ''}`;
-                        div.appendChild(meta);
-
-                        chatBox.appendChild(div);
-                    });
-                    chatBox.scrollTop = chatBox.scrollHeight;
-                })
-                .catch(error => {
-                    console.error('Error loading messages:', error);
-                    showToast('Error loading messages', 'error');
-                });
-        }
-
-        function sendMessage() {
-            if (!currentConversationId) {
-                showToast('Please select a conversation', 'error');
-                return;
-            }
-
-            const messageInput = document.getElementById('message-input');
-            const message = messageInput.value.trim();
-            if (!message) {
-                showToast('Please enter a message to send', 'error');
-                return;
-            }
-
-            fetch('/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    convo_id: currentConversationId,
-                    message: message,
-                    channel: 'whatsapp'
-                }),
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.status === 'success') {
-                        messageInput.value = '';
-                        const chatBox = document.getElementById('chat-box');
-                        const div = document.createElement('div');
-                        div.className = 'message user-message';
-                        const bubble = document.createElement('div');
-                        bubble.className = 'message-bubble';
-                        bubble.textContent = message;
-                        div.appendChild(bubble);
-                        const meta = document.createElement('div');
-                        meta.className = 'message-meta';
-                        const now = new Date();
-                        meta.innerHTML = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}<span class="checkmark">✓✓</span>`;
-                        div.appendChild(meta);
-                        chatBox.appendChild(div);
-                        chatBox.scrollTop = chatBox.scrollHeight;
-                        fetchConversations();
-                        showToast('Message sent successfully', 'success');
-                    } else {
-                        console.error('Error sending message:', data.error);
-                        showToast('Failed to send message: ' + (data.error || 'Unknown error'), 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error sending message:', error);
-                    showToast('Error sending message: ' + error.message, 'error');
-                });
-        }
-
-        document.getElementById('ai-toggle').addEventListener('change', async (e) => {
-            const aiEnabled = e.target.checked ? '1' : '0';
-            try {
-                const response = await fetch('/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: 'ai_enabled', value: aiEnabled })
-                });
-                const data = await response.json();
-                if (data.status !== 'success') {
-                    console.error('Failed to update AI settings');
-                    e.target.checked = !e.target.checked;
-                    showToast('Failed to update AI settings', 'error');
-                } else {
-                    showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+        const messageInput = document.getElementById('message-input');
+        if (messageInput) {
+            messageInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' || e.keyCode === 13) {
+                    e.preventDefault();
+                    sendMessage();
                 }
-            } catch (error) {
-                console.error('Error updating AI settings:', error);
+            });
+        } else {
+            console.error('Message input not found for adding Enter key listener.');
+        }
+    });
+
+    function checkAuthStatus() {
+        fetch('/check-auth')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                const loginPage = document.getElementById('loginPage');
+                const dashboardSection = document.getElementById('dashboard');
+                if (data.is_authenticated) {
+                    currentAgent = data.agent;
+                    console.log("Current Agent:", currentAgent);
+                    loginPage.style.display = 'none';
+                    dashboardSection.style.display = 'flex';
+                    fetchConversations();
+                    fetchSettings();
+                } else {
+                    loginPage.style.display = 'flex';
+                    dashboardSection.style.display = 'none';
+                }
+            })
+            .catch(error => {
+                console.error('Error checking auth status:', error);
+                showToast('Error checking authentication status', 'error');
+            });
+    }
+
+    function login() {
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        if (!usernameInput || !passwordInput) {
+            console.error('Username or password input missing.');
+            showToast('Username or password input missing', 'error');
+            return;
+        }
+
+        const username = usernameInput.value;
+        const password = passwordInput.value;
+
+        fetch('/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ username, password }),
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.message === 'Login successful') {
+                    currentAgent = data.agent;
+                    console.log("Current Agent:", currentAgent);
+                    document.getElementById('loginPage').style.display = 'none';
+                    document.getElementById('dashboard').style.display = 'flex';
+                    fetchConversations();
+                    fetchSettings();
+                    showToast('Login successful', 'success');
+                } else {
+                    showToast('Login failed: ' + data.message, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error during login:', error);
+                showToast('Error during login', 'error');
+            });
+    }
+
+    function fetchConversations() {
+        fetch('/all-whatsapp-messages')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                const conversationList = document.getElementById('conversation-list');
+                conversationList.innerHTML = '';
+                if (data.conversations) {
+                    data.conversations.forEach(convo => {
+                        const convoItem = document.createElement('div');
+                        convoItem.classList.add('conversation-item');
+                        if (currentConversationId === convo.convo_id) {
+                            convoItem.classList.add('active');
+                        }
+                        convoItem.innerHTML = `
+                            <div class="avatar"></div>
+                            <div class="info">
+                                <div class="name">${convo.username}</div>
+                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
+                            </div>
+                        `;
+                        convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
+                        conversationList.appendChild(convoItem);
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching conversations:', error);
+                showToast('Error fetching conversations', 'error');
+            });
+    }
+
+    async function fetchSettings() {
+        try {
+            const response = await fetch('/settings');
+            const settings = await response.json();
+            const aiToggle = document.getElementById('ai-toggle');
+            aiToggle.checked = settings.ai_enabled === '1';
+        } catch (error) {
+            console.error('Error fetching settings:', error);
+            showToast('Error fetching settings', 'error');
+        }
+    }
+
+    function loadConversation(convoId, username) {
+        if (currentConversationId) {
+            socket.emit('leave_conversation', { conversation_id: currentConversationId });
+        }
+        currentConversationId = convoId;
+        socket.emit('join_conversation', { conversation_id: convoId });
+
+        document.getElementById('chat-header').style.display = 'flex';
+        document.getElementById('input-container').style.display = 'flex';
+        document.getElementById('chat-title').textContent = username;
+
+        const conversationItems = document.querySelectorAll('.conversation-item');
+        conversationItems.forEach(item => item.classList.remove('active'));
+        const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username));
+        if (selectedItem) selectedItem.classList.add('active');
+
+        fetch(`/messages?conversation_id=${convoId}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                const chatBox = document.getElementById('chat-box');
+                chatBox.innerHTML = '';
+                const messages = data.messages;
+                messages.forEach(msg => {
+                    const div = document.createElement('div');
+                    const isUser = msg.sender === 'user';
+                    const isAgent = msg.sender === 'agent';
+                    div.className = 'message';
+                    div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
+
+                    const bubble = document.createElement('div');
+                    bubble.className = 'message-bubble';
+                    bubble.textContent = msg.message;
+                    div.appendChild(bubble);
+
+                    const meta = document.createElement('div');
+                    meta.className = 'message-meta';
+                    const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
+                    meta.innerHTML = `${timeMatch ? timeMatch[0] : msg.timestamp}${msg.sender === 'agent' ? '<span class="checkmark">✓✓</span>' : ''}`;
+                    div.appendChild(meta);
+
+                    chatBox.appendChild(div);
+                });
+                chatBox.scrollTop = chatBox.scrollHeight;
+            })
+            .catch(error => {
+                console.error('Error loading messages:', error);
+                showToast('Error loading messages', 'error');
+            });
+    }
+
+    function sendMessage() {
+        if (!currentConversationId) {
+            showToast('Please select a conversation', 'error');
+            return;
+        }
+
+        const messageInput = document.getElementById('message-input');
+        const message = messageInput.value.trim();
+        if (!message) {
+            showToast('Please enter a message to send', 'error');
+            return;
+        }
+
+        fetch('/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                convo_id: currentConversationId,
+                message: message,
+                channel: 'whatsapp'
+            }),
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.status === 'success') {
+                    messageInput.value = '';
+                    fetchConversations();
+                    showToast('Message sent successfully', 'success');
+                } else {
+                    console.error('Error sending message:', data.error);
+                    showToast('Failed to send message: ' + (data.error || 'Unknown error'), 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error sending message:', error);
+                showToast('Error sending message: ' + error.message, 'error');
+            });
+    }
+
+    document.getElementById('ai-toggle').addEventListener('change', async (e) => {
+        const aiEnabled = e.target.checked ? '1' : '0';
+        try {
+            const response = await fetch('/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'ai_enabled', value: aiEnabled })
+            });
+            const data = await response.json();
+            if (data.status !== 'success') {
+                console.error('Failed to update AI settings');
                 e.target.checked = !e.target.checked;
-                showToast('Error updating AI settings', 'error');
+                showToast('Failed to update AI settings', 'error');
+            } else {
+                showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
             }
-        });
+        } catch (error) {
+            console.error('Error updating AI settings:', error);
+            e.target.checked = !e.target.checked;
+            showToast('Error updating AI settings', 'error');
+        }
+    });
 
-        socket.on('new_message', (data) => {
-            console.log('New message received:', data);
-            if (data.convo_id === currentConversationId) {
-                const chatBox = document.getElementById('chat-box');
-                const div = document.createElement('div');
-                const isUser = data.sender === 'user';
-                div.className = 'message';
-                div.classList.add(isUser ? 'user-message' : 'ai-message');
-                const bubble = document.createElement('div');
-                bubble.className = 'message-bubble';
-                bubble.textContent = data.message;
-                div.appendChild(bubble);
-                const meta = document.createElement('div');
-                meta.className = 'message-meta';
-                const now = new Date();
-                meta.innerHTML = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}${data.sender === 'agent' ? '<span class="checkmark">✓✓</span>' : ''}`;
-                div.appendChild(meta);
-                chatBox.appendChild(div);
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-            fetchConversations();
-        });
+    socket.on('live_message', (data) => {
+        console.log('Received live message:', data);
+        if (data.convo_id === currentConversationId) {
+            const chatBox = document.getElementById('chat-box');
+            const div = document.createElement('div');
+            const isUser = data.sender === 'user';
+            const isAgent = data.sender === 'agent';
+            div.className = 'message';
+            div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            bubble.textContent = data.message;
+            div.appendChild(bubble);
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+            const now = new Date();
+            meta.innerHTML = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}${data.sender === 'agent' ? '<span class="checkmark">✓✓</span>' : ''}`;
+            div.appendChild(meta);
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        fetchConversations();
+    });
 
-        socket.on('live_message', (data) => {
-            console.log('Received live message:', data);
-            if (data.convo_id === currentConversationId) {
-                const chatBox = document.getElementById('chat-box');
-                const div = document.createElement('div');
-                const isUser = data.sender === 'user';
-                div.className = 'message';
-                div.classList.add(isUser ? 'user-message' : 'ai-message');
-                const bubble = document.createElement('div');
-                bubble.className = 'message-bubble';
-                bubble.textContent = data.message;
-                div.appendChild(bubble);
-                const meta = document.createElement('div');
-                meta.className = 'message-meta';
-                const now = new Date();
-                meta.innerHTML = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}${data.sender === 'agent' ? '<span class="checkmark">✓✓</span>' : ''}`;
-                div.appendChild(meta);
-                chatBox.appendChild(div);
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-            fetchConversations();
-        });
+    socket.on('error', (data) => {
+        console.error('Error received:', data);
+        showToast(data.message, 'error');
+    });
 
-        socket.on('error', (data) => {
-            console.error('Error received:', data);
-            showToast(data.message, 'error');
-        });
+    socket.on('refresh_conversations', (data) => {
+        console.log('Refresh conversations event received:', data);
+        fetchConversations();
+    });
 
-        socket.on('refresh_conversations', (data) => {
-            console.log('Refresh conversations event received:', data);
-            fetchConversations();
-        });
+    socket.on('settings_updated', (settings) => {
+        if ('ai_enabled' in settings) {
+            const aiToggle = document.getElementById('ai-toggle');
+            aiToggle.checked = settings.ai_enabled === '1';
+            showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+        }
+    });
 
-        socket.on('settings_updated', (settings) => {
-            if ('ai_enabled' in settings) {
-                const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
-                showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-            }
-        });
+    socket.on("reconnect", (attempt) => {
+        console.log(`Reconnected to Socket.IO after ${attempt} attempts`);
+        fetchConversations();
+        fetchSettings();
+        if (currentConversationId) {
+            socket.emit('join_conversation', { conversation_id: currentConversationId });
+        }
+        showToast('Reconnected to server', 'success');
+    });
 
-        socket.on("reconnect", (attempt) => {
-            console.log(`Reconnected to Socket.IO after ${attempt} attempts`);
-            fetchConversations();
-            fetchSettings();
-            if (currentConversationId) {
-                socket.emit('join_conversation', { conversation_id: currentConversationId });
-            }
-            showToast('Reconnected to server', 'success');
-        });
-
-        socket.on("reconnect_error", (error) => {
-            console.error("Reconnection failed:", error);
-            showToast('Failed to reconnect to server', 'error');
-        });
+    socket.on("reconnect_error", (error) => {
+        console.error("Reconnection failed:", error);
+        showToast('Failed to reconnect to server', 'error');
+    });
     </script>
 </body>
 </html>
