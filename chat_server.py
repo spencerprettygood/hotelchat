@@ -338,7 +338,7 @@ def get_db_connection():
         conn.close()
         logger.info("✅ Closed database connection")
 
-# Initialize the database (create tables if they don't exist)
+# Initialize the database (create tables if they dont exist)
 def init_db():
     try:
         with get_db_connection() as conn:
