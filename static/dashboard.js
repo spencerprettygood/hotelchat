@@ -1,4 +1,6 @@
-const socket = io();
+const socket = io({
+    transports: ["websocket", "polling"], // Prioritize WebSocket, fall back to polling
+});
 
 let currentConversationId = null;
 let currentFilter = 'unassigned'; // Default filter
@@ -448,6 +450,16 @@ socket.on('refresh_conversations', (data) => {
     const conversationId = data.conversation_id;
     pollVisibility(conversationId);
     fetchConversations();
+});
+
+socket.on("reconnect", (attempt) => {
+    console.log(`Reconnected to Socket.IO after ${attempt} attempts`);
+    // Optionally reload conversations to ensure the UI is up-to-date
+    loadConversations();
+});
+
+socket.on("reconnect_error", (error) => {
+    console.error("Reconnection failed:", error);
 });
 
 // Poll visibility of a conversation
