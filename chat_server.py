@@ -234,6 +234,16 @@ def add_test_conversations():
 
 add_test_conversations()
 
+# Helper functions (e.g., log_message, ai_respond, etc.)
+def log_message(conversation_id, user, message, sender):
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO messages (conversation_id, user, message, sender) VALUES (?, ?, ?, ?)",
+                  (conversation_id, user, message, sender))
+        c.execute("UPDATE conversations SET latest_message = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+                  (message, conversation_id))
+        conn.commit()
+
 class Agent(UserMixin):
     def __init__(self, id, username):
         self.id = id
@@ -275,6 +285,11 @@ def logout():
     logout_user()
     logger.info("✅ Logout successful")
     return jsonify({"message": "Logged out successfully"})
+
+@app.route("/live-messages")
+@login_required
+def live_messages_page():
+    return render_template("live-messages.html")
 
 @app.route("/conversations", methods=["GET"])
 def get_conversations():
