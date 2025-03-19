@@ -173,12 +173,16 @@ except FileNotFoundError:
 
 @contextmanager
 def get_db_connection():
-    conn = sqlite3.connect("/var/data/chat.db")  # Updated path to use the disk mount
+    conn = sqlite3.connect("/var/data/chat.db")
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def init_db():
-    with get_db_connection() as conn:
+    try:
+        conn = get_db_connection()
         c = conn.cursor()
         # Create conversations table
         c.execute("""
@@ -216,6 +220,9 @@ def init_db():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
         conn.commit()
         logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.error(f"❌ Error initializing database: {e}")
+        raise
 
 init_db()
 
