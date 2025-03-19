@@ -141,6 +141,20 @@
             font-style: italic;
             font-size: 14px;
         }
+        .conversation-item {
+            display: flex;
+            align-items: center;
+        }
+        .timestamp {
+            font-size: 10px;
+            color: #999;
+            margin-left: 5px;
+        }
+        .ai-activity {
+            background-color: #f0f0f0;
+            align-self: center;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -170,8 +184,15 @@
         const socket = io();
         let currentConversationId = null;
 
+        // Load AI state (placeholder function, implement as needed)
+        function loadAiState() {
+            // This function might fetch the AI state from the server
+            // For now, we'll leave it as a placeholder
+            console.log("Loading AI state...");
+        }
+
         // Load conversations on page load
-        document.addEventListener("DOMContentLoaded", () => {
+        function loadConversations() {
             fetch("/all-whatsapp-messages")
                 .then(response => response.json())
                 .then(data => {
@@ -181,6 +202,7 @@
                     } else {
                         data.conversations.forEach(convo => {
                             const convoItem = document.createElement("div");
+                            convoItem.className = "conversation-item";
                             convoItem.dataset.convoId = convo.convo_id;
                             convoItem.innerHTML = `
                                 <div class="convo-info">
@@ -198,7 +220,7 @@
                     const sidebar = document.getElementById("conversation-list");
                     sidebar.innerHTML = '<div class="no-conversations">Error loading conversations. Please try again later.</div>';
                 });
-        });
+        }
 
         // Listen for live messages
         socket.on("live_message", (data) => {
@@ -211,7 +233,7 @@
                     item.innerHTML = `
                         <div class="convo-info">
                             <strong>${data.username}</strong>
-                            <p>${data.message}</p>
+                            <p>${data.message.substring(0, 50) + (data.message.length > 50 ? '...' : '')}</p>
                         </div>
                     `;
                     break;
@@ -222,11 +244,12 @@
                     sidebar.innerHTML = "";
                 }
                 const convoItem = document.createElement("div");
+                convoItem.className = "conversation-item";
                 convoItem.dataset.convoId = data.convo_id;
                 convoItem.innerHTML = `
                     <div class="convo-info">
                         <strong>${data.username}</strong>
-                        <p>${data.message}</p>
+                        <p>${data.message.substring(0, 50) + (data.message.length > 50 ? '...' : '')}</p>
                     </div>
                 `;
                 convoItem.onclick = () => loadConversation(data.convo_id, data.username);
@@ -245,9 +268,44 @@
             }
         });
 
+        // Handle new live messages (additional handler)
+        socket.on('live_message', function(data) {
+            const currentConvoId = document.querySelector("#chat-area").dataset.convoId;
+            if (data.convo_id === currentConvoId) {
+                const messagesDiv = document.getElementById('chat-messages');
+                const msgDiv = document.createElement('div');
+                msgDiv.className = `message ${data.sender === 'user' ? 'user-message' : data.sender === 'ai' ? 'ai-message' : 'agent'}`;
+                msgDiv.innerHTML = `
+                    ${data.message}
+                    <span class="timestamp">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                `;
+                messagesDiv.appendChild(msgDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+            // Update conversation list preview
+            const convoItem = document.querySelector(`.conversation-item[data-convo-id="${data.convo_id}"]`);
+            if (convoItem) {
+                const preview = convoItem.querySelector('p');
+                preview.textContent = data.message.substring(0, 50) + (data.message.length > 50 ? '...' : '');
+            }
+        });
+
+        // Handle AI activity
+        socket.on('ai_activity', function(data) {
+            const currentConvoId = document.querySelector("#chat-area").dataset.convoId;
+            if (data.convo_id === currentConvoId) {
+                const messagesDiv = document.getElementById('chat-messages');
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message ai-activity';
+                msgDiv.textContent = data.message;
+                messagesDiv.appendChild(msgDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        });
+
         // Load a conversation's messages
         function loadConversation(convoId, username) {
-            currentConversationId = convoId; // Set the global currentConversationId
+            currentConversationId = convoId;
             const chatArea = document.querySelector("#chat-area");
             chatArea.dataset.convoId = convoId;
             const chatMessages = document.querySelector("#chat-messages");
@@ -331,43 +389,11 @@
                     alert('Error sending message: ' + error.message);
                 });
         }
+
         // Handle Enter key to send message
-        document.getElementById('message-input').addEventListener('keypress', (e) => {
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendMessage();
-            }
-        });
-
-        // Handle new live messages
-        socket.on('live_message', function(data) {
-            if (data.convo_id === currentConvoId) {
-                const messagesDiv = document.getElementById('chat-messages');
-                const msgDiv = document.createElement('div');
-                msgDiv.className = `message ${data.sender === 'user' ? 'user' : data.sender === 'ai' ? 'ai' : 'agent'}`;
-                msgDiv.innerHTML = `
-                    ${data.message}
-                    <span class="timestamp">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                `;
-                messagesDiv.appendChild(msgDiv);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            }
-            // Update conversation list preview
-            const convoItem = document.querySelector(`.conversation-item[data-convo-id="${data.convo_id}"]`);
-            if (convoItem) {
-                const preview = convoItem.querySelector('p');
-                preview.textContent = data.message.substring(0, 50) + (data.message.length > 50 ? '...' : '');
-            }
-        });
-
-        // Handle AI activity
-        socket.on('ai_activity', function(data) {
-            if (data.convo_id === currentConvoId) {
-                const messagesDiv = document.getElementById('chat-messages');
-                const msgDiv = document.createElement('div');
-                msgDiv.className = 'message ai-activity';
-                msgDiv.textContent = data.message;
-                messagesDiv.appendChild(msgDiv);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
             }
         });
 
