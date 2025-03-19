@@ -203,7 +203,7 @@
             flex-grow: 1;
             overflow-y: auto;
             padding: 20px 10px;
-            background: url('/static/Background-whatsapp.jpg') repeat;
+            background: url('/static/whatsapp-background.jpg') repeat;
             background-size: auto;
         }
         .message {
@@ -310,7 +310,6 @@
             font-size: 18px;
             transform: rotate(-45deg);
         }
-        /* Toast Notification Styles */
         .toast-container {
             position: fixed;
             top: 20px;
@@ -336,13 +335,13 @@
             transform: translateY(0);
         }
         .toast.error {
-            background-color: #E74C3C; /* Red for errors */
+            background-color: #E74C3C;
         }
         .toast.success {
-            background-color: #34C759; /* Green for success, matching WhatsApp */
+            background-color: #34C759;
         }
         .toast.info {
-            background-color: #54656F; /* Gray for info, matching WhatsApp's icon color */
+            background-color: #54656F;
         }
     </style>
 </head>
@@ -406,25 +405,24 @@
         let currentConversationId = null;
         let currentAgent = null;
 
-        // Toast Notification Function
         function showToast(message, type = 'info') {
             const toastContainer = document.getElementById('toast-container');
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
             toast.textContent = message;
             toastContainer.appendChild(toast);
 
-            // Show the toast with animation
             setTimeout(() => {
                 toast.classList.add('show');
             }, 100);
 
-            // Remove the toast after 3 seconds
             setTimeout(() => {
                 toast.classList.remove('show');
                 setTimeout(() => {
                     toast.remove();
-                }, 300); // Wait for the fade-out animation to complete
+                }, 300);
             }, 3000);
         }
 
@@ -765,6 +763,14 @@
         socket.on('refresh_conversations', (data) => {
             console.log('Refresh conversations event received:', data);
             fetchConversations();
+        });
+
+        socket.on('settings_updated', (settings) => {
+            if ('ai_enabled' in settings) {
+                const aiToggle = document.getElementById('ai-toggle');
+                aiToggle.checked = settings.ai_enabled === '1';
+                showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+            }
         });
 
         socket.on("reconnect", (attempt) => {
