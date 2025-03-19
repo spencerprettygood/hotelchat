@@ -172,6 +172,7 @@ except FileNotFoundError:
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
 # Database connection
+@contextmanager
 def get_db_connection():
     try:
         conn = sqlite3.connect("/var/data/chat.db")
