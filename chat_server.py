@@ -34,7 +34,7 @@ class NullCache(Cache):
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
