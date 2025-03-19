@@ -173,64 +173,51 @@ except FileNotFoundError:
 
 @contextmanager
 def get_db_connection():
-    conn = None
-    try:
-        conn = sqlite3.connect("chatbot.db")
-        conn.row_factory = sqlite3.Row
-        logger.info("✅ Successfully connected to database")
-        yield conn
-    except sqlite3.Error as e:
-        logger.error(f"❌ Failed to connect to database: {str(e)}")
-        raise
-    finally:
-        if conn:
-            conn.close()
-            logger.info("✅ Closed database connection")
+    conn = sqlite3.connect("/var/data/chat.db")  # Updated path to use the disk mount
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def initialize_database():
-    logger.info("Starting database initialization")
+def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS agents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            chat_id TEXT,
-            latest_message TEXT,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            assigned_agent TEXT DEFAULT NULL,
-            channel TEXT DEFAULT 'dashboard',
-            opted_in INTEGER DEFAULT 0,
-            ai_enabled INTEGER DEFAULT 1,
-            handoff_notified INTEGER DEFAULT 0,
-            visible_in_conversations INTEGER DEFAULT 0,
-            booking_intent TEXT DEFAULT NULL
-        )''')
-        c.execute("DROP TABLE IF EXISTS messages")
-        c.execute('''CREATE TABLE messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conversation_id INTEGER NOT NULL,
-            user TEXT NOT NULL,
-            message TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id))''')
-        c.execute('''CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )''')
-        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', '1')")
-        c.execute("SELECT COUNT(*) FROM agents")
-        if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO agents (username, password) VALUES (?, ?)", ("agent1", "password123"))
-            logger.info("✅ Added test agent: agent1/password123")
+        # Create conversations table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                chat_id TEXT,
+                channel TEXT NOT NULL,
+                ai_enabled INTEGER DEFAULT 1,
+                handoff_notified INTEGER DEFAULT 0,
+                assigned_agent TEXT,
+                booking_intent TEXT,
+                visible_in_conversations INTEGER DEFAULT 0
+            )
+        """)
+        # Create messages table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER,
+                sender TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            )
+        """)
+        # Create settings table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        # Ensure ai_enabled has a default value
+        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
         conn.commit()
-        logger.info("✅ Database tables created successfully")
+        logger.info("✅ Database initialized")
 
-initialize_database()
+init_db()
 
 def add_test_conversations():
     with get_db_connection() as conn:
