@@ -369,7 +369,6 @@ async function loadConversation(convoId, username) {
         chatTitle.textContent = username;
     } else {
         console.error('Chat header, input container, or chat title not found.');
-        showToast('Chat header, input container, or chat title not found.', 'error');
         return;
     }
 
@@ -379,12 +378,12 @@ async function loadConversation(convoId, username) {
     if (selectedItem) selectedItem.classList.add('active');
 
     const chatLoadingSpinner = document.getElementById('chat-loading-spinner');
-    if (!chatLoadingSpinner) {
-        console.error('Chat loading spinner not found.');
-        showToast('Chat loading spinner not found.', 'error');
-        return;
+    if (chatLoadingSpinner) {
+        chatLoadingSpinner.style.display = 'block';
+    } else {
+        console.warn('Chat loading spinner not found. Proceeding without spinner.');
     }
-    chatLoadingSpinner.style.display = 'block';
+
     try {
         const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
         if (!response.ok) {
@@ -394,7 +393,6 @@ async function loadConversation(convoId, username) {
         const chatBox = document.getElementById('chat-box');
         if (!chatBox) {
             console.error('Chat box not found.');
-            showToast('Chat box not found.', 'error');
             return;
         }
         chatBox.innerHTML = '';
@@ -406,9 +404,11 @@ async function loadConversation(convoId, username) {
         chatBox.scrollTop = chatBox.scrollHeight;
     } catch (error) {
         console.error('Error loading messages:', error);
-        showToast('Error loading messages: ' + error.message, 'error');
+        showToast('Error loading messages', 'error');
     } finally {
-        chatLoadingSpinner.style.display = 'none';
+        if (chatLoadingSpinner) {
+            chatLoadingSpinner.style.display = 'none';
+        }
     }
 }
 
