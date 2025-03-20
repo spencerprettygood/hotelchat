@@ -236,7 +236,7 @@ def init_db():
 # Initialize database
 init_db()
 
-def log_message(convo_id, user, message, sender):
+def log_message(conn, convo_id, user, message, sender):
     with get_db_connection() as conn:
         c = conn.cursor()
         try:
@@ -683,7 +683,7 @@ def chat():
             username, chat_id, channel, assigned_agent, ai_enabled, booking_intent = result
 
         sender = "agent" if current_user.is_authenticated else "user"
-        log_message(convo_id, username, user_message, sender)
+        log_message(conn, convo_id, username, user_message, sender)
 
         language = detect_language(user_message, convo_id)
 
@@ -730,7 +730,7 @@ def chat():
         if booking_intent and ("yes" in user_message.lower() or "proceed" in user_message.lower() or "sí" in user_message.lower()):
             response = f"Great! An agent will assist you with booking a room for {booking_intent}. Please wait." if language == "en" else \
                       f"¡Excelente! Un agente te ayudará con la reserva de una habitación para {booking_intent}. Por favor, espera."
-            log_message(convo_id, "AI", response, "ai")
+            log_message(conn, convo_id, "AI", response, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": response,
@@ -766,7 +766,7 @@ def chat():
         if "book" in user_message.lower() or "reservar" in user_message.lower():
             ai_reply = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
                       "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
-            log_message(convo_id, "AI", ai_reply, "ai")
+            log_message(conn, convo_id, "AI", ai_reply, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": ai_reply,
@@ -807,7 +807,7 @@ def chat():
             ai_reply = ai_respond(user_message, convo_id)
 
         # Log and emit the AI response
-        log_message(convo_id, "AI", ai_reply, "ai")
+        log_message(conn, convo_id, "AI", ai_reply, "ai")
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": ai_reply,
@@ -897,7 +897,7 @@ def whatsapp():
             # Send welcome message
             language = detect_language(message_body, convo_id)
             welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
-            log_message(conn, convo_id, "AI", welcome_message, "ai")
+            log_message(conn, convo_id, "AI", welcome_message, "ai")  # Add conn as the first argument
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": welcome_message,
@@ -926,7 +926,7 @@ def whatsapp():
 
         # Log the user's message
         logger.info(f"ℹ️ Logging user message for convo_id {convo_id}")
-        log_message(conn, convo_id, from_number, message_body, "user")
+        log_message(conn, convo_id, from_number, message_body, "user")  # Add conn as the first argument
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": message_body,
@@ -951,7 +951,7 @@ def whatsapp():
         if booking_intent and ("yes" in message_body.lower() or "proceed" in message_body.lower() or "sí" in message_body.lower()):
             handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \
                              f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
-            log_message(conn, convo_id, "AI", handoff_message, "ai")
+            log_message(conn, convo_id, "AI", handoff_message, "ai")  # Add conn as the first argument
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": handoff_message,
@@ -979,7 +979,7 @@ def whatsapp():
         if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
             handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
                              "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
-            log_message(conn, convo_id, "AI", handoff_message, "ai")
+            log_message(conn, convo_id, "AI", handoff_message, "ai")  # Add conn as the first argument
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": handoff_message,
@@ -1010,7 +1010,7 @@ def whatsapp():
         else:
             response = ai_respond(message_body, convo_id)
 
-        log_message(conn, convo_id, "AI", response, "ai")
+        log_message(conn, convo_id, "AI", response, "ai")  # Add conn as the first argument
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": response,
@@ -1161,9 +1161,9 @@ def test_ai():
             convo_id = c.fetchone()['id']
             conn.commit()
 
-        log_message(convo_id, "test_user", message, "user")
+        log_message(conn, convo_id, "test_user", message, "user")
         response = ai_respond(message, convo_id)
-        log_message(convo_id, "AI", response, "ai")
+        log_message(conn, convo_id, "AI", response, "ai")
 
         logger.info(f"✅ Test AI response: {response}")
         return jsonify({"response": response})
@@ -1241,9 +1241,9 @@ def handle_agent_message(data):
                 logger.error(f"❌ Conversation not found in agent_message: {convo_id}")
                 emit("error", {"message": "Conversation not found"})
                 return
-            username, chat_id, channel = result
+            chat_id, channel = result
 
-        log_message(convo_id, username, message, "agent")
+        log_message(conn, convo_id, username, message, "agent")
         emit("new_message", {
             "convo_id": convo_id,
             "message": message,
