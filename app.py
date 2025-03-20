@@ -287,12 +287,12 @@ def init_db():
             SET convo_id = (
                 SELECT c.conversation_id
                 FROM conversations c
-                WHERE CAST(c.id AS TEXT) = m.convo_id
+                WHERE CAST(c.id AS TEXT) = CAST(m.convo_id AS TEXT)
             )
             WHERE EXISTS (
                 SELECT 1
                 FROM conversations c
-                WHERE CAST(c.id AS TEXT) = m.convo_id
+                WHERE CAST(c.id AS TEXT) = CAST(m.convo_id AS TEXT)
             )
         """)
 
