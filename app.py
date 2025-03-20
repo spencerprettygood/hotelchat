@@ -164,14 +164,6 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Import blueprints
-from blueprints.dashboard import dashboard_bp
-from blueprints.live_messages import live_messages_bp
-
-# Register blueprints
-app.register_blueprint(dashboard_bp, url_prefix='/dashboard')
-app.register_blueprint(live_messages_bp, url_prefix='/live-messages')
-
 # Database connection
 def get_db_connection():
     try:
@@ -1126,6 +1118,14 @@ def handle_hand_back_to_ai(data):
     except Exception as e:
         logger.error(f"❌ Error in hand_back_to_ai event: {e}")
         emit("error", {"message": "Failed to hand back to AI"})
+
+# Import blueprints
+from blueprints.dashboard import dashboard_bp
+from blueprints.live_messages import live_messages_bp
+
+# Register blueprints
+app.register_blueprint(dashboard_bp, url_prefix='/dashboard')
+app.register_blueprint(live_messages_bp, url_prefix='/live-messages')
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Flask-SocketIO server")
