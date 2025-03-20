@@ -882,6 +882,7 @@ def whatsapp():
                 handoff_notified = 0
                 assigned_agent = None
                 booking_intent = None
+                conn.commit()  # Commit the new conversation
 
                 language = detect_language(message_body, convo_id)
                 welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
@@ -929,6 +930,7 @@ def whatsapp():
 
             if not global_ai_enabled or not ai_enabled:
                 logger.info(f"AI response skipped for convo_id {convo_id}: global_ai_enabled={global_ai_enabled}, ai_enabled={ai_enabled}")
+                conn.commit()
                 return jsonify({}), 200
 
             language = detect_language(message_body, convo_id)
@@ -954,11 +956,9 @@ def whatsapp():
                 if not send_whatsapp_message(from_number, handoff_message):
                     socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handoff message to WhatsApp", "channel": "whatsapp"})
 
-                with get_db_connection() as conn:
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
-                              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-                    conn.commit()
+                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
+                          (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
+                conn.commit()
                 socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
                 return jsonify({}), 200
 
@@ -984,11 +984,9 @@ def whatsapp():
                 if not send_whatsapp_message(from_number, handoff_message):
                     socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send booking handoff message to WhatsApp", "channel": "whatsapp"})
 
-                with get_db_connection() as conn:
-                    c = conn.cursor()
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
-                              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-                    conn.commit()
+                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
+                          (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
+                conn.commit()
                 socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
                 return jsonify({}), 200
 
@@ -1018,15 +1016,14 @@ def whatsapp():
                 socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to WhatsApp", "channel": "whatsapp"})
 
             if "sorry" in response.lower() or "lo siento" in response.lower() or "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
-                with get_db_connection() as conn:
-                    c = conn.cursor()
-                    c.execute("SELECT handoff_notified FROM conversations WHERE id = %s", (convo_id,))
-                    handoff_notified = c.fetchone()['handoff_notified']
-                    if not handoff_notified:
-                        c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
-                                  (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-                        conn.commit()
-                        socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+                c.execute("SELECT handoff_notified FROM conversations WHERE id = %s", (convo_id,))
+                handoff_notified = c.fetchone()['handoff_notified']
+                if not handoff_notified:
+                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
+                              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
+                    conn.commit()
+                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+            conn.commit()
             return jsonify({}), 200
     except Exception as e:
         logger.error(f"❌ Error in /whatsapp endpoint: {str(e)}")
