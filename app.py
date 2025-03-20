@@ -347,36 +347,36 @@ def log_message(conn, convo_id, message, sender):
             logger.error(f"❌ Database error in log_message: {str(e)}")
             raise
 
-class Agent(UserMixin):
-    def __init__(self, id, username):
-        self.id = id
+class User(UserMixin):
+    def __init__(self, user_id, username):
+        self.id = user_id
         self.username = username
 
 @login_manager.user_loader
-def load_user(agent_id):
+def load_user(user_id):
     with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
-        agent = c.fetchone()
-        if agent:
-            return Agent(agent['id'], agent['username'])
-    return None
+        c = conn.cursor(cursor_factory=DictCursor)
+        c.execute("SELECT id, username FROM agents WHERE id = %s", (user_id,))
+        user = c.fetchone()
+        if user:
+            return User(user['id'], user['username'])
+        return None
 
-@app.route("/")
-def index():
-    if current_user.is_authenticated:
-        return redirect(url_for('dashboard.dashboard'))
-    return redirect(url_for('login'))
-    
-# Authentication Endpoints
-@app.route("/login", methods=["GET", "POST"])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == "GET":
-        # If the user is already authenticated, redirect to the dashboard
-        if current_user.is_authenticated:
-            return redirect(url_for('dashboard.dashboard'))
-        # Render the login page for GET requests
-        return render_template("login.html")
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        with get_db_connection() as conn:
+            c = conn.cursor(cursor_factory=DictCursor)
+            c.execute("SELECT id, username, password FROM agents WHERE username = %s", (username,))
+            user = c.fetchone()
+            if user and check_password_hash(user['password'], password):
+                user_obj = User(user['id'], user['username'])
+                login_user(user_obj)
+                return redirect(url_for('dashboard.dashboard'))
+            return jsonify({"error": "Invalid credentials"}), 401
+    return render_template('login.html')
     try:
         data = request.get_json()
         username = data.get("username")
