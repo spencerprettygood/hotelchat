@@ -352,7 +352,6 @@ async function fetchConversations() {
     }
 }
 
-// Load a conversation into the active panel
 async function loadConversation(convoId, username) {
     if (currentConversationId) {
         socket.emit('leave_conversation', { conversation_id: currentConversationId });
@@ -410,66 +409,6 @@ async function loadConversation(convoId, username) {
             chatLoadingSpinner.style.display = 'none';
         }
     }
-}
-
-// Send a message
-function sendMessage() {
-    if (!currentConversationId) {
-        showToast('Please select a conversation', 'error');
-        return;
-    }
-
-    const messageInput = document.getElementById('message-input');
-    const sendButton = document.getElementById('send-button');
-    if (!messageInput || !sendButton) {
-        console.error('Message input or send button not found.');
-        showToast('Message input or send button not found.', 'error');
-        return;
-    }
-    const message = messageInput.value.trim();
-    if (!message) {
-        showToast('Please enter a message to send', 'error');
-        return;
-    }
-
-    // Optimistic update
-    const tempMessage = {
-        message: message,
-        timestamp: new Date().toISOString(),
-        sender: 'agent'
-    };
-    appendMessage(tempMessage, 'agent');
-    messageInput.value = '';
-    sendButton.disabled = true;
-
-    fetch('/chat', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            convo_id: currentConversationId,
-            message: message,
-            channel: 'whatsapp'
-        }),
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Failed to send message: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.status === 'success') {
-                showToast('Message sent successfully', 'success');
-            } else {
-                showToast('Failed to send message: ' + (data.error || 'Unknown error'), 'error');
-            }
-        })
-        .catch(error => {
-            console.error('Error sending message:', error);
-            showToast('Error sending message: ' + error.message, 'error');
-        });
 }
 
 // Socket.IO event listeners
