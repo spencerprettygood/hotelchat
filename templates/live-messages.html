@@ -522,7 +522,12 @@
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
     <script>
-        const socket = io({
+        const socket = io('const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
+    transports: ["websocket", "polling"],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000
+});'{
             transports: ["websocket", "polling"],
             reconnection: true,
             reconnectionAttempts: Infinity,
