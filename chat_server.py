@@ -34,8 +34,10 @@ socketio = SocketIO(
     app,
     cors_allowed_origins="*",
     async_mode="eventlet",
-    ping_timeout=60,  # Increase timeout to 60 seconds
-    ping_interval=25  # Send ping every 25 seconds
+    ping_timeout=60,
+    ping_interval=25,
+    logger=True,  # Enable Socket.IO logging for debugging
+    engineio_logger=True  # Enable Engine.IO logging for debugging
 )
 
 login_manager = LoginManager()
@@ -1655,32 +1657,54 @@ def handle_connect():
     logger.info("✅ Client connected via Socket.IO")
     emit("connection_status", {"status": "connected"})
 
-@socketio.on("disconnect")
+@socketio.on('disconnect')
 def handle_disconnect():
-    logger.info("ℹ️ Client disconnected from Socket.IO")
+    try:
+        logger.info(f"ℹ️ Client disconnected: {request.sid}")
+        # Clean up any resources associated with the session
+        if 'conversation_id' in session:
+            convo_id = session.get('conversation_id')
+            if convo_id:
+                logger.info(f"ℹ️ Client {request.sid} leaving conversation {convo_id}")
+                # Ensure no further operations are performed on the socket
+                emit('leave_conversation', {'conversation_id': convo_id}, room=convo_id, skip_sid=request.sid)
+                session.pop('conversation_id', None)
+    except Exception as e:
+        logger.error(f"❌ Error during disconnect for client {request.sid}: {str(e)}")
 
-@socketio.on("join_conversation")
-def handle_join_conversation(data):
-    convo_id = data.get("convo_id")
-    if not convo_id:
-        logger.error("❌ Missing convo_id in join_conversation event")
-        emit("error", {"message": "Missing conversation ID"})
-        return
-    join_room(convo_id)
-    logger.info(f"✅ Client joined conversation room: {convo_id}")
-    emit("joined_conversation", {"convo_id": convo_id})
+# Update the join_conversation handler to store the conversation ID in the session
+@socketio.on('join_conversation')
+def join_conversation(data):
+    try:
+        convo_id = data.get('conversation_id')
+        if not convo_id:
+            logger.error("❌ Missing conversation_id in join_conversation")
+            emit('error', {'message': 'Missing conversation ID'})
+            return
+        join_room(convo_id)
+        session['conversation_id'] = convo_id
+        logger.info(f"✅ Client {request.sid} joined conversation {convo_id}")
+    except Exception as e:
+        logger.error(f"❌ Error in join_conversation for client {request.sid}: {str(e)}")
+        emit('error', {'message': 'Failed to join conversation'})
 
-@socketio.on("leave_conversation")
-def handle_leave_conversation(data):
-    convo_id = data.get("convo_id")
-    if not convo_id:
-        logger.error("❌ Missing convo_id in leave_conversation event")
-        emit("error", {"message": "Missing conversation ID"})
-        return
-    leave_room(convo_id)
-    logger.info(f"✅ Client left conversation room: {convo_id}")
-    emit("left_conversation", {"convo_id": convo_id})
-
+# Update the leave_conversation handler to avoid operations on closed sockets
+@socketio.on('leave_conversation')
+def leave_conversation(data):
+    try:
+        convo_id = data.get('conversation_id')
+        if not convo_id:
+            logger.error("❌ Missing conversation_id in leave_conversation")
+            emit('error', {'message': 'Missing conversation ID'})
+            return
+        leave_room(convo_id)
+        if 'conversation_id' in session and session['conversation_id'] == convo_id:
+            session.pop('conversation_id', None)
+        logger.info(f"✅ Client {request.sid} left conversation {convo_id}")
+    except Exception as e:
+        logger.error(f"❌ Error in leave_conversation for client {request.sid}: {str(e)}")
+        emit('error', {'message': 'Failed to leave conversation'})
+        
 @socketio.on("agent_message")
 def handle_agent_message(data):
     try:
