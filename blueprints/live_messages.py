@@ -69,30 +69,59 @@ def all_whatsapp_messages():
         logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
         return jsonify({'error': f'Failed to fetch conversations: {str(e)}'}), 500
 
-@live_messages_bp.route('/live-messages/messages')
-@login_required
-def messages():
+import psycopg2
+import os
+from flask import Blueprint, jsonify, request
+
+live_messages_bp = Blueprint('live_messages', __name__)
+
+@live_messages_bp.route('/messages', methods=['GET'])
+def get_messages():
+    convo_id = request.args.get('conversation_id')
+    if not convo_id:
+        return jsonify({'error': 'Conversation ID is required'}), 400
+
     try:
-        conversation_id = request.args.get("conversation_id")
-        if not conversation_id:
-            logger.error("❌ Missing conversation_id in /live-messages/messages request")
-            return jsonify({"error": "Missing conversation_id"}), 400
-        with get_db_connection() as conn:
-            c = conn.cursor(cursor_factory=DictCursor)
-            c.execute("SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp ASC",
-                      (conversation_id,))
-            messages = c.fetchall()
+        # Connect to the PostgreSQL database using environment variables
+        conn = psycopg2.connect(
+            dbname=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT")
+        )
+        cursor = conn.cursor()
+
+        # Query messages for the given conversation_id
+        cursor.execute(
+            "SELECT message, sender, timestamp FROM messages WHERE conversation_id = %s ORDER BY timestamp ASC",
+            (convo_id,)
+        )
+        messages = cursor.fetchall()
+
+        # Format messages as a list of dictionaries
         formatted_messages = [
             {
-                "message": msg["message"],
-                "sender": msg["sender"],
-                "timestamp": msg["timestamp"].isoformat()
-            } for msg in messages
+                'message': msg[0],
+                'sender': msg[1],
+                'timestamp': msg[2].isoformat() if msg[2] else None  # Convert timestamp to ISO string
+            }
+            for msg in messages
         ]
-        return jsonify({"messages": formatted_messages})
+
+        # Close the connection
+        cursor.close()
+        conn.close()
+
+        # Fetch the username (placeholder; adjust based on your data model)
+        username = convo_id  # Replace with actual username lookup if needed
+
+        return jsonify({
+            'messages': formatted_messages,
+            'username': username
+        })
     except Exception as e:
-        logger.error(f"❌ Error fetching messages: {e}")
-        return jsonify({"error": "Failed to fetch messages"}), 500
+        return jsonify({'error': f'Failed to fetch messages: {str(e)}'}), 500
 
 @live_messages_bp.route('/live-messages/settings', methods=['GET', 'POST'])
 @login_required
