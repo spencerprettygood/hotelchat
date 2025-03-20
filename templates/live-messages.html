@@ -643,54 +643,6 @@
                 });
         }
 
-        function login() {
-    const usernameInput = document.getElementById('username');
-    const passwordInput = document.getElementById('password');
-    if (!usernameInput || !passwordInput) {
-        console.error('Username or password input missing.');
-        showToast('Username or password input missing', 'error');
-        return;
-    }
-
-    const username = usernameInput.value;
-    const password = passwordInput.value;
-
-    fetch('/login', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ username, password }),
-        credentials: 'include'
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.message === 'Login successful') {
-                currentAgent = data.agent;
-                if (data.redirect) {
-                    window.location.href = data.redirect;
-                } else {
-                    document.getElementById('loginPage').style.display = 'none';
-                    document.getElementById('dashboard').style.display = 'flex';
-                    fetchConversations();
-                    fetchSettings();
-                    showToast('Login successful', 'success');
-                }
-            } else {
-                showToast('Login failed: ' + data.message, 'error');
-            }
-        })
-        .catch(error => {
-            console.error('Error during login:', error);
-            showToast('Error during login', 'error');
-        });
-}
-
         async function fetchConversations() {
     const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
     convoLoadingSpinner.style.display = 'block';
