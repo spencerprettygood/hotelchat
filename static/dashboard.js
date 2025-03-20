@@ -6,6 +6,7 @@ let currentConversationId = null;
 let currentFilter = 'unassigned';
 let currentChannel = null;
 let currentAgent = null;
+let lastMessageDate = null;
 
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -17,7 +18,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     checkAuthStatus();
-    fetchAISetting(); // Add this to fetch the AI setting on page load
     fetchConversations();
     setInterval(fetchConversations, 10000);
 
@@ -33,77 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('Message input not found for adding Enter key listener.');
     }
 });
-
-// Fetch AI setting on page load
-function fetchAISetting() {
-    fetch('/settings')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            const aiToggle = document.getElementById('ai-toggle');
-            const aiToggleError = document.getElementById('ai-toggle-error');
-            if (aiToggle && aiToggleError) {
-                aiToggle.checked = data.ai_enabled === '1';
-                aiToggleError.style.display = 'none'; // Clear any previous error
-                aiToggle.addEventListener('change', () => {
-                    toggleAI(aiToggle.checked);
-                });
-            } else {
-                console.error('AI toggle or error element not found on live-messages page.');
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching AI setting:', error);
-            const aiToggleError = document.getElementById('ai-toggle-error');
-            if (aiToggleError) {
-                aiToggleError.textContent = 'Failed to load AI setting: ' + error.message;
-                aiToggleError.style.display = 'inline';
-            }
-        });
-}
-
-// Toggle AI setting
-function toggleAI(enabled) {
-    const aiToggleError = document.getElementById('ai-toggle-error');
-    fetch('/settings', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ key: 'ai_enabled', value: enabled ? '1' : '0' }),
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.status === 'success') {
-                console.log('AI setting updated successfully');
-                if (aiToggleError) {
-                    aiToggleError.style.display = 'none';
-                }
-            } else {
-                throw new Error(data.error || 'Failed to update AI settings');
-            }
-        })
-        .catch(error => {
-            console.error('Error updating AI settings:', error);
-            if (aiToggleError) {
-                aiToggleError.textContent = 'Error updating AI settings: ' + error.message;
-                aiToggleError.style.display = 'inline';
-            }
-            const aiToggle = document.getElementById('ai-toggle');
-            if (aiToggle) {
-                aiToggle.checked = !enabled; // Revert on error
-            }
-        });
-}
 
 // Check if user is authenticated
 function checkAuthStatus() {
@@ -198,16 +127,12 @@ if (logoutButton) {
 
 function fetchConversations() {
     const conversationList = document.getElementById('conversationList');
-    const conversationError = document.getElementById('conversation-error');
     if (!conversationList) {
         console.error('Conversation list (conversationList) is missing.');
         return;
     }
-    if (!conversationError) {
-        console.error('Conversation error element (conversation-error) is missing.');
-    }
 
-    fetch('/conversations')
+    fetch(`/conversations?filter=${currentFilter}${currentChannel ? `&channel=${currentChannel}` : ''}`)
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
@@ -215,32 +140,11 @@ function fetchConversations() {
             return response.json();
         })
         .then(conversations => {
-            console.log('Fetched Conversations:', conversations);
             conversationList.innerHTML = '';
-            if (conversationError) {
-                conversationError.style.display = 'none';
-            }
 
-            console.log('Current Filter:', currentFilter, 'Current Channel:', currentChannel, 'Current Agent:', currentAgent);
-            let filteredConversations = conversations.filter(convo => {
-                if (currentChannel && convo.channel !== currentChannel) {
-                    return false;
-                }
-                if (currentFilter === 'unassigned') {
-                    return !convo.assigned_agent;
-                } else if (currentFilter === 'you') {
-                    return convo.assigned_agent === currentAgent;
-                } else if (currentFilter === 'team') {
-                    return convo.assigned_agent && convo.assigned_agent !== currentAgent;
-                }
-                return true;
-            });
+            updateCounts();
 
-            console.log('Filtered Conversations:', filteredConversations);
-
-            updateCounts(conversations);
-
-            filteredConversations.forEach(convo => {
+            conversations.forEach(convo => {
                 console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent);
                 const li = document.createElement('li');
                 li.className = 'conversation-item';
@@ -256,7 +160,7 @@ function fetchConversations() {
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
 
-                if (currentFilter === 'unassigned' && !convo.assigned_agent) {
+                if (!convo.assigned_agent) {
                     const takeOverButton = document.createElement('button');
                     takeOverButton.textContent = 'Take Over';
                     takeOverButton.onclick = (e) => {
@@ -265,9 +169,7 @@ function fetchConversations() {
                     };
                     takeOverButton.className = 'take-over-btn';
                     convoContainer.appendChild(takeOverButton);
-                }
-
-                if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
+                } else if (convo.assigned_agent === currentAgent) {
                     const handBackButton = document.createElement('button');
                     handBackButton.textContent = 'Hand Back to AI';
                     handBackButton.onclick = (e) => {
@@ -282,28 +184,35 @@ function fetchConversations() {
                 conversationList.appendChild(li);
             });
         })
-        .catch(error => {
-            console.error('Error fetching conversations:', error);
-            if (conversationError) {
-                conversationError.textContent = 'Failed to load conversations: ' + error.message;
-                conversationError.style.display = 'inline';
-            }
-        });
+        .catch(error => console.error('Error fetching conversations:', error));
 }
 
 // Update conversation counts
-function updateCounts(conversations) {
-    const unassignedCount = document.getElementById('unassignedCount');
-    const yourCount = document.getElementById('yourCount');
-    const teamCount = document.getElementById('teamCount');
-    const allCount = document.getElementById('allCount');
-
-    if (unassignedCount && yourCount && teamCount && allCount) {
-        unassignedCount.textContent = conversations.filter(c => !c.assigned_agent).length;
-        yourCount.textContent = conversations.filter(c => c.assigned_agent === currentAgent).length;
-        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== currentAgent).length;
-        allCount.textContent = conversations.length;
-    }
+function updateCounts() {
+    fetch('/conversations?filter=unassigned')
+        .then(response => response.json())
+        .then(data => {
+            const unassignedCount = document.getElementById('unassignedCount');
+            if (unassignedCount) unassignedCount.textContent = data.length;
+        });
+    fetch('/conversations?filter=you')
+        .then(response => response.json())
+        .then(data => {
+            const yourCount = document.getElementById('yourCount');
+            if (yourCount) yourCount.textContent = data.length;
+        });
+    fetch('/conversations?filter=team')
+        .then(response => response.json())
+        .then(data => {
+            const teamCount = document.getElementById('teamCount');
+            if (teamCount) teamCount.textContent = data.length;
+        });
+    fetch('/conversations?filter=all')
+        .then(response => response.json())
+        .then(data => {
+            const allCount = document.getElementById('allCount');
+            if (allCount) allCount.textContent = data.length;
+        });
 }
 
 // Load conversations based on filter
@@ -320,14 +229,12 @@ function filterByChannel(channel) {
 
 // Take over a conversation
 function takeOverConversation(convoId) {
-    fetch('/handoff', {
+    fetch('/takeover', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            conversation_id: convoId,
-        }),
+        body: JSON.stringify({ convo_id: convoId }),
     })
         .then(response => {
             if (!response.ok) {
@@ -336,7 +243,7 @@ function takeOverConversation(convoId) {
             return response.json();
         })
         .then(data => {
-            if (data.message) {
+            if (data.status === 'success') {
                 currentFilter = 'you';
                 fetchConversations();
                 if (currentConversationId === convoId) {
@@ -346,7 +253,64 @@ function takeOverConversation(convoId) {
                 alert('Error assigning chat: ' + data.error);
             }
         })
-        .catch(error => console.error('Error during handoff:', error));
+        .catch(error => console.error('Error during takeover:', error));
+}
+
+// Hand back to AI
+function handBackToAI(convoId) {
+    fetch('/handback', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ convo_id: convoId }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'success') {
+                alert('Conversation handed back to AI successfully');
+                socket.emit('refresh_conversations', { conversation_id: convoId });
+                if (currentConversationId === convoId) {
+                    currentConversationId = null;
+                    const chatBox = document.getElementById('chatBox');
+                    const clientName = document.getElementById('clientName');
+                    if (chatBox) chatBox.innerHTML = '';
+                    if (clientName) clientName.textContent = '-';
+                }
+            } else {
+                alert('Failed to hand back to AI: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error handing back to AI:', error));
+}
+
+// Format date for separator
+function formatDateForSeparator(timestamp) {
+    const date = new Date(timestamp);
+    const today = new Date();
+    if (date.toDateString() === today.toDateString()) {
+        return 'Today';
+    }
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) {
+        return 'Yesterday';
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// Add date separator
+function addDateSeparator(dateStr) {
+    const chatBox = document.getElementById('chatBox');
+    const separator = document.createElement('div');
+    separator.className = 'date-separator';
+    separator.textContent = dateStr;
+    chatBox.appendChild(separator);
 }
 
 // Load a conversation into the active panel
@@ -359,39 +323,54 @@ function loadConversation(convoId) {
         return;
     }
 
-    fetch(`/messages?conversation_id=${convoId}`)
+    fetch(`/messages/${convoId}`)
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
             }
             return response.json();
         })
-        .then(data => {
-            const messages = data.messages;
-            const username = data.username;
+        .then(messages => {
             chatBox.innerHTML = '';
+            lastMessageDate = null;
 
             messages.forEach(msg => {
+                const messageDate = new Date(msg.timestamp);
+                const dateStr = formatDateForSeparator(msg.timestamp);
+
+                if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
+                    addDateSeparator(dateStr);
+                    lastMessageDate = messageDate;
+                }
+
                 const div = document.createElement('div');
-                const isUser = msg.sender === 'user';
-                const isAgent = msg.sender === 'agent';
-                div.className = 'message';
-                div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
-                const textSpan = document.createElement('span');
-                textSpan.textContent = msg.message;
-                div.appendChild(textSpan);
-
-                const timestampSpan = document.createElement('span');
-                timestampSpan.className = 'message-timestamp';
-                const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
-                timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
-                div.appendChild(timestampSpan);
-
+                let senderClass = msg.sender.toLowerCase();
+                if (senderClass === 'user') {
+                    senderClass = 'user';
+                } else if (senderClass === 'ai') {
+                    senderClass = 'ai';
+                } else if (senderClass === 'agent') {
+                    senderClass = 'agent';
+                } else {
+                    senderClass = 'user'; // Default to user
+                }
+                div.className = `message ${senderClass}`;
+                div.innerHTML = `
+                    <div class="message-bubble">${msg.message}</div>
+                    <span class="message-timestamp">${new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                `;
                 chatBox.appendChild(div);
             });
 
             chatBox.scrollTop = chatBox.scrollHeight;
-            clientName.textContent = username;
+
+            // Update client name
+            fetch(`/conversations?filter=${currentFilter}${currentChannel ? `&channel=${currentChannel}` : ''}`)
+                .then(response => response.json())
+                .then(conversations => {
+                    const convo = conversations.find(c => c.id === convoId);
+                    clientName.textContent = convo ? convo.username : '-';
+                });
         })
         .catch(error => console.error('Error loading messages:', error));
 }
@@ -435,15 +414,7 @@ function sendMessage() {
         .then(data => {
             if (data.status === 'success') {
                 messageInput.value = '';
-                const chatMessages = document.getElementById('chat-messages');
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message user-message';
-                messageDiv.textContent = message;
-                messageDiv.dataset.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                chatMessages.appendChild(messageDiv);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            } else if (data.reply) {
-                console.log('AI response will be handled via Socket.IO:', data.reply);
+                // Message will be appended via Socket.IO 'new_message' event
             } else {
                 console.error('Error sending message:', data.error);
                 alert('Failed to send message: ' + (data.error || 'Unknown error'));
@@ -455,57 +426,36 @@ function sendMessage() {
         });
 }
 
-// Hand back to AI
-function handBackToAI(convoId) {
-    fetch('/handback-to-ai', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ conversation_id: convoId }),
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.message) {
-                alert(data.message);
-                socket.emit('refresh_conversations', { conversation_id: convoId });
-                if (currentConversationId === convoId) {
-                    loadConversation(convoId);
-                }
-            } else {
-                alert('Failed to hand back to AI: ' + data.error);
-            }
-        })
-        .catch(error => console.error('Error handing back to AI:', error));
-}
-
 // Socket.IO event listeners
 socket.on('new_message', (data) => {
     console.log('New message received:', data);
     if (data.convo_id === currentConversationId) {
         const chatBox = document.getElementById('chatBox');
         if (chatBox) {
+            const messageDate = new Date(data.timestamp || new Date());
+            const dateStr = formatDateForSeparator(messageDate);
+
+            if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
+                addDateSeparator(dateStr);
+                lastMessageDate = messageDate;
+            }
+
             const div = document.createElement('div');
-            const isUser = data.sender === 'user';
-            const isAgent = data.sender === 'agent';
-            div.className = 'message';
-            div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
-
-            const textSpan = document.createElement('span');
-            textSpan.textContent = data.message;
-            div.appendChild(textSpan);
-
-            const timestampSpan = document.createElement('span');
-            timestampSpan.className = 'message-timestamp';
-            const now = new Date();
-            timestampSpan.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-            div.appendChild(timestampSpan);
-
+            let senderClass = data.sender.toLowerCase();
+            if (senderClass === 'user') {
+                senderClass = 'user';
+            } else if (senderClass === 'ai') {
+                senderClass = 'ai';
+            } else if (senderClass === 'agent') {
+                senderClass = 'agent';
+            } else {
+                senderClass = 'user'; // Default to user
+            }
+            div.className = `message ${senderClass}`;
+            div.innerHTML = `
+                <div class="message-bubble">${data.message}</div>
+                <span class="message-timestamp">${new Date(data.timestamp || new Date()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            `;
             chatBox.appendChild(div);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
@@ -521,48 +471,30 @@ socket.on('error', (data) => {
 socket.on('refresh_conversations', (data) => {
     console.log('Refresh conversations event received:', data);
     const conversationId = data.conversation_id;
-    pollVisibility(conversationId);
     fetchConversations();
-});
-
-socket.on('settings_updated', (data) => {
-    const aiToggle = document.getElementById('ai-toggle');
-    const aiToggleError = document.getElementById('ai-toggle-error');
-    if (aiToggle && aiToggleError) {
-        aiToggle.checked = data.ai_enabled === '1';
-        aiToggleError.style.display = 'none';
+    if (currentConversationId === conversationId) {
+        fetch(`/conversations?filter=${currentFilter}${currentChannel ? `&channel=${currentChannel}` : ''}`)
+            .then(response => response.json())
+            .then(conversations => {
+                if (!conversations.some(convo => convo.id === conversationId)) {
+                    currentConversationId = null;
+                    const chatBox = document.getElementById('chatBox');
+                    const clientName = document.getElementById('clientName');
+                    if (chatBox) chatBox.innerHTML = '';
+                    if (clientName) clientName.textContent = '-';
+                }
+            });
     }
 });
 
 socket.on("reconnect", (attempt) => {
     console.log(`Reconnected to Socket.IO after ${attempt} attempts`);
-    loadConversations();
+    fetchConversations();
+    if (currentConversationId) {
+        loadConversation(currentConversationId);
+    }
 });
 
 socket.on("reconnect_error", (error) => {
     console.error("Reconnection failed:", error);
 });
-
-// Poll visibility of a conversation
-function pollVisibility(conversationId) {
-    fetch(`/check-visibility?conversation_id=${conversationId}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.visible) {
-                console.log(`Conversation ${conversationId} is now visible`);
-                fetchConversations();
-            } else {
-                console.log(`Conversation ${conversationId} is not yet visible, polling again...`);
-                setTimeout(() => pollVisibility(conversationId), 1000);
-            }
-        })
-        .catch(error => {
-            console.error('Error polling visibility:', error);
-            setTimeout(() => pollVisibility(conversationId), 1000);
-        });
-}
