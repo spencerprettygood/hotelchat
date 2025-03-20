@@ -173,6 +173,8 @@ def get_db_connection():
         logger.error(f"❌ Failed to connect to database: {e}")
         raise Exception(f"Failed to connect to database: {e}")
 
+# ... (previous imports and app setup)
+
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -281,18 +283,33 @@ def init_db():
         if c.fetchone():
             c.execute("ALTER TABLE messages DROP CONSTRAINT messages_convo_id_fkey")
 
+        # Change the type of convo_id from INTEGER to TEXT if necessary
+        c.execute("""
+            SELECT data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'messages' AND column_name = 'convo_id'
+        """)
+        result = c.fetchone()
+        if result and result['data_type'] == 'integer':
+            logger.info("ℹ️ Converting convo_id from INTEGER to TEXT in messages table")
+            c.execute("ALTER TABLE messages ADD COLUMN convo_id_temp TEXT")
+            c.execute("UPDATE messages SET convo_id_temp = CAST(convo_id AS TEXT) WHERE convo_id IS NOT NULL")
+            c.execute("ALTER TABLE messages DROP COLUMN convo_id")
+            c.execute("ALTER TABLE messages RENAME COLUMN convo_id_temp TO convo_id")
+            c.execute("ALTER TABLE messages ALTER COLUMN convo_id SET NOT NULL")
+
         # Update convo_id in messages to match conversation_id
         c.execute("""
             UPDATE messages m
             SET convo_id = (
                 SELECT c.conversation_id
                 FROM conversations c
-                WHERE CAST(c.id AS TEXT) = CAST(m.convo_id AS TEXT)
+                WHERE CAST(c.id AS TEXT) = m.convo_id
             )
             WHERE EXISTS (
                 SELECT 1
                 FROM conversations c
-                WHERE CAST(c.id AS TEXT) = CAST(m.convo_id AS TEXT)
+                WHERE CAST(c.id AS TEXT) = m.convo_id
             )
         """)
 
