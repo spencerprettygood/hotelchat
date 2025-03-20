@@ -189,49 +189,49 @@ if (logoutButton) {
     console.error('Logout button not found.');
 }
 
-function fetchConversations() {
-    const conversationList = document.getElementById('conversation-list');
+async function fetchConversations() {
     const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
-    if (!conversationList) {
-        console.error('Conversation list (conversation-list) is missing.');
+    if (!convoLoadingSpinner) {
+        console.error('Conversation loading spinner not found.');
         return;
     }
-
-    if (convoLoadingSpinner) convoLoadingSpinner.style.display = 'block';
-    fetch('/all-whatsapp-messages')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            conversationList.innerHTML = '';
-            if (data.conversations) {
-                data.conversations.forEach(convo => {
-                    const convoItem = document.createElement('div');
-                    convoItem.classList.add('conversation-item');
-                    if (currentConversationId === convo.convo_id) {
-                        convoItem.classList.add('active');
-                    }
-                    convoItem.innerHTML = `
-                        <div class="avatar"></div>
-                        <div class="info">
-                            <div class="name">${convo.username}</div>
-                            <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
-                        </div>
-                    `;
-                    convoItem.addEventListener('click', () => loadConversation(convo.convo_id));
-                    conversationList.appendChild(convoItem);
-                });
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching conversations:', error);
-        })
-        .finally(() => {
-            if (convoLoadingSpinner) convoLoadingSpinner.style.display = 'none';
-        });
+    convoLoadingSpinner.style.display = 'block';
+    try {
+        const response = await fetch('/live-messages/all-whatsapp-messages');
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        const conversationList = document.getElementById('conversation-list');
+        if (!conversationList) {
+            console.error('Conversation list not found.');
+            return;
+        }
+        conversationList.innerHTML = '';
+        if (data.conversations) {
+            data.conversations.forEach(convo => {
+                const convoItem = document.createElement('div');
+                convoItem.classList.add('conversation-item');
+                if (currentConversationId === convo.convo_id) {
+                    convoItem.classList.add('active');
+                }
+                convoItem.innerHTML = `
+                    <div class="avatar"></div>
+                    <div class="info">
+                        <div class="name">${convo.username}</div>
+                        <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
+                    </div>
+                `;
+                convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
+                conversationList.appendChild(convoItem);
+            });
+        }
+    } catch (error) {
+        console.error('Error fetching conversations:', error);
+        showToast('Error fetching conversations', 'error');
+    } finally {
+        convoLoadingSpinner.style.display = 'none';
+    }
 }
 
 // Load a conversation into the active panel
