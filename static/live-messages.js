@@ -1,7 +1,3 @@
-const socket = io({
-    transports: ["websocket", "polling"],
-});
-
 let currentConversationId = null;
 let currentAgent = null;
 
