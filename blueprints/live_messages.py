@@ -23,13 +23,38 @@ def live_messages_page():
 def all_whatsapp_messages():
     try:
         with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, username, chat_id, channel FROM conversations WHERE channel = 'whatsapp'")
-            conversations = [{"convo_id": row["id"], "username": row["username"], "chat_id": row["chat_id"], "channel": row["channel"]} for row in c.fetchall()]
+            c = conn.cursor(cursor_factory=DictCursor)
+            # Fetch conversations and their latest message
+            c.execute("""
+                SELECT conversation_id, username, phone_number, channel
+                FROM conversations
+                WHERE channel = 'whatsapp'
+                ORDER BY last_message_timestamp DESC
+            """)
+            conversations = c.fetchall()
+            formatted_conversations = []
             for convo in conversations:
-                c.execute("SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp", (convo["convo_id"],))
-                convo["messages"] = [{"message": row["message"], "sender": row["sender"], "timestamp": row["timestamp"]} for msg in c.fetchall()]
-        return jsonify({"conversations": conversations})
+                # Fetch the latest message for each conversation
+                c.execute("""
+                    SELECT message, sender, timestamp
+                    FROM messages
+                    WHERE convo_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """, (convo["conversation_id"],))
+                message = c.fetchone()
+                formatted_conversations.append({
+                    "convo_id": convo["conversation_id"],
+                    "username": convo["username"],
+                    "chat_id": convo["phone_number"],
+                    "channel": convo["channel"],
+                    "messages": [{
+                        "message": message["message"],
+                        "sender": message["sender"],
+                        "timestamp": message["timestamp"].isoformat()
+                    }] if message else []
+                })
+        return jsonify({"conversations": formatted_conversations})
     except Exception as e:
         logger.error(f"❌ Error fetching WhatsApp messages: {e}")
         return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
