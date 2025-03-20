@@ -267,6 +267,12 @@ def load_user(agent_id):
             return Agent(agent['id'], agent['username'])
     return None
 
+@app.route("/")
+def index():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard.dashboard'))
+    return redirect(url_for('login'))
+    
 # Authentication Endpoints
 @app.route("/login", methods=["GET", "POST"])
 def login():
