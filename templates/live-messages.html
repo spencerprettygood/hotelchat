@@ -11,8 +11,8 @@
         .container {
             display: flex;
             height: 100vh;
-            width: 100%;
-        }
+            width: 100vw; /* Ensure full viewport width */
+            transition: all 0.3s ease; /* Smooth transition for resizing */
         .sidebar {
             width: 30%;
             min-width: 300px;
@@ -20,7 +20,7 @@
             border-right: 1px solid #ddd;
             display: flex;
             flex-direction: column;
-        }
+            transition: width 0.3s ease; /* Smooth transition for sidebar width */
         .sidebar-header {
             background-color: #075E54;
             color: white;
@@ -128,6 +128,8 @@
             flex-grow: 1;
             display: flex;
             flex-direction: column;
+            height: 100%; /* Ensure it takes the full height of the container */
+            transition: all 0.3s ease; /* Smooth transition for resizing */
         }
         .chat-header {
             background-color: #075E54;
@@ -136,6 +138,7 @@
             display: flex;
             align-items: center;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            flex-shrink: 0; /* Prevent the header from shrinking */
         }
         .chat-header .profile-pic {
             width: 40px;
@@ -166,11 +169,13 @@
             cursor: pointer;
         }
         .chat-container {
-            flex-grow: 1;
-            overflow-y: auto;
+            flex-grow: 1; /* Take up remaining space */
+            overflow-y: auto; /* Allow scrolling for messages */
             padding: 20px 10px;
             background: #e5ddd5;
-            background-size: auto;
+            height: 100%; /* Ensure it takes the full height of the remaining space */
+            box-sizing: border-box; /* Include padding in height calculation */
+            transition: all 0.3s ease; /* Smooth transition for resizing */
         }
         .loading-spinner {
             display: none;
@@ -332,6 +337,7 @@
             padding: 10px;
             background-color: #F0F2F5;
             border-top: 1px solid #ddd;
+            flex-shrink: 0; /* Prevent the input container from shrinking */
         }
         #message-input {
             flex-grow: 1;
