@@ -3,6 +3,7 @@ from flask_login import login_required, current_user
 from flask_socketio import emit
 from app import socketio, get_db_connection
 import logging
+from psycopg2.extras import DictCursor
 
 # Set up logging
 logger = logging.getLogger(__name__)
