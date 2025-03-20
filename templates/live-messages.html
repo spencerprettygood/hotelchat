@@ -702,18 +702,10 @@
             }
             currentConversationId = convoId;
             socket.emit('join_conversation', { conversation_id: convoId });
-
-            const chatHeader = document.getElementById('chat-header');
-            const inputContainer = document.getElementById('input-container');
-            const chatTitle = document.getElementById('chat-title');
-            if (chatHeader && inputContainer && chatTitle) {
-                chatHeader.style.display = 'flex';
-                inputContainer.style.display = 'flex';
-                chatTitle.textContent = username;
-            } else {
-                console.error('Chat header, input container, or chat title not found.');
-                return;
-            }
+            // ...
+            const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
+            // ...
+        }
 
             const conversationItems = document.querySelectorAll('.conversation-item');
             conversationItems.forEach(item => item.classList.remove('active'));
