@@ -958,13 +958,24 @@ def test_ai():
 @login_required
 def get_all_whatsapp_messages():
     try:
-        # Placeholder: Return dummy data for now
-        # Later, query the database to fetch WhatsApp messages
-        messages = [
-            {"id": 1, "from": "+1234567890", "body": "Hello!", "timestamp": "2025-03-20T12:00:00Z"},
-            {"id": 2, "from": "+0987654321", "body": "Hi there!", "timestamp": "2025-03-20T12:01:00Z"}
+        # Placeholder: Return dummy data in the expected format
+        conversations = [
+            {
+                "convo_id": "1",
+                "username": "User 1",
+                "messages": [
+                    {"id": 1, "message": "Hello!", "timestamp": "2025-03-20T12:00:00Z"}
+                ]
+            },
+            {
+                "convo_id": "2",
+                "username": "User 2",
+                "messages": [
+                    {"id": 2, "message": "Hi there!", "timestamp": "2025-03-20T12:01:00Z"}
+                ]
+            }
         ]
-        return jsonify(messages), 200
+        return jsonify({"conversations": conversations}), 200
     except Exception as e:
         logger.error(f"❌ Error in /all-whatsapp-messages: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
