@@ -4,6 +4,7 @@ from flask_login import login_required  # Use Flask-Login's login_required
 import logging
 from app import get_db_connection
 from psycopg2.extras import DictCursor
+from datetime import datetime
 
 # Create the live_messages blueprint
 live_messages_bp = Blueprint('live_messages', __name__, template_folder='templates')
@@ -18,46 +19,76 @@ def live_messages():
 @login_required
 def all_whatsapp_messages():
     try:
-        logger.info("ℹ️ Attempting to connect to database")
-        with get_db_connection() as conn:
-            logger.info("ℹ️ Successfully connected to database")
+        # Test database connection
+        conn = get_db_connection()
+        if conn is None:
+            logger.error("Failed to establish database connection: get_db_connection returned None")
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        with conn:
             c = conn.cursor(cursor_factory=DictCursor)
-            logger.info("ℹ️ Fetching conversations from database")
+            logger.debug("Executing SQL query to fetch WhatsApp conversations")
             c.execute("""
-                SELECT conversation_id, username, phone_number, channel
-                FROM conversations
-                WHERE channel = 'whatsapp'
-                ORDER BY last_message_timestamp DESC
+                SELECT c.id AS convo_id, c.username, c.phone_number, c.channel, c.status, c.last_message_timestamp,
+                       m.message, m.sender, m.timestamp
+                FROM conversations c
+                LEFT JOIN messages m ON c.id = m.convo_id
+                WHERE c.channel = 'whatsapp' AND c.visible_in_conversations = 1
+                ORDER BY c.last_message_timestamp DESC, m.timestamp ASC
             """)
-            conversations = c.fetchall()
-            logger.info(f"ℹ️ Found {len(conversations)} conversations")
-            formatted_conversations = []
-            for convo in conversations:
-                logger.info(f"ℹ️ Fetching latest message for conversation_id: {convo['conversation_id']}")
-                c.execute("""
-                    SELECT message, sender, timestamp
-                    FROM messages
-                    WHERE convo_id = %s
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                """, (convo["conversation_id"],))
-                message = c.fetchone()
-                formatted_conversations.append({
-                    "convo_id": convo["conversation_id"],
-                    "username": convo["username"],
-                    "chat_id": convo["phone_number"],
-                    "channel": convo["channel"],
-                    "messages": [{
-                        "message": message["message"],
-                        "sender": message["sender"],
-                        "timestamp": message["timestamp"].isoformat()
-                    }] if message else []
-                })
-        logger.info("✅ Successfully fetched conversations")
-        return jsonify({"conversations": formatted_conversations})
+            rows = c.fetchall()
+            logger.debug(f"Fetched {len(rows)} rows from database")
+
+            # Group messages by conversation
+            conversations = {}
+            for row in rows:
+                convo_id = row['convo_id']
+                if convo_id not in conversations:
+                    # Handle last_message_timestamp (should be a datetime object)
+                    last_message_timestamp = row['last_message_timestamp']
+                    if isinstance(last_message_timestamp, str):
+                        try:
+                            last_message_timestamp = datetime.strptime(last_message_timestamp, '%Y-%m-%d %H:%M:%S')
+                        except ValueError as e:
+                            logger.error(f"Failed to parse last_message_timestamp '{last_message_timestamp}': {e}")
+                            last_message_timestamp = None
+                    # If it's already a datetime object, no parsing needed
+
+                    conversations[convo_id] = {
+                        'convo_id': convo_id,
+                        'username': row['username'],
+                        'phone_number': row['phone_number'],
+                        'channel': row['channel'],
+                        'status': row['status'],
+                        'last_message_timestamp': last_message_timestamp.isoformat() if last_message_timestamp else None,
+                        'messages': []
+                    }
+                if row['message']:  # If there is a message (not NULL)
+                    # Handle message timestamp (stored as text in the database)
+                    message_timestamp = row['timestamp']
+                    if message_timestamp and isinstance(message_timestamp, str):
+                        try:
+                            message_timestamp = datetime.strptime(message_timestamp, '%Y-%m-%d %H:%M:%S')
+                        except ValueError as e:
+                            logger.error(f"Failed to parse message timestamp '{message_timestamp}': {e}")
+                            message_timestamp = None
+                    else:
+                        message_timestamp = None
+
+                    conversations[convo_id]['messages'].append({
+                        'message': row['message'],
+                        'sender': row['sender'],
+                        'timestamp': message_timestamp.isoformat() if message_timestamp else None
+                    })
+
+            # Convert to list for JSON response
+            conversation_list = list(conversations.values())
+            logger.debug(f"Returning {len(conversation_list)} conversations")
+            return jsonify({'conversations': conversation_list})
+
     except Exception as e:
-        logger.error(f"❌ Error fetching WhatsApp messages: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+        logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Failed to fetch conversations: {str(e)}'}), 500
 
 @live_messages_bp.route('/live-messages/messages')
 @login_required
