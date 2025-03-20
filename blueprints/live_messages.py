@@ -5,10 +5,18 @@ from app import socketio, get_db_connection
 import logging
 from psycopg2.extras import DictCursor
 
-# Set up logging
+# Create the live_messages blueprint
+live_messages_bp = Blueprint('live_messages', __name__, template_folder='templates')
 logger = logging.getLogger(__name__)
 
-live_messages_bp = Blueprint('live_messages', __name__)
+# Define the login_required decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
 @live_messages_bp.route('/')
 @login_required
@@ -19,13 +27,20 @@ def live_messages_page():
         logger.error(f"❌ Error rendering live-messages page: {e}")
         return jsonify({"error": "Failed to load live-messages page"}), 500
 
-@live_messages_bp.route('/all-whatsapp-messages')
+@live_messages_bp.route('/live-messages/')
+@login_required
+def live_messages():
+    return render_template('live-messages.html')
+
+@live_messages_bp.route('/live-messages/all-whatsapp-messages')
 @login_required
 def all_whatsapp_messages():
     try:
+        logger.info("ℹ️ Attempting to connect to database")
         with get_db_connection() as conn:
+            logger.info("ℹ️ Successfully connected to database")
             c = conn.cursor(cursor_factory=DictCursor)
-            # Fetch conversations and their latest message
+            logger.info("ℹ️ Fetching conversations from database")
             c.execute("""
                 SELECT conversation_id, username, phone_number, channel
                 FROM conversations
@@ -33,9 +48,10 @@ def all_whatsapp_messages():
                 ORDER BY last_message_timestamp DESC
             """)
             conversations = c.fetchall()
+            logger.info(f"ℹ️ Found {len(conversations)} conversations")
             formatted_conversations = []
             for convo in conversations:
-                # Fetch the latest message for each conversation
+                logger.info(f"ℹ️ Fetching latest message for conversation_id: {convo['conversation_id']}")
                 c.execute("""
                     SELECT message, sender, timestamp
                     FROM messages
@@ -55,74 +71,46 @@ def all_whatsapp_messages():
                         "timestamp": message["timestamp"].isoformat()
                     }] if message else []
                 })
+        logger.info("✅ Successfully fetched conversations")
         return jsonify({"conversations": formatted_conversations})
     except Exception as e:
-        logger.error(f"❌ Error fetching WhatsApp messages: {e}")
+        logger.error(f"❌ Error fetching WhatsApp messages: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
 
-@live_messages_bp.route('/messages', methods=["GET"])
+@live_messages_bp.route('/live-messages/messages')
 @login_required
-def get_messages():
+def messages():
     try:
-        convo_id = request.args.get("conversation_id")
-        if not convo_id:
-            logger.error("❌ Missing conversation ID in /live-messages/messages request")
-            return jsonify({"error": "Missing conversation ID"}), 400
+        conversation_id = request.args.get("conversation_id")
+        if not conversation_id:
+            logger.error("❌ Missing conversation_id in /live-messages/messages request")
+            return jsonify({"error": "Missing conversation_id"}), 400
         with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT username, chat_id FROM conversations WHERE id = %s", (convo_id,))
-            result = c.fetchone()
-            if not result:
-                logger.error(f"❌ Conversation not found: {convo_id}")
-                return jsonify({"error": "Conversation not found"}), 404
-            username = result['username']
-            chat_id = result['chat_id']
-            c.execute("""
-                SELECT sender, message, timestamp
-                FROM messages
-                WHERE convo_id = %s
-                ORDER BY timestamp ASC
-            """, (convo_id,))
-            messages = [
-                {
-                    "sender": row['sender'],
-                    "message": row['message'],
-                    "timestamp": row['timestamp']
-                }
-                for row in c.fetchall()
-            ]
-            logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
-            return jsonify({"messages": messages, "username": username, "chat_id": chat_id})
+            c = conn.cursor(cursor_factory=DictCursor)
+            c.execute("SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp ASC",
+                      (conversation_id,))
+            messages = c.fetchall()
+        formatted_messages = [
+            {
+                "message": msg["message"],
+                "sender": msg["sender"],
+                "timestamp": msg["timestamp"].isoformat()
+            } for msg in messages
+        ]
+        return jsonify({"messages": formatted_messages})
     except Exception as e:
-        logger.error(f"❌ Error fetching messages for convo_id {convo_id}: {e}")
+        logger.error(f"❌ Error fetching messages: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
 
-@live_messages_bp.route('/settings', methods=["GET", "POST"])
+@live_messages_bp.route('/live-messages/settings')
 @login_required
-def settings():
+def get_settings():
     try:
-        if request.method == "POST":
-            data = request.get_json()
-            logger.info(f"ℹ️ Received /live-messages/settings POST request with data: {data}")
-            ai_enabled = data.get("ai_enabled")
-            if ai_enabled is None:
-                logger.error("❌ Missing ai_enabled in /live-messages/settings POST request")
-                return jsonify({"error": "Missing ai_enabled parameter"}), 400
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = %s",
-                          ("ai_enabled", ai_enabled, ai_enabled))
-                conn.commit()
-            socketio.emit("settings_updated", {"ai_enabled": ai_enabled})
-            logger.info(f"✅ Updated settings: ai_enabled = {ai_enabled}")
-            return jsonify({"status": "success"})
-        else:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-                result = c.fetchone()
-                ai_enabled = result['value'] if result else '1'
-            return jsonify({"ai_enabled": ai_enabled})
+        with get_db_connection() as conn:
+            c = conn.cursor(cursor_factory=DictCursor)
+            c.execute("SELECT key, value FROM settings WHERE key = 'ai_enabled'")
+            setting = c.fetchone()
+        return jsonify({"ai_enabled": setting["value"] if setting else "1"})
     except Exception as e:
-        logger.error(f"❌ Error in /live-messages/settings endpoint: {e}")
-        return jsonify({"error": "Failed to access settings"}), 500
+        logger.error(f"❌ Error fetching settings: {e}")
+        return jsonify({"error": "Failed to fetch settings"}), 500
