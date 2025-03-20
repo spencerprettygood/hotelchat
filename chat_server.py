@@ -1575,30 +1575,33 @@ def assign_agent():
         logger.error(f"❌ Error in /assign-agent: {e}")
         return jsonify({"error": "Failed to assign agent"}), 500
 
-@app.route("/settings", methods=["GET"])
+@app.route("/settings", methods=["GET", "POST"])
 @login_required
-def get_settings():
+def settings():
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT key, value FROM settings")
-            settings = {row['key']: row['value'] for row in c.fetchall()}
-        logger.info("✅ Fetched settings")
-        return jsonify(settings)
+        if request.method == "POST":
+            data = request.get_json()
+            ai_enabled = data.get("ai_enabled")
+            if ai_enabled is None:
+                logger.error("❌ Missing ai_enabled in /settings POST request")
+                return jsonify({"error": "Missing ai_enabled parameter"}), 400
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("ai_enabled", ai_enabled))
+                conn.commit()
+            socketio.emit("settings_updated", {"ai_enabled": ai_enabled})
+            logger.info(f"✅ Updated settings: ai_enabled = {ai_enabled}")
+            return jsonify({"status": "success"})
+        else:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+                result = c.fetchone()
+                ai_enabled = result['value'] if result else '1'
+            return jsonify({"ai_enabled": ai_enabled})
     except Exception as e:
-        logger.error(f"❌ Error in /settings GET: {e}")
-        return jsonify({"error": "Failed to fetch settings"}), 500
-
-@app.route("/settings", methods=["POST"])
-@login_required
-def update_settings():
-    try:
-        data = request.get_json()
-        ai_enabled = data.get("ai_enabled")
-
-        if ai_enabled is None:
-            logger.error("❌ Missing ai_enabled in /settings POST request")
-            return jsonify({"error": "Missing ai_enabled parameter"}), 400
+        logger.error(f"❌ Error in /settings endpoint: {e}")
+        return jsonify({"error": "Failed to access settings"}), 500
 
         ai_enabled_value = 1 if ai_enabled else 0
         with get_db_connection() as conn:
