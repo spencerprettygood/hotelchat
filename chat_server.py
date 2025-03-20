@@ -1409,7 +1409,7 @@ def whatsapp():
                 socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
                 return jsonify({}), 200
 
-                        if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
+            if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
                 handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
                                  "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
                 log_message(convo_id, "AI", handoff_message, "ai")
