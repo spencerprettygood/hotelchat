@@ -1,10 +1,17 @@
-body {
+/* Reset default margins and padding */
+* {
     margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
     font-family: Arial, sans-serif;
     display: flex;
     height: 100vh;
 }
 
+/* Login page styling */
 .login-container {
     display: flex;
     flex-direction: column;
@@ -39,6 +46,7 @@ body {
     background-color: #0056b3;
 }
 
+/* Header styling */
 .header {
     background-color: #007bff;
     color: white;
@@ -65,12 +73,14 @@ body {
     background-color: #c82333;
 }
 
+/* Main content area */
 .container {
     display: flex;
     flex: 1;
     height: calc(100vh - 60px); /* Adjust for header height */
 }
 
+/* Sidebar styling */
 .sidebar {
     width: 200px;
     background-color: #f8f9fa;
@@ -97,6 +107,7 @@ body {
     background-color: #e9ecef;
 }
 
+/* Conversation panel styling */
 .conversation-panel {
     width: 300px;
     background-color: #fff;
@@ -120,6 +131,9 @@ body {
     padding: 10px;
     cursor: pointer;
     border-bottom: 1px solid #ddd;
+    margin-bottom: 20px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
 }
 
 .conversation-item:hover {
@@ -152,6 +166,37 @@ body {
     font-size: 0.9em;
 }
 
+/* Style for the Take Over button */
+.take-over-btn {
+    margin-left: 10px;
+    padding: 5px 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.take-over-btn:hover {
+    background-color: #0056b3;
+}
+
+/* Style for the Hand Back to AI button */
+.handback-button {
+    margin-left: 10px;
+    padding: 5px 10px;
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.handback-button:hover {
+    background-color: #c82333;
+}
+
+/* Chat panel styling */
 .chat-panel {
     flex: 1;
     display: flex;
@@ -177,30 +222,31 @@ body {
 }
 
 .message {
-    margin-bottom: 15px; /* Increase spacing between messages */
+    margin-bottom: 15px;
     max-width: 70%;
-    padding: 10px 15px; /* More padding for a bubble-like feel */
-    border-radius: 15px; /* Rounded corners for bubble effect */
+    padding: 10px 15px;
+    border-radius: 15px;
     position: relative;
-    word-wrap: break-word; /* Ensure long messages wrap */
+    word-wrap: break-word;
 }
 
-.user-message {
+.message.user {
     background-color: #f1f0f0; /* White */
     color: black;
     margin-right: auto;
     margin-left: 10px;
     text-align: left;
-    border-top-left-radius: 0; /* Sharp corner on the left-top for user messages */
+    border-top-left-radius: 0;
 }
 
-.agent-message {
+.message.ai,
+.message.agent {
     background-color: #007bff; /* Blue */
     color: white;
     margin-left: auto;
     margin-right: 10px;
     text-align: right;
-    border-top-right-radius: 0; /* Sharp corner on the right-top for AI messages */
+    border-top-right-radius: 0;
 }
 
 .message-timestamp {
@@ -208,7 +254,7 @@ body {
     color: #999;
     display: block;
     margin-top: 5px;
-    text-align: inherit; /* Align timestamp with the message */
+    text-align: inherit;
 }
 
 .chat-input {
@@ -239,40 +285,16 @@ body {
     background-color: #0056b3;
 }
 
-    /* Add spacing between conversation items */
-    .conversation-item {
-        margin-bottom: 20px; /* Adjust this value for more or less spacing */
-        padding: 10px;
-        border: 1px solid #ccc;
-        border-radius: 5px;
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column;
     }
-
-    /* Style for the Take Over button */
-    .take-over-btn {
-        margin-left: 10px;
-        padding: 5px 10px;
-        background-color: #007bff;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
+    .sidebar {
+        width: 100%;
+        max-height: 200px;
     }
-
-    .take-over-btn:hover {
-        background-color: #0056b3;
+    .conversation-panel {
+        width: 100%;
     }
-
-    /* Style for the Hand Back to AI button (already exists, ensuring consistency) */
-    .handback-button {
-        margin-left: 10px;
-        padding: 5px 10px;
-        background-color: #dc3545;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
-    }
-
-    .handback-button:hover {
-        background-color: #c82333;
-    }
+}
