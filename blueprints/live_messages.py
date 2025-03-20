@@ -1,8 +1,8 @@
-from flask import Blueprint, render_template, jsonify, request
-from flask_login import login_required, current_user
-from flask_socketio import emit
-from app import socketio, get_db_connection
+# blueprints/live_messages.py
+from flask import Blueprint, jsonify, request, render_template, session
+from functools import wraps
 import logging
+from app import get_db_connection  # Absolute import
 from psycopg2.extras import DictCursor
 
 # Create the live_messages blueprint
@@ -17,15 +17,6 @@ def login_required(f):
             return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated_function
-
-@live_messages_bp.route('/')
-@login_required
-def live_messages_page():
-    try:
-        return render_template("live-messages.html")
-    except Exception as e:
-        logger.error(f"❌ Error rendering live-messages page: {e}")
-        return jsonify({"error": "Failed to load live-messages page"}), 500
 
 @live_messages_bp.route('/live-messages/')
 @login_required
