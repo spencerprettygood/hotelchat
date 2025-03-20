@@ -88,8 +88,9 @@ body {
 /* Sidebar styling */
 .sidebar {
     width: 200px;
+    min-width: 200px;
     background-color: #f0f2f5; /* WhatsApp light gray */
-    padding: 20px;
+    padding: 15px;
     border-right: 1px solid #ddd;
     overflow-y: auto;
 }
@@ -98,6 +99,7 @@ body {
     margin-top: 0;
     font-size: 16px;
     font-weight: 500;
+    margin-bottom: 15px;
 }
 
 .sidebar ul {
@@ -108,6 +110,7 @@ body {
 .sidebar ul li {
     padding: 10px;
     cursor: pointer;
+    border-radius: 5px;
 }
 
 .sidebar ul li:hover {
@@ -116,9 +119,10 @@ body {
 
 /* Conversation panel styling */
 .conversation-panel {
-    width: 300px;
+    width: 30%;
+    min-width: 300px;
     background-color: #fff;
-    padding: 20px;
+    padding: 15px;
     border-right: 1px solid #ddd;
     overflow-y: auto;
 }
@@ -127,6 +131,7 @@ body {
     margin-top: 0;
     font-size: 16px;
     font-weight: 500;
+    margin-bottom: 15px;
 }
 
 .conversation-list {
@@ -140,7 +145,7 @@ body {
     padding: 10px;
     cursor: pointer;
     border-bottom: 1px solid #e0e0e0;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
     background-color: #fff;
     border-radius: 5px;
 }
@@ -173,6 +178,9 @@ body {
 .conversation-details .preview {
     color: #666;
     font-size: 0.9em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Style for the Take Over button */
@@ -212,19 +220,20 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    padding: 20px;
+    background-color: #e5ddd5; /* WhatsApp chat background */
 }
 
-.chat-panel h3 {
-    margin-top: 0;
-    margin-bottom: 10px;
+#clientName {
+    background-color: #075E54; /* WhatsApp green */
+    color: white;
+    padding: 10px 15px;
     font-size: 16px;
     font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .chat-messages {
     flex: 1;
-    max-height: calc(100% - 80px); /* Adjust for header and input height */
     overflow-y: auto;
     padding: 20px 10px;
     background: url('/static/whatsapp-background.jpg') repeat, #e5ddd5; /* WhatsApp chat background */
@@ -335,6 +344,12 @@ body {
 
 .chat-input button:hover {
     background-color: #009688; /* Darker green on hover */
+}
+
+.chat-input button::before {
+    content: "➤";
+    font-size: 18px;
+    transform: rotate(-45deg);
 }
 
 /* Responsive adjustments */
