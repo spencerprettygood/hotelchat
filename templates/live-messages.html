@@ -743,57 +743,56 @@
         }
 
         async function fetchConversations() {
-            const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
-            convoLoadingSpinner.style.display = 'block';
-            try {
-                const response = await fetch('/all-whatsapp-messages');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! Status: ${response.status}`);
-                }
-                const data = await response.json();
-                const conversationList = document.getElementById('conversation-list');
-                conversationList.innerHTML = '';
-                if (data.conversations) {
-                    data.conversations.forEach(convo => {
-                        const convoItem = document.createElement('div');
-                        convoItem.classList.add('conversation-item');
-                        if (currentConversationId === convo.convo_id) {
-                            convoItem.classList.add('active');
-                        }
-                        convoItem.innerHTML = `
-                            <div class="avatar"></div>
-                            <div class="info">
-                                <div class="name">${convo.username}</div>
-                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
-                            </div>
-                        `;
-                        convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
-                        conversationList.appendChild(convoItem);
-                    });
-                }
-            } catch (error) {
-                console.error('Error fetching conversations:', error);
-                showToast('Error fetching conversations', 'error');
-            } finally {
-                convoLoadingSpinner.style.display = 'none';
-            }
+    const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
+    convoLoadingSpinner.style.display = 'block';
+    try {
+        const response = await fetch('/live-messages/all-whatsapp-messages'); // Fixed URL
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
         }
+        const data = await response.json();
+        const conversationList = document.getElementById('conversation-list');
+        conversationList.innerHTML = '';
+        if (data.conversations) {
+            data.conversations.forEach(convo => {
+                const convoItem = document.createElement('div');
+                convoItem.classList.add('conversation-item');
+                if (currentConversationId === convo.convo_id) {
+                    convoItem.classList.add('active');
+                }
+                convoItem.innerHTML = `
+                    <div class="avatar"></div>
+                    <div class="info">
+                        <div class="name">${convo.username}</div>
+                        <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
+                    </div>
+                `;
+                convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
+                conversationList.appendChild(convoItem);
+            });
+        }
+    } catch (error) {
+        console.error('Error fetching conversations:', error);
+        showToast('Error fetching conversations', 'error');
+    } finally {
+        convoLoadingSpinner.style.display = 'none';
+    }
+}
 
         async function fetchSettings() {
-            try {
-                const response = await fetch('/settings');
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch settings: ${response.status}`);
-                }
-                const settings = await response.json();
-                const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
-            } catch (error) {
-                console.error('Error fetching settings:', error);
-                showToast('Error fetching settings', 'error');
-            }
+    try {
+        const response = await fetch('/live-messages/settings'); // Fixed URL
+        if (!response.ok) {
+            throw new Error(`Failed to fetch settings: ${response.status}`);
         }
-
+        const settings = await response.json();
+        const aiToggle = document.getElementById('ai-toggle');
+        aiToggle.checked = settings.ai_enabled === '1';
+    } catch (error) {
+        console.error('Error fetching settings:', error);
+        showToast('Error fetching settings', 'error');
+    }
+}
         async function loadConversation(convoId, username) {
             if (currentConversationId) {
                 socket.emit('leave_conversation', { conversation_id: currentConversationId });
@@ -813,7 +812,7 @@
             const chatLoadingSpinner = document.getElementById('chat-loading-spinner');
             chatLoadingSpinner.style.display = 'block';
             try {
-                const response = await fetch(`/messages?conversation_id=${convoId}`);
+                const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`); // Fixed URL
                 if (!response.ok) {
                     throw new Error(`HTTP error! Status: ${response.status}`);
                 }
@@ -891,10 +890,10 @@
         document.getElementById('ai-toggle').addEventListener('change', async (e) => {
     const aiEnabled = e.target.checked ? '1' : '0';
     try {
-        const response = await fetch('/settings', {
+        const response = await fetch('/live-messages/settings', { // Fixed URL
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ai_enabled: aiEnabled }) // Changed to match server expectation
+            body: JSON.stringify({ ai_enabled: aiEnabled })
         });
         if (!response.ok) {
             throw new Error(`Failed to update AI settings: ${response.status}`);
