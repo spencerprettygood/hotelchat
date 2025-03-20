@@ -997,6 +997,35 @@ def get_settings():
         logger.error(f"❌ Error in /settings: {e}")
         return jsonify({"error": "Failed to fetch settings"}), 500
 
+@app.route("/messages", methods=["GET"])
+@login_required
+def get_messages():
+    try:
+        # Get the conversation_id from the query parameters
+        conversation_id = request.args.get("conversation_id")
+        if not conversation_id:
+            logger.error("❌ Missing conversation_id in /messages request")
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        # Placeholder: Return dummy messages for now
+        # Later, query the database to fetch messages for the conversation_id
+        messages = [
+            {
+                "message": "Hello from User 1!",
+                "timestamp": "2025-03-20T12:00:00Z",
+                "sender": "user"
+            },
+            {
+                "message": "Hi User 1, this is Agent!",
+                "timestamp": "2025-03-20T12:01:00Z",
+                "sender": "agent"
+            }
+        ]
+        return jsonify({"messages": messages}), 200
+    except Exception as e:
+        logger.error(f"❌ Error in /messages: {e}")
+        return jsonify({"error": "Failed to fetch messages"}), 500
+
 # Socket.IO Events
 @socketio.on("connect")
 def handle_connect():
