@@ -363,16 +363,33 @@ def load_user(user_id):
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
+        # Check if the request is JSON (from live-messages.html)
+        if request.is_json:
+            data = request.get_json()
+            username = data.get("username")
+            password = data.get("password")
+        else:
+            # Form submission (from dashboard.html or login.html)
+            username = request.form.get('username')
+            password = request.form.get('password')
+
+        if not username or not password:
+            logger.error("❌ Missing username or password in /login request")
+            return jsonify({"message": "Missing username or password"}), 400
+
         with get_db_connection() as conn:
             c = conn.cursor(cursor_factory=DictCursor)
             c.execute("SELECT id, username, password FROM agents WHERE username = %s", (username,))
             user = c.fetchone()
-            if user and check_password_hash(user['password'], password):
+            if user and user['password'] == password:  # Direct comparison since password is not hashed
                 user_obj = User(user['id'], user['username'])
                 login_user(user_obj)
+                if request.is_json:
+                    return jsonify({"message": "Login successful", "agent": user['username'], "redirect": "/live-messages/"})
                 return redirect(url_for('dashboard.dashboard'))
+            logger.error("❌ Invalid credentials in /login request")
+            if request.is_json:
+                return jsonify({"message": "Invalid credentials"}), 401
             return jsonify({"error": "Invalid credentials"}), 401
     return render_template('login.html')
     try:
