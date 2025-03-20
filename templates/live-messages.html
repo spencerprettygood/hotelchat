@@ -406,6 +406,51 @@
             background-color: #54656F;
         }
     </style>
+</head>
+<body>
+    <div class="container" id="dashboard">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="profile-pic"></div>
+                <div class="title">Amapola Resort (WhatsApp)</div>
+                <div class="ai-toggle-container">
+                    <label for="ai-toggle">AI</label>
+                    <input type="checkbox" id="ai-toggle" checked aria-label="Toggle AI">
+                </div>
+                <div class="icons">
+                    <span aria-label="Menu">⋮</span>
+                </div>
+            </div>
+            <div class="conversation-list" id="conversation-list">
+                <div class="loading-spinner" id="convo-loading-spinner"></div>
+                <!-- Conversations will be appended here -->
+ <![CDATA[>]]>
+            </div>
+        </div>
+        <div class="chat-area">
+            <div class="chat-header" id="chat-header" style="display: none;">
+                <div class="profile-pic"></div>
+                <div class="contact-info">
+                    <h1 id="chat-title">Select a conversation</h1>
+                    <p>End-to-end encrypted</p>
+                </div>
+                <div class="icons">
+                    <span aria-label="Chat options">⋮</span>
+                </div>
+            </div>
+            <div class="chat-container" id="chat-box" aria-live="polite">
+                <div class="loading-spinner" id="chat-loading-spinner"></div>
+                <!-- Messages will be appended here -->
+            </div>
+            <div class="input-container" id="input-container" style="display: none;">
+                <span class="icon" id="attach-icon" aria-label="Attach file" role="button" tabindex="0">📎</span>
+                <input type="text" id="message-input" placeholder="Message" aria-label="Type a message">
+                <button id="send-button" aria-label="Send message" disabled></button>
+            </div>
+        </div>
+    </div>
+    <div class="toast-container" id="toast-container"></div>
+
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
@@ -422,6 +467,10 @@
 
         function showToast(message, type = 'info') {
             const toastContainer = document.getElementById('toast-container');
+            if (!toastContainer) {
+                console.error('Toast container not found.');
+                return;
+            }
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
             toast.setAttribute('role', 'alert');
@@ -462,6 +511,10 @@
 
         function addDateSeparator(dateStr) {
             const chatBox = document.getElementById('chat-box');
+            if (!chatBox) {
+                console.error('Chat box not found.');
+                return;
+            }
             const separator = document.createElement('div');
             separator.className = 'date-separator';
             separator.textContent = dateStr;
@@ -470,6 +523,10 @@
 
         function appendMessage(msg, sender) {
             const chatBox = document.getElementById('chat-box');
+            if (!chatBox) {
+                console.error('Chat box not found.');
+                return;
+            }
             const messageDate = new Date(msg.timestamp);
             const dateStr = formatDateForSeparator(msg.timestamp);
 
@@ -506,6 +563,9 @@
                 return;
             }
 
+            // Log the DOM to debug
+            console.log('DOM loaded. Dashboard element:', dashboardSection);
+
             // Since login is handled by Flask-Login, we can directly fetch conversations and settings
             dashboardSection.style.display = 'flex';
             fetchConversations();
@@ -536,10 +596,42 @@
                     showToast('File attachment is not yet implemented', 'info');
                 });
             }
+
+            const aiToggle = document.getElementById('ai-toggle');
+            if (aiToggle) {
+                aiToggle.addEventListener('change', async (e) => {
+                    const aiEnabled = e.target.checked ? '1' : '0';
+                    try {
+                        const response = await fetch('/live-messages/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ai_enabled: aiEnabled })
+                        });
+                        if (!response.ok) {
+                            throw new Error(`Failed to update AI settings: ${response.status}`);
+                        }
+                        const data = await response.json();
+                        if (data.status !== 'success') {
+                            throw new Error(data.error || 'Unknown error');
+                        }
+                        showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+                    } catch (error) {
+                        console.error('Error updating AI settings:', error);
+                        e.target.checked = !e.target.checked;
+                        showToast(`Error updating AI settings: ${error.message}`, 'error');
+                    }
+                });
+            } else {
+                console.error('AI toggle element not found.');
+            }
         });
 
         async function fetchConversations() {
             const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
+            if (!convoLoadingSpinner) {
+                console.error('Conversation loading spinner not found.');
+                return;
+            }
             convoLoadingSpinner.style.display = 'block';
             try {
                 const response = await fetch('/live-messages/all-whatsapp-messages');
@@ -548,6 +640,10 @@
                 }
                 const data = await response.json();
                 const conversationList = document.getElementById('conversation-list');
+                if (!conversationList) {
+                    console.error('Conversation list not found.');
+                    return;
+                }
                 conversationList.innerHTML = '';
                 if (data.conversations) {
                     data.conversations.forEach(convo => {
@@ -583,7 +679,11 @@
                 }
                 const settings = await response.json();
                 const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
+                if (aiToggle) {
+                    aiToggle.checked = settings.ai_enabled === '1';
+                } else {
+                    console.error('AI toggle element not found during fetchSettings.');
+                }
             } catch (error) {
                 console.error('Error fetching settings:', error);
                 showToast('Error fetching settings', 'error');
@@ -597,9 +697,17 @@
             currentConversationId = convoId;
             socket.emit('join_conversation', { conversation_id: convoId });
 
-            document.getElementById('chat-header').style.display = 'flex';
-            document.getElementById('input-container').style.display = 'flex';
-            document.getElementById('chat-title').textContent = username;
+            const chatHeader = document.getElementById('chat-header');
+            const inputContainer = document.getElementById('input-container');
+            const chatTitle = document.getElementById('chat-title');
+            if (chatHeader && inputContainer && chatTitle) {
+                chatHeader.style.display = 'flex';
+                inputContainer.style.display = 'flex';
+                chatTitle.textContent = username;
+            } else {
+                console.error('Chat header, input container, or chat title not found.');
+                return;
+            }
 
             const conversationItems = document.querySelectorAll('.conversation-item');
             conversationItems.forEach(item => item.classList.remove('active'));
@@ -607,6 +715,10 @@
             if (selectedItem) selectedItem.classList.add('active');
 
             const chatLoadingSpinner = document.getElementById('chat-loading-spinner');
+            if (!chatLoadingSpinner) {
+                console.error('Chat loading spinner not found.');
+                return;
+            }
             chatLoadingSpinner.style.display = 'block';
             try {
                 const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
@@ -615,6 +727,10 @@
                 }
                 const data = await response.json();
                 const chatBox = document.getElementById('chat-box');
+                if (!chatBox) {
+                    console.error('Chat box not found.');
+                    return;
+                }
                 chatBox.innerHTML = '';
                 lastMessageDate = null;
                 const messages = data.messages;
@@ -638,6 +754,10 @@
 
             const messageInput = document.getElementById('message-input');
             const sendButton = document.getElementById('send-button');
+            if (!messageInput || !sendButton) {
+                console.error('Message input or send button not found.');
+                return;
+            }
             const message = messageInput.value.trim();
             if (!message) {
                 showToast('Please enter a message to send', 'error');
@@ -684,29 +804,6 @@
                 });
         }
 
-        document.getElementById('ai-toggle').addEventListener('change', async (e) => {
-            const aiEnabled = e.target.checked ? '1' : '0';
-            try {
-                const response = await fetch('/live-messages/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ai_enabled: aiEnabled })
-                });
-                if (!response.ok) {
-                    throw new Error(`Failed to update AI settings: ${response.status}`);
-                }
-                const data = await response.json();
-                if (data.status !== 'success') {
-                    throw new Error(data.error || 'Unknown error');
-                }
-                showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-            } catch (error) {
-                console.error('Error updating AI settings:', error);
-                e.target.checked = !e.target.checked;
-                showToast(`Error updating AI settings: ${error.message}`, 'error');
-            }
-        });
-
         socket.on('connect', () => {
             isConnected = true;
             showToast('Connected to server', 'success');
@@ -722,6 +819,10 @@
                 appendMessage({ message: data.message, timestamp: new Date().toISOString() }, data.sender);
             }
             const conversationList = document.getElementById('conversation-list');
+            if (!conversationList) {
+                console.error('Conversation list not found.');
+                return;
+            }
             const convoItem = Array.from(conversationList.children).find(item => item.textContent.includes(data.username));
             if (convoItem) {
                 convoItem.querySelector('.last-message').textContent = data.message;
@@ -731,6 +832,10 @@
         socket.on('typing', (data) => {
             if (data.conversation_id === currentConversationId && data.agent !== currentAgent) {
                 const chatBox = document.getElementById('chat-box');
+                if (!chatBox) {
+                    console.error('Chat box not found.');
+                    return;
+                }
                 let typingIndicator = chatBox.querySelector('.typing-indicator');
                 if (!typingIndicator) {
                     typingIndicator = document.createElement('div');
@@ -756,8 +861,12 @@
         socket.on('settings_updated', (settings) => {
             if ('ai_enabled' in settings) {
                 const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
-                showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+                if (aiToggle) {
+                    aiToggle.checked = settings.ai_enabled === '1';
+                    showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+                } else {
+                    console.error('AI toggle element not found during settings update.');
+                }
             }
         });
 
