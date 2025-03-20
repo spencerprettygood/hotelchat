@@ -20,6 +20,7 @@ def login_required(f):
 
 # Define the dashboard route using the blueprint
 @dashboard_bp.route('/dashboard')
+@login_required
 def dashboard():
     try:
         with get_db_connection() as conn:
