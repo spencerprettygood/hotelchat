@@ -268,8 +268,14 @@ def load_user(agent_id):
     return None
 
 # Authentication Endpoints
-@app.route("/login", methods=["POST"])
+@app.route("/login", methods=["GET", "POST"])
 def login():
+    if request.method == "GET":
+        # If the user is already authenticated, redirect to the dashboard
+        if current_user.is_authenticated:
+            return redirect(url_for('dashboard.dashboard'))
+        # Render the login page for GET requests
+        return render_template("login.html")
     try:
         data = request.get_json()
         username = data.get("username")
