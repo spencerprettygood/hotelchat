@@ -795,7 +795,10 @@ def whatsapp():
 
         language = detect_language(message_body, convo_id)
         if booking_intent and ("yes" in message_body.lower() or "proceed" in message_body.lower() or "sí" in message_body.lower()):
-            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \            f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
+            handoff_message = (
+                f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en"
+                else f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
+            )
             log_message(conn, convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
@@ -822,8 +825,10 @@ def whatsapp():
             return jsonify({}), 200
 
         if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
-            handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
-                             "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
+            handoff_message = (
+                "I’ll connect you with a team member to assist with your booking." if language == "en"
+                else "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
+            )
             log_message(conn, convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
@@ -850,8 +855,10 @@ def whatsapp():
             return jsonify({}), 200
 
         if "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
-            response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en" else \
-                      "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
+            response = (
+                "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en"
+                else "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
+            )
         else:
             response = ai_respond(message_body, convo_id)
 
