@@ -190,7 +190,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             conversation_id TEXT,           -- To group messages by conversation
             username TEXT NOT NULL,        -- Display name for the user
-            phone_number TEXT NOT NULL,    -- Phone number of the user
+            phone_number TEXT,             -- Phone number of the user
             chat_id TEXT,                  -- Optional chat ID (e.g., for WhatsApp)
             channel TEXT NOT NULL,         -- 'whatsapp' or 'sms'
             status TEXT DEFAULT 'pending',
@@ -203,19 +203,64 @@ def init_db():
             visible_in_conversations INTEGER DEFAULT 0  -- Whether the conversation is visible in the UI
         )''')
 
-        # Check if conversation_id column exists, and add it if it doesn't
+        # Migrate the conversations table schema
+        # Add missing columns
+        columns_to_add = {
+            'conversation_id': 'TEXT',
+            'phone_number': 'TEXT',
+            'status': 'TEXT DEFAULT \'pending\'',
+            'agent_id': 'INTEGER REFERENCES agents(id)',
+            'last_message_timestamp': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+        }
+        for column, column_type in columns_to_add.items():
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'conversations' AND column_name = %s
+            """, (column,))
+            if not c.fetchone():
+                logger.info(f"ℹ️ Adding missing column {column} to conversations table")
+                c.execute(f"ALTER TABLE conversations ADD COLUMN {column} {column_type}")
+
+        # Update last_updated to last_message_timestamp if last_updated exists
         c.execute("""
             SELECT column_name 
             FROM information_schema.columns 
-            WHERE table_name = 'conversations' AND column_name = 'conversation_id'
+            WHERE table_name = 'conversations' AND column_name = 'last_updated'
         """)
-        if not c.fetchone():
-            logger.info("ℹ️ Adding missing conversation_id column to conversations table")
-            c.execute("ALTER TABLE conversations ADD COLUMN conversation_id TEXT")
-            # Populate the conversation_id column for existing rows
-            c.execute("UPDATE conversations SET conversation_id = phone_number WHERE conversation_id IS NULL")
-            # Add NOT NULL constraint after populating the column
-            c.execute("ALTER TABLE conversations ALTER COLUMN conversation_id SET NOT NULL")
+        if c.fetchone():
+            logger.info("ℹ️ Migrating last_updated to last_message_timestamp")
+            c.execute("""
+                UPDATE conversations 
+                SET last_message_timestamp = TO_TIMESTAMP(last_updated, 'YYYY-MM-DD HH24:MI:SS') 
+                WHERE last_updated IS NOT NULL AND last_message_timestamp IS NULL
+            """)
+            c.execute("ALTER TABLE conversations DROP COLUMN last_updated")
+
+        # Update assigned_agent type from TEXT to INTEGER
+        c.execute("""
+            SELECT data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'conversations' AND column_name = 'assigned_agent'
+        """)
+        result = c.fetchone()
+        if result and result['data_type'] == 'text':
+            logger.info("ℹ️ Converting assigned_agent from TEXT to INTEGER")
+            c.execute("ALTER TABLE conversations ADD COLUMN assigned_agent_temp INTEGER")
+            c.execute("UPDATE conversations SET assigned_agent_temp = CAST(assigned_agent AS INTEGER) WHERE assigned_agent IS NOT NULL")
+            c.execute("ALTER TABLE conversations DROP COLUMN assigned_agent")
+            c.execute("ALTER TABLE conversations RENAME COLUMN assigned_agent_temp TO assigned_agent")
+
+        # Populate conversation_id and phone_number for existing rows
+        c.execute("UPDATE conversations SET conversation_id = chat_id WHERE conversation_id IS NULL")
+        c.execute("UPDATE conversations SET phone_number = chat_id WHERE phone_number IS NULL")
+
+        # Add NOT NULL constraints
+        c.execute("ALTER TABLE conversations ALTER COLUMN conversation_id SET NOT NULL")
+        c.execute("ALTER TABLE conversations ALTER COLUMN phone_number SET NOT NULL")
+
+        # Update visible_in_conversations default to 0 for existing rows
+        c.execute("UPDATE conversations SET visible_in_conversations = 0 WHERE visible_in_conversations IS NULL")
 
         # Create messages table (for individual messages)
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
@@ -226,6 +271,30 @@ def init_db():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             channel TEXT NOT NULL          -- 'whatsapp' or 'sms'
         )''')
+
+        # Drop the existing foreign key constraint on messages.convo_id
+        c.execute("""
+            SELECT constraint_name 
+            FROM information_schema.table_constraints 
+            WHERE table_name = 'messages' AND constraint_type = 'FOREIGN KEY' AND constraint_name = 'messages_convo_id_fkey'
+        """)
+        if c.fetchone():
+            c.execute("ALTER TABLE messages DROP CONSTRAINT messages_convo_id_fkey")
+
+        # Update convo_id in messages to match conversation_id
+        c.execute("""
+            UPDATE messages m
+            SET convo_id = (
+                SELECT c.conversation_id
+                FROM conversations c
+                WHERE CAST(c.id AS TEXT) = m.convo_id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM conversations c
+                WHERE CAST(c.id AS TEXT) = m.convo_id
+            )
+        """)
 
         # Create settings table
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
