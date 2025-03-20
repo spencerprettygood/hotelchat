@@ -1,15 +1,25 @@
+# blueprints/dashboard.py
 from flask import Blueprint, render_template, jsonify
-from flask_login import login_required
+from functools import wraps
 import logging
+from ..app import get_db_connection
+from psycopg2.extras import DictCursor
 
-# Set up logging
+# Create the dashboard blueprint
+dashboard_bp = Blueprint('dashboard', __name__, template_folder='templates')
 logger = logging.getLogger(__name__)
 
-dashboard_bp = Blueprint('dashboard', __name__)
+# Define the login_required decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
-@dashboard_bp.route('/')
-@login_required
-@app.route('/dashboard')
+# Define the dashboard route using the blueprint
+@dashboard_bp.route('/dashboard')
 @login_required
 def dashboard():
     try:
