@@ -30,9 +30,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
-app.config["SESSION_COOKIE_SECURE"] = True
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 CORS(app)
 # Configure Socket.IO with WebSocket support and ping/pong settings
 socketio = SocketIO(
@@ -208,6 +205,47 @@ def init_db():
             visible_in_conversations INTEGER DEFAULT 0  -- Whether the conversation is visible in the UI
         )''')
 
+        # Check for duplicates in conversation_id before adding the UNIQUE constraint
+        c.execute("""
+            SELECT conversation_id, COUNT(*)
+            FROM conversations
+            GROUP BY conversation_id
+            HAVING COUNT(*) > 1;
+        """)
+        duplicates = c.fetchall()
+        if duplicates:
+            logger.warning(f"⚠️ Cannot add UNIQUE constraint on conversation_id due to duplicates: {duplicates}")
+            logger.warning("Please resolve duplicates manually before adding the UNIQUE constraint.")
+        else:
+            # Add UNIQUE constraint on conversation_id if no duplicates exist
+            c.execute("""
+                SELECT constraint_name 
+                FROM information_schema.table_constraints 
+                WHERE table_name = 'conversations' AND constraint_name = 'unique_conversation_id'
+            """)
+            if not c.fetchone():
+                logger.info("ℹ️ Adding UNIQUE constraint on conversation_id")
+                c.execute("ALTER TABLE conversations ADD CONSTRAINT unique_conversation_id UNIQUE (conversation_id);")
+
+        # Add indexes for performance
+        c.execute("""
+            SELECT indexname 
+            FROM pg_indexes 
+            WHERE tablename = 'conversations' AND indexname = 'idx_conversations_conversation_id'
+        """)
+        if not c.fetchone():
+            logger.info("ℹ️ Creating index on conversations.conversation_id")
+            c.execute("CREATE INDEX idx_conversations_conversation_id ON conversations(conversation_id);")
+
+        c.execute("""
+            SELECT indexname 
+            FROM pg_indexes 
+            WHERE tablename = 'conversations' AND indexname = 'idx_conversations_last_message_timestamp'
+        """)
+        if not c.fetchone():
+            logger.info("ℹ️ Creating index on conversations.last_message_timestamp")
+            c.execute("CREATE INDEX idx_conversations_last_message_timestamp ON conversations(last_message_timestamp);")
+
         # Migrate the conversations table schema
         # Add missing columns
         columns_to_add = {
@@ -235,11 +273,15 @@ def init_db():
         """)
         if c.fetchone():
             logger.info("ℹ️ Migrating last_updated to last_message_timestamp")
-            c.execute("""
-                UPDATE conversations 
-                SET last_message_timestamp = TO_TIMESTAMP(last_updated, 'YYYY-MM-DD HH24:MI:SS') 
-                WHERE last_updated IS NOT NULL AND last_message_timestamp IS NULL
-            """)
+            try:
+                c.execute("""
+                    UPDATE conversations 
+                    SET last_message_timestamp = TO_TIMESTAMP(last_updated, 'YYYY-MM-DD HH24:MI:SS') 
+                    WHERE last_updated IS NOT NULL AND last_message_timestamp IS NULL
+                """)
+            except Exception as e:
+                logger.error(f"❌ Error migrating last_updated to last_message_timestamp: {str(e)}")
+                logger.warning("Skipping migration of last_updated column due to error.")
             c.execute("ALTER TABLE conversations DROP COLUMN last_updated")
 
         # Update assigned_agent type from TEXT to INTEGER
@@ -263,9 +305,6 @@ def init_db():
         # Add NOT NULL constraints
         c.execute("ALTER TABLE conversations ALTER COLUMN conversation_id SET NOT NULL")
         c.execute("ALTER TABLE conversations ALTER COLUMN phone_number SET NOT NULL")
-
-        # Update visible_in_conversations default to 0 for existing rows
-        c.execute("UPDATE conversations SET visible_in_conversations = 0 WHERE visible_in_conversations IS NULL")
 
         # Create messages table (for individual messages)
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
@@ -315,6 +354,30 @@ def init_db():
                 WHERE CAST(c.id AS TEXT) = m.convo_id
             )
         """)
+
+        # Add foreign key constraint on messages.convo_id referencing conversations.conversation_id
+        c.execute("""
+            SELECT constraint_name 
+            FROM information_schema.table_constraints 
+            WHERE table_name = 'messages' AND constraint_type = 'FOREIGN KEY' AND constraint_name = 'messages_convo_id_fkey'
+        """)
+        if not c.fetchone():
+            logger.info("ℹ️ Adding foreign key constraint on messages.convo_id")
+            c.execute("""
+                ALTER TABLE messages
+                ADD CONSTRAINT messages_convo_id_fkey
+                FOREIGN KEY (convo_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE;
+            """)
+
+        # Add index on messages.convo_id for performance
+        c.execute("""
+            SELECT indexname 
+            FROM pg_indexes 
+            WHERE tablename = 'messages' AND indexname = 'idx_messages_convo_id'
+        """)
+        if not c.fetchone():
+            logger.info("ℹ️ Creating index on messages.convo_id")
+            c.execute("CREATE INDEX idx_messages_convo_id ON messages(convo_id);")
 
         # Create settings table
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
