@@ -1,25 +1,16 @@
 # blueprints/live_messages.py
-from flask import Blueprint, jsonify, request, render_template, session
-from functools import wraps
+from flask import Blueprint, jsonify, request, render_template
+from flask_login import login_required  # Use Flask-Login's login_required
 import logging
-from app import get_db_connection  # Absolute import
+from app import get_db_connection
 from psycopg2.extras import DictCursor
 
 # Create the live_messages blueprint
 live_messages_bp = Blueprint('live_messages', __name__, template_folder='templates')
 logger = logging.getLogger(__name__)
 
-# Define the login_required decorator
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            return jsonify({"error": "Unauthorized"}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
 @live_messages_bp.route('/live-messages/')
-@login_required
+@login_required  # Use Flask-Login's login_required
 def live_messages():
     return render_template('live-messages.html')
 
@@ -93,15 +84,32 @@ def messages():
         logger.error(f"❌ Error fetching messages: {e}")
         return jsonify({"error": "Failed to fetch messages"}), 500
 
-@live_messages_bp.route('/live-messages/settings')
+@live_messages_bp.route('/live-messages/settings', methods=['GET', 'POST'])
 @login_required
-def get_settings():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor(cursor_factory=DictCursor)
-            c.execute("SELECT key, value FROM settings WHERE key = 'ai_enabled'")
-            setting = c.fetchone()
-        return jsonify({"ai_enabled": setting["value"] if setting else "1"})
-    except Exception as e:
-        logger.error(f"❌ Error fetching settings: {e}")
-        return jsonify({"error": "Failed to fetch settings"}), 500
+def settings():
+    if request.method == 'GET':
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor(cursor_factory=DictCursor)
+                c.execute("SELECT key, value FROM settings WHERE key = 'ai_enabled'")
+                setting = c.fetchone()
+            return jsonify({"ai_enabled": setting["value"] if setting else "1"})
+        except Exception as e:
+            logger.error(f"❌ Error fetching settings: {e}")
+            return jsonify({"error": "Failed to fetch settings"}), 500
+    else:  # POST
+        try:
+            data = request.get_json()
+            ai_enabled = data.get('ai_enabled')
+            if ai_enabled not in ['0', '1']:
+                return jsonify({"error": "Invalid value for ai_enabled"}), 400
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("INSERT INTO settings (key, value) VALUES ('ai_enabled', %s) ON CONFLICT (key) DO UPDATE SET value = %s",
+                          (ai_enabled, ai_enabled))
+                conn.commit()
+            socketio.emit('settings_updated', {'ai_enabled': ai_enabled})
+            return jsonify({"status": "success"})
+        except Exception as e:
+            logger.error(f"❌ Error updating settings: {e}")
+            return jsonify({"error": "Failed to update settings"}), 500
