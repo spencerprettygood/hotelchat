@@ -1106,8 +1106,8 @@ from blueprints.dashboard import dashboard_bp
 from blueprints.live_messages import live_messages_bp
 
 # Register blueprints
-app.register_blueprint(dashboard_bp, url_prefix='/dashboard')
-app.register_blueprint(live_messages_bp, url_prefix='/live-messages')
+app.register_blueprint(dashboard_bp)
+app.register_blueprint(live_messages_bp)
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Flask-SocketIO server")
