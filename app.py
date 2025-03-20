@@ -30,6 +30,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 CORS(app)
 # Configure Socket.IO with WebSocket support and ping/pong settings
 socketio = SocketIO(
