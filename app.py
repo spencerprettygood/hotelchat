@@ -375,50 +375,40 @@ def login():
             username = data.get("username")
             password = data.get("password")
         else:
-            # Form submission (from dashboard.html or login.html)
+            # Form submission (from login.html)
             username = request.form.get('username')
             password = request.form.get('password')
 
         if not username or not password:
             logger.error("❌ Missing username or password in /login request")
-            return jsonify({"message": "Missing username or password"}), 400
-
-        with get_db_connection() as conn:
-            c = conn.cursor(cursor_factory=DictCursor)
-            c.execute("SELECT id, username, password FROM agents WHERE username = %s", (username,))
-            user = c.fetchone()
-            if user and user['password'] == password:  # Direct comparison since password is not hashed
-                user_obj = User(user['id'], user['username'])
-                login_user(user_obj)
-                if request.is_json:
-                    return jsonify({"message": "Login successful", "agent": user['username'], "redirect": "/live-messages/"})
-                return redirect(url_for('dashboard.dashboard'))
-            logger.error("❌ Invalid credentials in /login request")
             if request.is_json:
-                return jsonify({"message": "Invalid credentials"}), 401
-            return jsonify({"error": "Invalid credentials"}), 401
+                return jsonify({"message": "Missing username or password"}), 400
+            return render_template('login.html', error="Missing username or password")
+
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor(cursor_factory=DictCursor)
+                c.execute("SELECT id, username, password FROM agents WHERE username = %s", (username,))
+                user = c.fetchone()
+                if user and user['password'] == password:  # Direct comparison since password is not hashed
+                    user_obj = User(user['id'], user['username'])
+                    login_user(user_obj)
+                    logger.info(f"✅ Login successful for user: {user['username']}")
+                    if request.is_json:
+                        return jsonify({"message": "Login successful", "agent": user['username'], "redirect": "/live-messages/"})
+                    # Handle the 'next' parameter for Flask-Login redirects
+                    next_page = request.args.get('next')
+                    return redirect(next_page) if next_page else redirect(url_for('dashboard.dashboard'))
+                logger.error("❌ Invalid credentials in /login request")
+                if request.is_json:
+                    return jsonify({"message": "Invalid credentials"}), 401
+                return render_template('login.html', error="Invalid username or password")
+        except Exception as e:
+            logger.error(f"❌ Error during login: {e}")
+            if request.is_json:
+                return jsonify({"error": "Server error during login"}), 500
+            return render_template('login.html', error="Server error during login")
     return render_template('login.html')
-    try:
-        data = request.get_json()
-        username = data.get("username")
-        password = data.get("password")
-        if not username or not password:
-            logger.error("❌ Missing username or password in /login request")
-            return jsonify({"message": "Missing username or password"}), 400
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, username FROM agents WHERE username = %s AND password = %s", (username, password))
-            agent = c.fetchone()
-            if agent:
-                agent_obj = Agent(agent['id'], agent['username'])
-                login_user(agent_obj)
-                logger.info(f"✅ Login successful for agent: {agent['username']}")
-                return jsonify({"message": "Login successful", "agent": agent['username']})
-            logger.error("❌ Invalid credentials in /login request")
-            return jsonify({"message": "Invalid credentials"}), 401
-    except Exception as e:
-        logger.error(f"❌ Error in /login: {e}")
-        return jsonify({"error": "Failed to login"}), 500
 
 @app.route("/logout", methods=["POST"])
 @login_required
