@@ -14,3 +14,4 @@ google-auth-httplib2
 google-api-python-client
 python-dateutil==2.9.0.post0
 eventlet==0.36.1
+psycopg2-binary==2.9.9
