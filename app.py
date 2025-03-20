@@ -188,7 +188,7 @@ def init_db():
         # Create conversations table (for conversation metadata)
         c.execute('''CREATE TABLE IF NOT EXISTS conversations (
             id SERIAL PRIMARY KEY,
-            conversation_id TEXT NOT NULL,  -- To group messages by conversation
+            conversation_id TEXT,           -- To group messages by conversation
             username TEXT NOT NULL,        -- Display name for the user
             phone_number TEXT NOT NULL,    -- Phone number of the user
             chat_id TEXT,                  -- Optional chat ID (e.g., for WhatsApp)
@@ -202,6 +202,20 @@ def init_db():
             booking_intent TEXT,           -- Stores booking intent (e.g., dates)
             visible_in_conversations INTEGER DEFAULT 0  -- Whether the conversation is visible in the UI
         )''')
+
+        # Check if conversation_id column exists, and add it if it doesn't
+        c.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'conversations' AND column_name = 'conversation_id'
+        """)
+        if not c.fetchone():
+            logger.info("ℹ️ Adding missing conversation_id column to conversations table")
+            c.execute("ALTER TABLE conversations ADD COLUMN conversation_id TEXT")
+            # Populate the conversation_id column for existing rows
+            c.execute("UPDATE conversations SET conversation_id = phone_number WHERE conversation_id IS NULL")
+            # Add NOT NULL constraint after populating the column
+            c.execute("ALTER TABLE conversations ALTER COLUMN conversation_id SET NOT NULL")
 
         # Create messages table (for individual messages)
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
