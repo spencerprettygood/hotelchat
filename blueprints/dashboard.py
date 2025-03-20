@@ -1,8 +1,8 @@
 # blueprints/dashboard.py
-from flask import Blueprint, render_template, jsonify
+from flask import Blueprint, render_template, jsonify, session
 from functools import wraps
 import logging
-from ..app import get_db_connection
+from app import get_db_connection  # Absolute import
 from psycopg2.extras import DictCursor
 
 # Create the dashboard blueprint
