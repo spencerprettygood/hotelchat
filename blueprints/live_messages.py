@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required, current_user
 from flask_socketio import emit
-from .. import socketio, get_db_connection
+from app import socketio, get_db_connection
 import logging
 
 # Set up logging
