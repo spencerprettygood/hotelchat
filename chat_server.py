@@ -850,6 +850,7 @@ def chat():
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
+    conn = None
     try:
         validator = RequestValidator(os.environ.get("TWILIO_AUTH_TOKEN"))
         request_valid = validator.validate(
@@ -868,166 +869,185 @@ def whatsapp():
             return jsonify({}), 200
 
         prefixed_from = f"whatsapp_{from_number.replace('whatsapp:', '')}"
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, ai_enabled, handoff_notified, assigned_agent, booking_intent FROM conversations WHERE username = %s AND channel = 'whatsapp'", 
-                      (prefixed_from,))
-            result = c.fetchone()
+        conn = get_db_connection()
+        c = conn.cursor()
+        # Check if conversation exists
+        c.execute("SELECT id, ai_enabled, handoff_notified, assigned_agent, booking_intent FROM conversations WHERE username = %s AND channel = 'whatsapp'", 
+                  (prefixed_from,))
+        result = c.fetchone()
 
-            if not result:
-                c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations, last_updated) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                          (prefixed_from, from_number, 'whatsapp', 1, 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-                convo_id = c.fetchone()['id']
-                ai_enabled = 1
-                handoff_notified = 0
-                assigned_agent = None
-                booking_intent = None
-                conn.commit()  # Commit the new conversation
+        if not result:
+            logger.info(f"ℹ️ Creating new conversation for {prefixed_from}")
+            c.execute("INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations, last_updated) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                      (prefixed_from, from_number, 'whatsapp', 1, 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            convo_id = c.fetchone()['id']
+            ai_enabled = 1
+            handoff_notified = 0
+            assigned_agent = None
+            booking_intent = None
+            conn.commit()  # Commit the new conversation
+            logger.info(f"✅ Created new conversation with id {convo_id} for {prefixed_from}")
 
-                language = detect_language(message_body, convo_id)
-                welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
-                log_message(convo_id, "AI", welcome_message, "ai")
-                socketio.emit("new_message", {
-                    "convo_id": convo_id,
-                    "message": welcome_message,
-                    "sender": "ai",
-                    "channel": "whatsapp",
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
-                socketio.emit("live_message", {
-                    "convo_id": convo_id,
-                    "message": welcome_message,
-                    "sender": "ai",
-                    "username": prefixed_from,
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
+            # Verify the conversation exists
+            c.execute("SELECT 1 FROM conversations WHERE id = %s", (convo_id,))
+            if not c.fetchone():
+                logger.error(f"❌ Conversation with id {convo_id} not found after insert")
+                raise ValueError(f"Failed to create conversation with id {convo_id}")
 
-                if not send_whatsapp_message(from_number, welcome_message):
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to WhatsApp", "channel": "whatsapp"})
-            else:
-                convo_id, ai_enabled, handoff_notified, assigned_agent, booking_intent = result
-
-            # Check global AI setting
-            c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-            global_ai_result = c.fetchone()
-            global_ai_enabled = int(global_ai_result['value']) if global_ai_result else 1
-
-            log_message(convo_id, from_number, message_body, "user")
-            socketio.emit("new_message", {
-                "convo_id": convo_id,
-                "message": message_body,
-                "sender": "user",
-                "channel": "whatsapp",
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
-            socketio.emit("live_message", {
-                "convo_id": convo_id,
-                "message": message_body,
-                "sender": "user",
-                "username": prefixed_from,
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
-
-            if not global_ai_enabled or not ai_enabled:
-                logger.info(f"AI response skipped for convo_id {convo_id}: global_ai_enabled={global_ai_enabled}, ai_enabled={ai_enabled}")
-                conn.commit()
-                return jsonify({}), 200
-
+            # Send welcome message
             language = detect_language(message_body, convo_id)
-            if booking_intent and ("yes" in message_body.lower() or "proceed" in message_body.lower() or "sí" in message_body.lower()):
-                handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \
-                                 f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
-                log_message(convo_id, "AI", handoff_message, "ai")
-                socketio.emit("new_message", {
-                    "convo_id": convo_id,
-                    "message": handoff_message,
-                    "sender": "ai",
-                    "channel": "whatsapp",
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
-                socketio.emit("live_message", {
-                    "convo_id": convo_id,
-                    "message": handoff_message,
-                    "sender": "ai",
-                    "username": prefixed_from,
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
-
-                if not send_whatsapp_message(from_number, handoff_message):
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handoff message to WhatsApp", "channel": "whatsapp"})
-
-                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
-                          (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-                conn.commit()
-                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
-                return jsonify({}), 200
-
-            if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
-                handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
-                                 "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
-                log_message(convo_id, "AI", handoff_message, "ai")
-                socketio.emit("new_message", {
-                    "convo_id": convo_id,
-                    "message": handoff_message,
-                    "sender": "ai",
-                    "channel": "whatsapp",
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
-                socketio.emit("live_message", {
-                    "convo_id": convo_id,
-                    "message": handoff_message,
-                    "sender": "ai",
-                    "username": prefixed_from,
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
-
-                if not send_whatsapp_message(from_number, handoff_message):
-                    socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send booking handoff message to WhatsApp", "channel": "whatsapp"})
-
-                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
-                          (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-                conn.commit()
-                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
-                return jsonify({}), 200
-
-            if "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
-                response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en" else \
-                          "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
-            else:
-                response = ai_respond(message_body, convo_id)
-
-            log_message(convo_id, "AI", response, "ai")
+            welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
+            log_message(conn, convo_id, "AI", welcome_message, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
-                "message": response,
+                "message": welcome_message,
                 "sender": "ai",
                 "channel": "whatsapp",
                 "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
             socketio.emit("live_message", {
                 "convo_id": convo_id,
-                "message": response,
+                "message": welcome_message,
                 "sender": "ai",
                 "username": prefixed_from,
                 "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
-            if not send_whatsapp_message(from_number, response):
-                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to WhatsApp", "channel": "whatsapp"})
+            if not send_whatsapp_message(from_number, welcome_message):
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send welcome message to WhatsApp", "channel": "whatsapp"})
+        else:
+            convo_id, ai_enabled, handoff_notified, assigned_agent, booking_intent = result
+            logger.info(f"ℹ️ Found existing conversation with id {convo_id} for {prefixed_from}")
 
-            if "sorry" in response.lower() or "lo siento" in response.lower() or "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
-                c.execute("SELECT handoff_notified FROM conversations WHERE id = %s", (convo_id,))
-                handoff_notified = c.fetchone()['handoff_notified']
-                if not handoff_notified:
-                    c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
-                              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-                    conn.commit()
-                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+        # Check global AI setting
+        c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
+        global_ai_result = c.fetchone()
+        global_ai_enabled = int(global_ai_result['value']) if global_ai_result else 1
+
+        # Log the user's message
+        logger.info(f"ℹ️ Logging user message for convo_id {convo_id}")
+        log_message(conn, convo_id, from_number, message_body, "user")
+        socketio.emit("new_message", {
+            "convo_id": convo_id,
+            "message": message_body,
+            "sender": "user",
+            "channel": "whatsapp",
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "message": message_body,
+            "sender": "user",
+            "username": prefixed_from,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+
+        if not global_ai_enabled or not ai_enabled:
+            logger.info(f"AI response skipped for convo_id {convo_id}: global_ai_enabled={global_ai_enabled}, ai_enabled={ai_enabled}")
             conn.commit()
             return jsonify({}), 200
+
+        language = detect_language(message_body, convo_id)
+        if booking_intent and ("yes" in message_body.lower() or "proceed" in message_body.lower() or "sí" in message_body.lower()):
+            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \
+                             f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
+            log_message(conn, convo_id, "AI", handoff_message, "ai")
+            socketio.emit("new_message", {
+                "convo_id": convo_id,
+                "message": handoff_message,
+                "sender": "ai",
+                "channel": "whatsapp",
+                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            socketio.emit("live_message", {
+                "convo_id": convo_id,
+                "message": handoff_message,
+                "sender": "ai",
+                "username": prefixed_from,
+                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+            if not send_whatsapp_message(from_number, handoff_message):
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send handoff message to WhatsApp", "channel": "whatsapp"})
+
+            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
+                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
+            conn.commit()
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+            return jsonify({}), 200
+
+        if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
+            handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
+                             "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
+            log_message(conn, convo_id, "AI", handoff_message, "ai")
+            socketio.emit("new_message", {
+                "convo_id": convo_id,
+                "message": handoff_message,
+                "sender": "ai",
+                "channel": "whatsapp",
+                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            socketio.emit("live_message", {
+                "convo_id": convo_id,
+                "message": handoff_message,
+                "sender": "ai",
+                "username": prefixed_from,
+                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+            if not send_whatsapp_message(from_number, handoff_message):
+                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send booking handoff message to WhatsApp", "channel": "whatsapp"})
+
+            c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
+                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
+            conn.commit()
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+            return jsonify({}), 200
+
+        if "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
+            response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en" else \
+                      "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
+        else:
+            response = ai_respond(message_body, convo_id)
+
+        log_message(conn, convo_id, "AI", response, "ai")
+        socketio.emit("new_message", {
+            "convo_id": convo_id,
+            "message": response,
+            "sender": "ai",
+            "channel": "whatsapp",
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "message": response,
+            "sender": "ai",
+            "username": prefixed_from,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+
+        if not send_whatsapp_message(from_number, response):
+            socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to WhatsApp", "channel": "whatsapp"})
+
+        if "sorry" in response.lower() or "lo siento" in response.lower() or "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
+            c.execute("SELECT handoff_notified FROM conversations WHERE id = %s", (convo_id,))
+            handoff_notified = c.fetchone()['handoff_notified']
+            if not handoff_notified:
+                c.execute("UPDATE conversations SET handoff_notified = 1, visible_in_conversations = 1, last_updated = %s WHERE id = %s",
+                          (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
+                conn.commit()
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
+        conn.commit()
+        return jsonify({}), 200
     except Exception as e:
+        if conn:
+            conn.rollback()
+            logger.info("ℹ️ Rolled back transaction due to error")
         logger.error(f"❌ Error in /whatsapp endpoint: {str(e)}")
         return jsonify({"error": "Failed to process WhatsApp message"}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @app.route("/whatsapp", methods=["GET"])
 def whatsapp_verify():
