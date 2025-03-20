@@ -8,7 +8,6 @@
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <style>
-       
         .container {
             display: flex;
             height: 100vh;
@@ -190,57 +189,6 @@
             0% { transform: translate(-50%, -50%) rotate(0deg); }
             100% { transform: translate(-50%, -50%) rotate(360deg); }
         }
-    </style>
-</head>
-<body>
-    <div class="container" id="dashboard" style="display: none;">
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <div class="profile-pic"></div>
-                <div class="title">Amapola Resort (WhatsApp)</div>
-                <div class="ai-toggle-container">
-                    <label for="ai-toggle">AI</label>
-                    <input type="checkbox" id="ai-toggle" checked aria-label="Toggle AI">
-                </div>
-                <div class="icons">
-                    <span aria-label="Menu">⋮</span>
-                </div>
-            </div>
-            <div class="conversation-list" id="conversation-list">
-                <div class="loading-spinner" id="convo-loading-spinner"></div>
-                <!-- Conversations will be appended here -->
-            </div>
-        </div>
-        <div class="chat-area">
-            <div class="chat-header" id="chat-header" style="display: none;">
-                <div class="profile-pic"></div>
-                <div class="contact-info">
-                    <h1 id="chat-title">Select a conversation</h1>
-                    <p>End-to-end encrypted</p>
-                </div>
-                <div class="icons">
-                    <span aria-label="Chat options">⋮</span>
-                </div>
-            </div>
-            <div class="chat-container" id="chat-box">
-                <div class="loading-spinner" id="chat-loading-spinner"></div>
-                <!-- Messages will be appended here -->
-            </div>
-                        <div class="chat-container" id="chat-box" aria-live="polite">
-                <div class="loading-spinner" id="chat-loading-spinner"></div>
-                <!-- Messages will be appended here -->
-            </div>
-            <div class="input-container" id="input-container" style="display: none;">
-                <span class="icon" id="emoji-icon" aria-label="Open emoji picker" role="button" tabindex="0">😊</span>
-                <span class="icon" id="attach-icon" aria-label="Attach file" role="button" tabindex="0">📎</span>
-                <input type="text" id="message-input" placeholder="Message" aria-label="Type a message">
-                <button id="send-button" aria-label="Send message" disabled></button>
-            </div>
-        </div>
-    </div>
-    <div class="toast-container" id="toast-container"></div>
-
-    <style>
         .message {
             margin-bottom: 10px;
             display: flex;
@@ -458,15 +406,9 @@
             background-color: #54656F;
         }
     </style>
-        <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io('const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
-    transports: ["websocket", "polling"],
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000
-});'{
+        const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
             transports: ["websocket", "polling"],
             reconnection: true,
             reconnectionAttempts: Infinity,
@@ -558,14 +500,16 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            const loginPage = document.getElementById('loginPage');
             const dashboardSection = document.getElementById('dashboard');
-            if (!loginPage || !dashboardSection) {
-                console.error('Required DOM elements (loginPage, dashboard) are missing.');
+            if (!dashboardSection) {
+                console.error('Required DOM element (dashboard) is missing.');
                 return;
             }
 
-            checkAuthStatus();
+            // Since login is handled by Flask-Login, we can directly fetch conversations and settings
+            dashboardSection.style.display = 'flex';
+            fetchConversations();
+            fetchSettings();
 
             const messageInput = document.getElementById('message-input');
             const sendButton = document.getElementById('send-button');
@@ -586,27 +530,6 @@
                 console.error('Message input or send button not found.');
             }
 
-            const emojiIcon = document.getElementById('emoji-icon');
-            if (emojiIcon) {
-                const picker = document.createElement('emoji-picker');
-                picker.style.position = 'absolute';
-                picker.style.bottom = '60px';
-                picker.style.left = '20px';
-                picker.style.display = 'none';
-                document.body.appendChild(picker);
-
-                emojiIcon.addEventListener('click', () => {
-                    picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
-                });
-
-                picker.addEventListener('emoji-click', (event) => {
-                    messageInput.value += event.detail.unicode;
-                    messageInput.focus();
-                    sendButton.disabled = !messageInput.value.trim();
-                    picker.style.display = 'none';
-                });
-            }
-
             const attachIcon = document.getElementById('attach-icon');
             if (attachIcon) {
                 attachIcon.addEventListener('click', () => {
@@ -615,85 +538,58 @@
             }
         });
 
-        function checkAuthStatus() {
-            fetch('/check-auth')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const loginPage = document.getElementById('loginPage');
-                    const dashboardSection = document.getElementById('dashboard');
-                    if (data.is_authenticated) {
-                        currentAgent = data.agent;
-                        loginPage.style.display = 'none';
-                        dashboardSection.style.display = 'flex';
-                        fetchConversations();
-                        fetchSettings();
-                    } else {
-                        loginPage.style.display = 'flex';
-                        dashboardSection.style.display = 'none';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking auth status:', error);
-                    showToast('Error checking authentication status', 'error');
-                });
-        }
-
         async function fetchConversations() {
-    const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
-    convoLoadingSpinner.style.display = 'block';
-    try {
-        const response = await fetch('/live-messages/all-whatsapp-messages'); // Fixed URL
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        const data = await response.json();
-        const conversationList = document.getElementById('conversation-list');
-        conversationList.innerHTML = '';
-        if (data.conversations) {
-            data.conversations.forEach(convo => {
-                const convoItem = document.createElement('div');
-                convoItem.classList.add('conversation-item');
-                if (currentConversationId === convo.convo_id) {
-                    convoItem.classList.add('active');
+            const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
+            convoLoadingSpinner.style.display = 'block';
+            try {
+                const response = await fetch('/live-messages/all-whatsapp-messages');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
                 }
-                convoItem.innerHTML = `
-                    <div class="avatar"></div>
-                    <div class="info">
-                        <div class="name">${convo.username}</div>
-                        <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
-                    </div>
-                `;
-                convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
-                conversationList.appendChild(convoItem);
-            });
+                const data = await response.json();
+                const conversationList = document.getElementById('conversation-list');
+                conversationList.innerHTML = '';
+                if (data.conversations) {
+                    data.conversations.forEach(convo => {
+                        const convoItem = document.createElement('div');
+                        convoItem.classList.add('conversation-item');
+                        if (currentConversationId === convo.convo_id) {
+                            convoItem.classList.add('active');
+                        }
+                        convoItem.innerHTML = `
+                            <div class="avatar"></div>
+                            <div class="info">
+                                <div class="name">${convo.username}</div>
+                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
+                            </div>
+                        `;
+                        convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
+                        conversationList.appendChild(convoItem);
+                    });
+                }
+            } catch (error) {
+                console.error('Error fetching conversations:', error);
+                showToast('Error fetching conversations', 'error');
+            } finally {
+                convoLoadingSpinner.style.display = 'none';
+            }
         }
-    } catch (error) {
-        console.error('Error fetching conversations:', error);
-        showToast('Error fetching conversations', 'error');
-    } finally {
-        convoLoadingSpinner.style.display = 'none';
-    }
-}
 
         async function fetchSettings() {
-    try {
-        const response = await fetch('/live-messages/settings'); // Fixed URL
-        if (!response.ok) {
-            throw new Error(`Failed to fetch settings: ${response.status}`);
+            try {
+                const response = await fetch('/live-messages/settings');
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch settings: ${response.status}`);
+                }
+                const settings = await response.json();
+                const aiToggle = document.getElementById('ai-toggle');
+                aiToggle.checked = settings.ai_enabled === '1';
+            } catch (error) {
+                console.error('Error fetching settings:', error);
+                showToast('Error fetching settings', 'error');
+            }
         }
-        const settings = await response.json();
-        const aiToggle = document.getElementById('ai-toggle');
-        aiToggle.checked = settings.ai_enabled === '1';
-    } catch (error) {
-        console.error('Error fetching settings:', error);
-        showToast('Error fetching settings', 'error');
-    }
-}
+
         async function loadConversation(convoId, username) {
             if (currentConversationId) {
                 socket.emit('leave_conversation', { conversation_id: currentConversationId });
@@ -713,7 +609,7 @@
             const chatLoadingSpinner = document.getElementById('chat-loading-spinner');
             chatLoadingSpinner.style.display = 'block';
             try {
-                const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`); // Fixed URL
+                const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
                 if (!response.ok) {
                     throw new Error(`HTTP error! Status: ${response.status}`);
                 }
@@ -789,27 +685,27 @@
         }
 
         document.getElementById('ai-toggle').addEventListener('change', async (e) => {
-    const aiEnabled = e.target.checked ? '1' : '0';
-    try {
-        const response = await fetch('/live-messages/settings', { // Fixed URL
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ai_enabled: aiEnabled })
+            const aiEnabled = e.target.checked ? '1' : '0';
+            try {
+                const response = await fetch('/live-messages/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ai_enabled: aiEnabled })
+                });
+                if (!response.ok) {
+                    throw new Error(`Failed to update AI settings: ${response.status}`);
+                }
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    throw new Error(data.error || 'Unknown error');
+                }
+                showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+            } catch (error) {
+                console.error('Error updating AI settings:', error);
+                e.target.checked = !e.target.checked;
+                showToast(`Error updating AI settings: ${error.message}`, 'error');
+            }
         });
-        if (!response.ok) {
-            throw new Error(`Failed to update AI settings: ${response.status}`);
-        }
-        const data = await response.json();
-        if (data.status !== 'success') {
-            throw new Error(data.error || 'Unknown error');
-        }
-        showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-    } catch (error) {
-        console.error('Error updating AI settings:', error);
-        e.target.checked = !e.target.checked;
-        showToast(`Error updating AI settings: ${error.message}`, 'error');
-    }
-});
 
         socket.on('connect', () => {
             isConnected = true;
