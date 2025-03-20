@@ -19,7 +19,7 @@ def login_required(f):
     return decorated_function
 
 # Define the dashboard route using the blueprint
-@dashboard_bp.route('/dashboard')
+@dashboard_bp.route('/dashboard/')
 @login_required
 def dashboard():
     try:
