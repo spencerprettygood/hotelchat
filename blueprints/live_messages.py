@@ -44,41 +44,20 @@ def all_whatsapp_messages():
             for row in rows:
                 convo_id = row['convo_id']
                 if convo_id not in conversations:
-                    # Handle last_message_timestamp (should be a datetime object)
-                    last_message_timestamp = row['last_message_timestamp']
-                    if isinstance(last_message_timestamp, str):
-                        try:
-                            last_message_timestamp = datetime.strptime(last_message_timestamp, '%Y-%m-%d %H:%M:%S')
-                        except ValueError as e:
-                            logger.error(f"Failed to parse last_message_timestamp '{last_message_timestamp}': {e}")
-                            last_message_timestamp = None
-                    # If it's already a datetime object, no parsing needed
-
                     conversations[convo_id] = {
                         'convo_id': convo_id,
                         'username': row['username'],
                         'phone_number': row['phone_number'],
                         'channel': row['channel'],
                         'status': row['status'],
-                        'last_message_timestamp': last_message_timestamp.isoformat() if last_message_timestamp else None,
+                        'last_message_timestamp': row['last_message_timestamp'].isoformat() if row['last_message_timestamp'] else None,
                         'messages': []
                     }
                 if row['message']:  # If there is a message (not NULL)
-                    # Handle message timestamp (stored as text in the database)
-                    message_timestamp = row['timestamp']
-                    if message_timestamp and isinstance(message_timestamp, str):
-                        try:
-                            message_timestamp = datetime.strptime(message_timestamp, '%Y-%m-%d %H:%M:%S')
-                        except ValueError as e:
-                            logger.error(f"Failed to parse message timestamp '{message_timestamp}': {e}")
-                            message_timestamp = None
-                    else:
-                        message_timestamp = None
-
                     conversations[convo_id]['messages'].append({
                         'message': row['message'],
                         'sender': row['sender'],
-                        'timestamp': message_timestamp.isoformat() if message_timestamp else None
+                        'timestamp': row['timestamp'].isoformat() if row['timestamp'] else None
                     })
 
             # Convert to list for JSON response
