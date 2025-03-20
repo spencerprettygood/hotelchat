@@ -13,6 +13,7 @@
             height: 100vh;
             width: 100vw; /* Ensure full viewport width */
             transition: all 0.3s ease; /* Smooth transition for resizing */
+        }
         .sidebar {
             width: 30%;
             min-width: 300px;
@@ -21,6 +22,7 @@
             display: flex;
             flex-direction: column;
             transition: width 0.3s ease; /* Smooth transition for sidebar width */
+        }
         .sidebar-header {
             background-color: #075E54;
             color: white;
@@ -430,7 +432,6 @@
             <div class="conversation-list" id="conversation-list">
                 <div class="loading-spinner" id="convo-loading-spinner"></div>
                 <!-- Conversations will be appended here -->
- <![CDATA[>]]>
             </div>
         </div>
         <div class="chat-area">
@@ -702,10 +703,18 @@
             }
             currentConversationId = convoId;
             socket.emit('join_conversation', { conversation_id: convoId });
-            // ...
-            const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
-            // ...
-        }
+
+            const chatHeader = document.getElementById('chat-header');
+            const inputContainer = document.getElementById('input-container');
+            const chatTitle = document.getElementById('chat-title');
+            if (chatHeader && inputContainer && chatTitle) {
+                chatHeader.style.display = 'flex';
+                inputContainer.style.display = 'flex';
+                chatTitle.textContent = username;
+            } else {
+                console.error('Chat header, input container, or chat title not found.');
+                return;
+            }
 
             const conversationItems = document.querySelectorAll('.conversation-item');
             conversationItems.forEach(item => item.classList.remove('active'));
