@@ -889,27 +889,27 @@
         }
 
         document.getElementById('ai-toggle').addEventListener('change', async (e) => {
-            const aiEnabled = e.target.checked ? '1' : '0';
-            try {
-                const response = await fetch('/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: 'ai_enabled', value: aiEnabled })
-                });
-                if (!response.ok) {
-                    throw new Error(`Failed to update AI settings: ${response.status}`);
-                }
-                const data = await response.json();
-                if (data.status !== 'success') {
-                    throw new Error(data.error || 'Unknown error');
-                }
-                showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-            } catch (error) {
-                console.error('Error updating AI settings:', error);
-                e.target.checked = !e.target.checked;
-                showToast(`Error updating AI settings: ${error.message}`, 'error');
-            }
+    const aiEnabled = e.target.checked ? '1' : '0';
+    try {
+        const response = await fetch('/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ai_enabled: aiEnabled }) // Changed to match server expectation
         });
+        if (!response.ok) {
+            throw new Error(`Failed to update AI settings: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data.status !== 'success') {
+            throw new Error(data.error || 'Unknown error');
+        }
+        showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+    } catch (error) {
+        console.error('Error updating AI settings:', error);
+        e.target.checked = !e.target.checked;
+        showToast(`Error updating AI settings: ${error.message}`, 'error');
+    }
+});
 
         socket.on('connect', () => {
             isConnected = true;
