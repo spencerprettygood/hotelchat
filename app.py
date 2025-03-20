@@ -1,7 +1,7 @@
 import eventlet
 eventlet.monkey_patch()
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -164,6 +164,14 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
+# Import blueprints
+from blueprints.dashboard import dashboard_bp
+from blueprints.live_messages import live_messages_bp
+
+# Register blueprints
+app.register_blueprint(dashboard_bp, url_prefix='/dashboard')
+app.register_blueprint(live_messages_bp, url_prefix='/live-messages')
+
 # Database connection
 def get_db_connection():
     try:
@@ -232,12 +240,11 @@ def init_db():
         conn.commit()
         logger.info("✅ Database initialized")
 
-# Remove add_test_conversations since init_db handles test data
 # Initialize database
 init_db()
 
 def log_message(conn, convo_id, user, message, sender):
-    with get_db_connection() as conn:
+    with conn:
         c = conn.cursor()
         try:
             c.execute("INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
@@ -315,167 +322,6 @@ def check_auth():
     except Exception as e:
         logger.error(f"❌ Error in /check-auth: {e}")
         return jsonify({"error": "Failed to check authentication"}), 500
-
-# Page Endpoints
-@app.route("/live-messages")
-@login_required
-def live_messages_page():
-    try:
-        return render_template("live-messages.html")
-    except Exception as e:
-        logger.error(f"❌ Error rendering live-messages page: {e}")
-        return jsonify({"error": "Failed to load live-messages page"}), 500
-
-@app.route("/")
-def index():
-    try:
-        return render_template("dashboard.html")
-    except Exception as e:
-        logger.error(f"❌ Error rendering dashboard page: {e}")
-        return jsonify({"error": "Failed to load dashboard page"}), 500
-
-# Dashboard Data Endpoint
-@app.route("/dashboard-data")
-@login_required
-def dashboard_data():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            # Total WhatsApp conversations
-            c.execute("SELECT COUNT(*) FROM conversations WHERE channel = 'whatsapp'")
-            total_convos = c.fetchone()['count']
-            # Conversations needing handoff
-            c.execute("SELECT COUNT(*) FROM conversations WHERE channel = 'whatsapp' AND handoff_notified = 1")
-            handoff_convos = c.fetchone()['count']
-            # Total messages
-            c.execute("SELECT COUNT(*) FROM messages")
-            total_messages = c.fetchone()['count']
-            # AI messages
-            c.execute("SELECT COUNT(*) FROM messages WHERE sender = 'ai'")
-            ai_messages = c.fetchone()['count']
-            # Agent messages
-            c.execute("SELECT COUNT(*) FROM messages WHERE sender = 'agent'")
-            agent_messages = c.fetchone()['count']
-            # Recent conversations (last 5)
-            c.execute("SELECT id, username, chat_id, channel, handoff_notified, last_updated FROM conversations WHERE channel = 'whatsapp' ORDER BY last_updated DESC LIMIT 5")
-            recent_convos = [{"id": row["id"], "username": row["username"], "chat_id": row["chat_id"], "channel": row["channel"], "handoff_notified": row["handoff_notified"], "last_updated": row["last_updated"]} for row in c.fetchall()]
-            return jsonify({
-                "total_conversations": total_convos,
-                "handoff_conversations": handoff_convos,
-                "total_messages": total_messages,
-                "ai_messages": ai_messages,
-                "agent_messages": agent_messages,
-                "recent_conversations": recent_convos
-            })
-    except Exception as e:
-        logger.error(f"❌ Error fetching dashboard data: {e}")
-        return jsonify({"error": "Failed to fetch dashboard data"}), 500
-
-# Conversations and Messages Endpoints
-@app.route("/conversations", methods=["GET"])
-@login_required
-def get_conversations():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("""
-                SELECT id, username, chat_id, channel, assigned_agent, last_updated
-                FROM conversations
-                WHERE visible_in_conversations = 1 AND channel = 'whatsapp'
-                ORDER BY last_updated DESC
-            """)
-            conversations = []
-            for row in c.fetchall():
-                display_name = row['username']
-                conversations.append({
-                    "id": row['id'],
-                    "username": row['username'],
-                    "chat_id": row['chat_id'],
-                    "channel": row['channel'],
-                    "assigned_agent": row['assigned_agent'],
-                    "display_name": f"{display_name} ({row['channel']})",
-                    "last_updated": row['last_updated']
-                })
-            logger.info(f"✅ Fetched {len(conversations)} conversations for dashboard")
-            return jsonify(conversations)
-    except Exception as e:
-        logger.error(f"❌ Error fetching conversations: {e}")
-        return jsonify({"error": "Failed to fetch conversations"}), 500
-
-@app.route("/messages", methods=["GET"])
-@login_required
-def get_messages():
-    try:
-        convo_id = request.args.get("conversation_id")
-        if not convo_id:
-            logger.error("❌ Missing conversation ID in /messages request")
-            return jsonify({"error": "Missing conversation ID"}), 400
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT username, chat_id FROM conversations WHERE id = %s", (convo_id,))
-            result = c.fetchone()
-            if not result:
-                logger.error(f"❌ Conversation not found: {convo_id}")
-                return jsonify({"error": "Conversation not found"}), 404
-            username = result['username']
-            chat_id = result['chat_id']
-            c.execute("""
-                SELECT sender, message, timestamp
-                FROM messages
-                WHERE convo_id = %s
-                ORDER BY timestamp ASC
-            """, (convo_id,))
-            messages = [
-                {
-                    "sender": row['sender'],
-                    "message": row['message'],
-                    "timestamp": row['timestamp']
-                }
-                for row in c.fetchall()
-            ]
-            logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
-            return jsonify({"messages": messages, "username": username, "chat_id": chat_id})
-    except Exception as e:
-        logger.error(f"❌ Error fetching messages for convo_id {convo_id}: {e}")
-        return jsonify({"error": "Failed to fetch messages"}), 500
-
-@app.route("/check-visibility", methods=["GET"])
-@login_required
-def check_visibility():
-    try:
-        convo_id = request.args.get("conversation_id")
-        if not convo_id:
-            logger.error("❌ Missing conversation ID in /check-visibility request")
-            return jsonify({"error": "Missing conversation ID"}), 400
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT visible_in_conversations FROM conversations WHERE id = %s", (convo_id,))
-            result = c.fetchone()
-            if not result:
-                logger.error(f"❌ Conversation not found: {convo_id}")
-                return jsonify({"error": "Conversation not found"}), 404
-            visible = bool(result['visible_in_conversations'])
-            logger.info(f"✅ Visibility check for convo ID {convo_id}: {visible}")
-            return jsonify({"visible": visible})
-    except Exception as e:
-        logger.error(f"❌ Error checking visibility for convo ID {convo_id}: {e}")
-        return jsonify({"error": "Failed to check visibility"}), 500
-
-@app.route("/all-whatsapp-messages")
-@login_required
-def all_whatsapp_messages():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, username, chat_id, channel FROM conversations WHERE channel = 'whatsapp'")
-            conversations = [{"convo_id": row["id"], "username": row["username"], "chat_id": row["chat_id"], "channel": row["channel"]} for row in c.fetchall()]
-            for convo in conversations:
-                c.execute("SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp", (convo["convo_id"],))
-                convo["messages"] = [{"message": row["message"], "sender": row["sender"], "timestamp": row["timestamp"]} for row in c.fetchall()]
-        return jsonify({"conversations": conversations})
-    except Exception as e:
-        logger.error(f"❌ Error fetching WhatsApp messages: {e}")
-        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
 
 # Messaging Helper Functions
 def send_whatsapp_message(phone_number, text):
@@ -897,7 +743,7 @@ def whatsapp():
             # Send welcome message
             language = detect_language(message_body, convo_id)
             welcome_message = "Gracias por contactarnos." if language == "es" else "Thank you for contacting us."
-            log_message(conn, convo_id, "AI", welcome_message, "ai")  # Add conn as the first argument
+            log_message(conn, convo_id, "AI", welcome_message, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": welcome_message,
@@ -926,7 +772,7 @@ def whatsapp():
 
         # Log the user's message
         logger.info(f"ℹ️ Logging user message for convo_id {convo_id}")
-        log_message(conn, convo_id, from_number, message_body, "user")  # Add conn as the first argument
+        log_message(conn, convo_id, from_number, message_body, "user")
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": message_body,
@@ -949,9 +795,8 @@ def whatsapp():
 
         language = detect_language(message_body, convo_id)
         if booking_intent and ("yes" in message_body.lower() or "proceed" in message_body.lower() or "sí" in message_body.lower()):
-            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \
-                             f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
-            log_message(conn, convo_id, "AI", handoff_message, "ai")  # Add conn as the first argument
+            handoff_message = f"Great! An agent will assist you with booking for {booking_intent}. Please wait." if language == "en" else \            f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
+            log_message(conn, convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": handoff_message,
@@ -979,7 +824,7 @@ def whatsapp():
         if "book" in message_body.lower() or "booking" in message_body.lower() or "reservar" in message_body.lower():
             handoff_message = "I’ll connect you with a team member to assist with your booking." if language == "en" else \
                              "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
-            log_message(conn, convo_id, "AI", handoff_message, "ai")  # Add conn as the first argument
+            log_message(conn, convo_id, "AI", handoff_message, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": handoff_message,
@@ -1010,7 +855,7 @@ def whatsapp():
         else:
             response = ai_respond(message_body, convo_id)
 
-        log_message(conn, convo_id, "AI", response, "ai")  # Add conn as the first argument
+        log_message(conn, convo_id, "AI", response, "ai")
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": response,
@@ -1069,79 +914,6 @@ def whatsapp_verify():
     except Exception as e:
         logger.error(f"❌ Error in /whatsapp GET endpoint: {str(e)}")
         return jsonify({"error": "Failed to verify WhatsApp webhook"}), 500
-
-# Agent Actions
-@app.route("/assign-agent", methods=["POST"])
-@login_required
-def assign_agent():
-    try:
-        data = request.get_json()
-        convo_id = data.get("convo_id")
-        agent_username = current_user.username
-
-        if not convo_id:
-            logger.error("❌ Missing conversation ID in /assign-agent request")
-            return jsonify({"error": "Missing conversation ID"}), 400
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT username, chat_id, channel FROM conversations WHERE id = %s", (convo_id,))
-            result = c.fetchone()
-            if not result:
-                logger.error(f"❌ Conversation not found: {convo_id}")
-                return jsonify({"error": "Conversation not found"}), 404
-
-            username, chat_id, channel = result
-            c.execute("UPDATE conversations SET assigned_agent = %s, ai_enabled = 0, last_updated = %s WHERE id = %s",
-                      (agent_username, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), convo_id))
-            conn.commit()
-
-        socketio.emit("agent_assigned", {
-            "convo_id": convo_id,
-            "agent": agent_username,
-            "user": chat_id or username,
-            "channel": channel
-        })
-        socketio.emit("refresh_conversations", {
-            "conversation_id": convo_id,
-            "user": chat_id or username,
-            "channel": channel
-        })
-        logger.info(f"✅ Agent {agent_username} assigned to convo_id {convo_id}")
-        return jsonify({"message": "Agent assigned successfully"})
-    except Exception as e:
-        logger.error(f"❌ Error in /assign-agent: {e}")
-        return jsonify({"error": "Failed to assign agent"}), 500
-
-@app.route("/settings", methods=["GET", "POST"])
-@login_required
-def settings():
-    try:
-        if request.method == "POST":
-            data = request.get_json()
-            logger.info(f"ℹ️ Received /settings POST request with data: {data}")
-            ai_enabled = data.get("ai_enabled")
-            if ai_enabled is None:
-                logger.error("❌ Missing ai_enabled in /settings POST request")
-                return jsonify({"error": "Missing ai_enabled parameter"}), 400
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = %s",
-                          ("ai_enabled", ai_enabled, ai_enabled))
-                conn.commit()
-            socketio.emit("settings_updated", {"ai_enabled": ai_enabled})
-            logger.info(f"✅ Updated settings: ai_enabled = {ai_enabled}")
-            return jsonify({"status": "success"})
-        else:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("SELECT value FROM settings WHERE key = 'ai_enabled'")
-                result = c.fetchone()
-                ai_enabled = result['value'] if result else '1'
-            return jsonify({"ai_enabled": ai_enabled})
-    except Exception as e:
-        logger.error(f"❌ Error in /settings endpoint: {e}")
-        return jsonify({"error": "Failed to access settings"}), 500
 
 # Testing Endpoint
 @app.route("/test-ai", methods=["POST"])
@@ -1241,7 +1013,7 @@ def handle_agent_message(data):
                 logger.error(f"❌ Conversation not found in agent_message: {convo_id}")
                 emit("error", {"message": "Conversation not found"})
                 return
-            chat_id, channel = result
+            username, chat_id, channel = result
 
         log_message(conn, convo_id, username, message, "agent")
         emit("new_message", {
@@ -1351,3 +1123,4 @@ def handle_hand_back_to_ai(data):
 if __name__ == "__main__":
     logger.info("🚀 Starting Flask-SocketIO server")
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+                            
