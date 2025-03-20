@@ -954,6 +954,38 @@ def test_ai():
         logger.error(f"❌ Error in /test-ai: {e}")
         return jsonify({"error": "Failed to test AI"}), 500
 
+@app.route("/all-whatsapp-messages", methods=["GET"])
+@login_required
+def get_all_whatsapp_messages():
+    try:
+        # Placeholder: Return dummy data for now
+        # Later, query the database to fetch WhatsApp messages
+        messages = [
+            {"id": 1, "from": "+1234567890", "body": "Hello!", "timestamp": "2025-03-20T12:00:00Z"},
+            {"id": 2, "from": "+0987654321", "body": "Hi there!", "timestamp": "2025-03-20T12:01:00Z"}
+        ]
+        return jsonify(messages), 200
+    except Exception as e:
+        logger.error(f"❌ Error in /all-whatsapp-messages: {e}")
+        return jsonify({"error": "Failed to fetch messages"}), 500
+
+@app.route("/settings", methods=["GET"])
+@login_required
+def get_settings():
+    try:
+        # Placeholder: Return dummy settings for now
+        # Later, fetch actual settings from the database or environment
+        settings = {
+            "theme": "light",
+            "notifications": True,
+            "language": "en",
+            "ai_enabled": "1"  # Match the format expected by the frontend
+        }
+        return jsonify(settings), 200
+    except Exception as e:
+        logger.error(f"❌ Error in /settings: {e}")
+        return jsonify({"error": "Failed to fetch settings"}), 500
+
 # Socket.IO Events
 @socketio.on("connect")
 def handle_connect():
