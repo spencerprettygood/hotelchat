@@ -29,10 +29,10 @@ def all_whatsapp_messages():
             c = conn.cursor(cursor_factory=DictCursor)
             logger.debug("Executing SQL query to fetch WhatsApp conversations")
             c.execute("""
-                SELECT c.id AS convo_id, c.username, c.phone_number, c.channel, c.status, c.last_message_timestamp,
+                SELECT c.conversation_id AS convo_id, c.username, c.phone_number, c.channel, c.status, c.last_message_timestamp,
                        m.message, m.sender, m.timestamp
                 FROM conversations c
-                LEFT JOIN messages m ON c.id = m.convo_id
+                LEFT JOIN messages m ON c.conversation_id = m.convo_id
                 WHERE c.channel = 'whatsapp' AND c.visible_in_conversations = 1
                 ORDER BY c.last_message_timestamp DESC, m.timestamp ASC
             """)
@@ -42,10 +42,10 @@ def all_whatsapp_messages():
             # Group messages by conversation
             conversations = {}
             for row in rows:
-                convo_id = row['convo_id']
+                convo_id = row['convo_id']  # This is c.conversation_id (text)
                 if convo_id not in conversations:
                     conversations[convo_id] = {
-                        'convo_id': convo_id,
+                        'convo_id': convo_id,  # Store as string
                         'username': row['username'],
                         'phone_number': row['phone_number'],
                         'channel': row['channel'],
