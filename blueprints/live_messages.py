@@ -69,10 +69,6 @@ def all_whatsapp_messages():
         logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
         return jsonify({'error': f'Failed to fetch conversations: {str(e)}'}), 500
 
-import psycopg2
-import os
-from flask import Blueprint, jsonify, request
-
 live_messages_bp = Blueprint('live_messages', __name__)
 
 @live_messages_bp.route('/messages', methods=['GET'])
