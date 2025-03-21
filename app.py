@@ -1136,10 +1136,19 @@ def whatsapp():
         """, (conversation_id, chat_id, username, phone_number, "whatsapp", timestamp))
         convo = c.fetchone()
 
+        # Log the client's message to the database
         c.execute("""
             INSERT INTO messages (convo_id, message, sender, timestamp, channel)
             VALUES (%s, %s, %s, %s, %s)
         """, (conversation_id, message, "user", timestamp, "whatsapp"))
+
+        # Emit the client's message to the live messaging page
+        socketio.emit("live_message", {
+            "convo_id": conversation_id,
+            "message": message,
+            "sender": "user",
+            "username": username
+        })
 
         ai_enabled = convo["ai_enabled"] if convo else 1
         handoff_notified = convo["handoff_notified"] if convo else 0
@@ -1172,6 +1181,9 @@ def whatsapp():
         else:
             logger.info(f"AI response skipped for conversation_id {conversation_id}: ai_enabled={ai_enabled}")
             socketio.emit("refresh_conversations", {})
+
+        # Emit refresh_conversations to update the conversation list
+        socketio.emit("refresh_conversations", {})
 
         conn.commit()
         logger.info("✅ Processed WhatsApp message successfully")
