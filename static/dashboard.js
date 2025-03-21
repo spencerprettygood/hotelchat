@@ -1,185 +1,9 @@
-// Define Socket.IO instance
-const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
-    transports: ["websocket", "polling"],
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000
-});
+const socket = io();
 
-// Global variables
 let currentConversationId = null;
-let currentAgent = null;
-let lastMessageDate = null;
-let isConnected = false;
-
-// Toast notification function
-function showToast(message, type = 'info') {
-    const toastContainer = document.getElementById('toast-container');
-    if (!toastContainer) {
-        console.error('Toast container not found.');
-        return;
-    }
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.setAttribute('role', 'alert');
-    toast.setAttribute('aria-live', 'assertive');
-    toast.textContent = message;
-    toastContainer.appendChild(toast);
-
-    setTimeout(() => {
-        toast.classList.add('show');
-    }, 100);
-
-    setTimeout(() => {
-        toast.classList.remove('show');
-        setTimeout(() => {
-            toast.remove();
-        }, 300);
-    }, 3000);
-}
-
-// Format timestamp for display
-function formatTimestamp(timestamp) {
-    const date = new Date(timestamp);
-    if (isNaN(date.getTime())) {
-        return 'Invalid Time';
-    }
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-// Format date for message separators
-function formatDateForSeparator(timestamp) {
-    const date = new Date(timestamp);
-    if (isNaN(date.getTime())) {
-        return 'Unknown Date';
-    }
-    const today = new Date();
-    if (date.toDateString() === today.toDateString()) {
-        return 'Today';
-    }
-    const yesterday = new Date(today);
-    yesterday.setDate(today.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) {
-        return 'Yesterday';
-    }
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-// Add date separator to chat
-function addDateSeparator(dateStr) {
-    const chatBox = document.getElementById('chat-box');
-    if (!chatBox) {
-        console.error('Chat box not found.');
-        return;
-    }
-    const separator = document.createElement('div');
-    separator.className = 'date-separator';
-    separator.textContent = dateStr;
-    chatBox.appendChild(separator);
-}
-
-function appendMessage(msg, sender) {
-    console.log('Appending message:', msg, 'Sender:', sender);
-    const chatBox = document.getElementById('chat-box');
-    if (!chatBox) {
-        console.error('Chat box not found.');
-        return;
-    }
-
-    // Validate message properties
-    if (!msg || typeof msg.message !== 'string') {
-        console.error('Invalid message object:', msg);
-        return;
-    }
-
-    const timestamp = msg.timestamp || new Date().toISOString();
-    const messageDate = new Date(timestamp);
-    if (isNaN(messageDate.getTime())) {
-        console.error('Invalid timestamp in message:', msg);
-        return;
-    }
-
-    const dateStr = formatDateForSeparator(timestamp);
-    if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
-        addDateSeparator(dateStr);
-        lastMessageDate = messageDate;
-    }
-
-    const div = document.createElement('div');
-    const isUser = sender === 'user';
-    const isAgent = sender === 'agent';
-    div.className = 'message';
-    div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
-
-    const bubble = document.createElement('div');
-    bubble.className = 'message-bubble';
-    bubble.textContent = msg.message;
-    div.appendChild(bubble);
-
-    const meta = document.createElement('div');
-    meta.className = 'message-meta';
-    const time = formatTimestamp(timestamp);
-    meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ''}`;
-    div.appendChild(meta);
-
-    chatBox.appendChild(div);
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-// Send a message from the agent
-async function sendMessage() {
-    const messageInput = document.getElementById('message-input');
-    const sendButton = document.getElementById('send-button');
-    if (!messageInput || !sendButton) {
-        console.error('Message input or send button not found.');
-        showToast('Message input or send button not found.', 'error');
-        return;
-    }
-
-    const message = messageInput.value.trim();
-    if (!message) {
-        return;
-    }
-
-    if (!currentConversationId) {
-        showToast('No conversation selected.', 'error');
-        return;
-    }
-
-    try {
-        const response = await fetch('/live-messages/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                conversation_id: currentConversationId,
-                message: message,
-                sender: 'agent'
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (data.status !== 'success') {
-            throw new Error(data.error || 'Unknown error');
-        }
-
-        // Clear the input and disable the send button
-        messageInput.value = '';
-        sendButton.disabled = true;
-
-        // Append the message to the chat box
-        appendMessage({ message, timestamp: new Date().toISOString() }, 'agent');
-
-        // Update the conversation list
-        fetchConversations();
-    } catch (error) {
-        console.error('Error sending message:', error);
-        showToast(`Failed to send message: ${error.message}`, 'error');
-    }
-}
+let currentFilter = 'unassigned'; // Default filter
+let currentChannel = null; // Default: no channel filter
+let currentAgent = null; // Store the current agent's username
 
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -191,129 +15,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     checkAuthStatus();
-    fetchSettings();
+    fetchConversations();
+    setInterval(fetchConversations, 10000); // Poll every 10 seconds
 
-    const messageInput = document.getElementById('message-input');
-    const sendButton = document.getElementById('send-button');
-    if (messageInput && sendButton) {
+    // Add event listener for Enter key to send messages
+    const messageInput = document.getElementById('messageInput');
+    if (messageInput) {
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' || e.keyCode === 13) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-        messageInput.addEventListener('input', () => {
-            sendButton.disabled = !messageInput.value.trim();
-            if (messageInput.value.trim() && currentConversationId) {
-                socket.emit('typing', { conversation_id: currentConversationId, agent: currentAgent });
-            }
-        });
-        sendButton.addEventListener('click', sendMessage);
-    } else {
-        console.error('Message input or send button not found.');
-    }
-
-    const attachIcon = document.getElementById('attach-icon');
-    if (attachIcon) {
-        attachIcon.addEventListener('click', () => {
-            showToast('File attachment is not yet implemented', 'info');
-        });
-    }
-
-    const aiToggle = document.getElementById('ai-toggle');
-    const aiToggleError = document.getElementById('ai-toggle-error');
-    if (aiToggle && aiToggleError) {
-        aiToggle.addEventListener('change', async (e) => {
-            const aiEnabled = e.target.checked ? '1' : '0';
-            try {
-                const response = await fetch('/live-messages/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ai_enabled: aiEnabled })
-                });
-                if (!response.ok) {
-                    throw new Error(`Failed to update AI settings: ${response.status}`);
-                }
-                const data = await response.json();
-                if (data.status !== 'success') {
-                    throw new Error(data.error || 'Unknown error');
-                }
-                showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-                aiToggleError.style.display = 'none';
-            } catch (error) {
-                console.error('Error updating AI settings:', error);
-                e.target.checked = !e.target.checked;
-                aiToggleError.textContent = 'Error updating AI settings: ' + error.message;
-                aiToggleError.style.display = 'inline';
-                showToast(`Error updating AI settings: ${error.message}`, 'error');
+                e.preventDefault(); // Prevent default behavior (e.g., new line)
+                sendMessage(); // Call the sendMessage function
             }
         });
     } else {
-        console.error('AI toggle or error element not found.');
-    }
-
-    const logoutButton = document.getElementById('logout-button');
-    if (logoutButton) {
-        logoutButton.addEventListener('click', () => {
-            fetch('/logout', {
-                method: 'POST',
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.message === 'Logged out successfully') {
-                        currentAgent = null;
-                        loginPage.style.display = 'flex';
-                        dashboardSection.style.display = 'none';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error during logout:', error);
-                    showToast('Error during logout: ' + error.message, 'error');
-                });
-        });
-    } else {
-        console.error('Logout button not found.');
+        console.error('Message input not found for adding Enter key listener.');
     }
 });
-
-// Fetch AI settings
-async function fetchSettings() {
-    try {
-        const response = await fetch('/live-messages/settings');
-        if (!response.ok) {
-            throw new Error(`Failed to fetch settings: ${response.status}`);
-        }
-        const settings = await response.json();
-        const aiToggle = document.getElementById('ai-toggle');
-        const aiToggleError = document.getElementById('ai-toggle-error');
-        if (aiToggle && aiToggleError) {
-            aiToggle.checked = settings.ai_enabled === '1';
-            aiToggleError.style.display = 'none';
-        } else {
-            console.error('AI toggle or error element not found during fetchSettings.');
-        }
-    } catch (error) {
-        console.error('Error fetching settings:', error);
-        const aiToggleError = document.getElementById('ai-toggle-error');
-        if (aiToggleError) {
-            aiToggleError.textContent = 'Failed to load AI setting: ' + error.message;
-            aiToggleError.style.display = 'inline';
-        }
-        showToast('Error fetching settings: ' + error.message, 'error');
-    }
-}
 
 // Check if user is authenticated
 function checkAuthStatus() {
     fetch('/check-auth')
         .then(response => {
             if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}`);
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
             }
             return response.json();
         })
@@ -321,20 +45,17 @@ function checkAuthStatus() {
             const loginPage = document.getElementById('loginPage');
             const dashboardSection = document.getElementById('dashboard');
             if (data.is_authenticated) {
-                currentAgent = data.agent;
-                console.log("Current Agent:", currentAgent);
+                currentAgent = data.agent; // Assuming /check-auth returns the agent's username
+                console.log("Current Agent:", currentAgent); // Debug log
                 loginPage.style.display = 'none';
-                dashboardSection.style.display = 'flex';
+                dashboardSection.style.display = 'block';
                 fetchConversations();
             } else {
                 loginPage.style.display = 'flex';
                 dashboardSection.style.display = 'none';
             }
         })
-        .catch(error => {
-            console.error('Error checking auth status:', error);
-            showToast('Error checking auth status: ' + error.message, 'error');
-        });
+        .catch(error => console.error('Error checking auth status:', error));
 }
 
 // Login function for the button
@@ -343,7 +64,6 @@ function login() {
     const passwordInput = document.getElementById('password');
     if (!usernameInput || !passwordInput) {
         console.error('Username or password input missing.');
-        showToast('Username or password input missing.', 'error');
         return;
     }
 
@@ -359,241 +79,380 @@ function login() {
     })
         .then(response => {
             if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}`);
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
             }
             return response.json();
         })
         .then(data => {
             if (data.message === 'Login successful') {
-                currentAgent = data.agent;
-                console.log("Current Agent:", currentAgent);
+                currentAgent = data.agent; // Assuming /login returns the agent's username
+                console.log("Current Agent:", currentAgent); // Debug log
                 document.getElementById('loginPage').style.display = 'none';
-                document.getElementById('dashboard').style.display = 'flex';
+                document.getElementById('dashboard').style.display = 'block';
                 fetchConversations();
             } else {
-                showToast('Login failed: ' + data.message, 'error');
+                alert('Login failed: ' + data.message);
             }
         })
-        .catch(error => {
-            console.error('Error during login:', error);
-            showToast('Error during login: ' + error.message, 'error');
-        });
+        .catch(error => console.error('Error during login:', error));
 }
 
-// Fetch conversations
-async function fetchConversations() {
-    const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
-    if (!convoLoadingSpinner) {
-        console.error('Conversation loading spinner not found.');
+// Logout button
+const logoutButton = document.getElementById('logout-button');
+if (logoutButton) {
+    logoutButton.addEventListener('click', () => {
+        fetch('/logout', {
+            method: 'POST',
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.message === 'Logged out successfully') {
+                    currentAgent = null; // Clear the current agent
+                    document.getElementById('loginPage').style.display = 'flex';
+                    document.getElementById('dashboard').style.display = 'none';
+                }
+            })
+            .catch(error => console.error('Error during logout:', error));
+    });
+} else {
+    console.error('Logout button not found.');
+}
+
+function fetchConversations() {
+    const conversationList = document.getElementById('conversationList');
+    if (!conversationList) {
+        console.error('Conversation list (conversationList) is missing.');
         return;
     }
-    convoLoadingSpinner.style.display = 'block';
-    try {
-        const response = await fetch('/live-messages/all-whatsapp-messages');
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        const data = await response.json();
-        const conversationList = document.getElementById('conversation-list');
-        if (!conversationList) {
-            console.error('Conversation list not found.');
-            return;
-        }
-        conversationList.innerHTML = '';
-        if (data.conversations) {
-            data.conversations.forEach(convo => {
-                const convoItem = document.createElement('div');
-                convoItem.classList.add('conversation-item');
-                if (currentConversationId === convo.convo_id) {
-                    convoItem.classList.add('active');
+
+    fetch('/conversations')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(conversations => {
+            conversationList.innerHTML = '';
+
+            // Filter conversations based on currentFilter and currentChannel
+            let filteredConversations = conversations.filter(convo => {
+                // Filter by channel
+                if (currentChannel && convo.channel !== currentChannel) {
+                    return false;
                 }
-                convoItem.innerHTML = `
-                    <div class="avatar"></div>
-                    <div class="info">
-                        <div class="name">${convo.username}</div>
-                        <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
-                    </div>
-                `;
-                convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
-                conversationList.appendChild(convoItem);
+                // Filter by assignment
+                if (currentFilter === 'unassigned') {
+                    return !convo.assigned_agent;
+                } else if (currentFilter === 'you') {
+                    return convo.assigned_agent === currentAgent;
+                } else if (currentFilter === 'team') {
+                    return convo.assigned_agent && convo.assigned_agent !== currentAgent;
+                }
+                return true; // 'all' filter
             });
-        }
-    } catch (error) {
-        console.error('Error fetching conversations:', error);
-        showToast('Error fetching conversations: ' + error.message, 'error');
-    } finally {
-        convoLoadingSpinner.style.display = 'none';
+
+            // Update counts
+            updateCounts(conversations);
+
+            filteredConversations.forEach(convo => {
+                console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent); // Debug log
+                const li = document.createElement('li');
+                // Add spacing via CSS class
+                li.className = 'conversation-item'; // Add a class for styling
+
+                // Create a container for the conversation info and button
+                const convoContainer = document.createElement('div');
+                convoContainer.style.display = 'flex';
+                convoContainer.style.justifyContent = 'space-between';
+                convoContainer.style.alignItems = 'center';
+
+                // Conversation info
+                const convoInfo = document.createElement('span');
+                convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
+                convoInfo.onclick = () => loadConversation(convo.id);
+                convoInfo.style.cursor = 'pointer';
+                convoContainer.appendChild(convoInfo);
+
+                // Add "Take Over" button for unassigned conversations
+                if (currentFilter === 'unassigned' && !convo.assigned_agent) {
+                    const takeOverButton = document.createElement('button');
+                    takeOverButton.textContent = 'Take Over';
+                    takeOverButton.onclick = (e) => {
+                        e.stopPropagation(); // Prevent triggering loadConversation
+                        takeOverConversation(convo.id);
+                    };
+                    takeOverButton.className = 'take-over-btn'; // Use a CSS class for consistency
+                    convoContainer.appendChild(takeOverButton);
+                }
+
+                // Add "Hand Back to AI" button for conversations assigned to the current agent
+                if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
+                    const handBackButton = document.createElement('button');
+                    handBackButton.textContent = 'Hand Back to AI';
+                    handBackButton.onclick = (e) => {
+                        e.stopPropagation(); // Prevent triggering loadConversation
+                        handBackToAI(convo.id);
+                    };
+                    handBackButton.className = 'handback-button'; // Use the CSS class from dashboard.html
+                    convoContainer.appendChild(handBackButton);
+                }
+
+                li.appendChild(convoContainer);
+                conversationList.appendChild(li);
+            });
+        })
+        .catch(error => console.error('Error fetching conversations:', error));
+}
+
+// Update conversation counts
+function updateCounts(conversations) {
+    const unassignedCount = document.getElementById('unassignedCount');
+    const yourCount = document.getElementById('yourCount');
+    const teamCount = document.getElementById('teamCount');
+    const allCount = document.getElementById('allCount');
+
+    if (unassignedCount && yourCount && teamCount && allCount) {
+        unassignedCount.textContent = conversations.filter(c => !c.assigned_agent).length;
+        yourCount.textContent = conversations.filter(c => c.assigned_agent === currentAgent).length;
+        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== currentAgent).length;
+        allCount.textContent = conversations.length;
     }
 }
 
-async function loadConversation(convoId, username) {
-    if (currentConversationId) {
-        socket.emit('leave_conversation', { conversation_id: currentConversationId });
-    }
+// Load conversations based on filter
+function loadConversations(filter) {
+    currentFilter = filter;
+    fetchConversations();
+}
+
+// Filter by channel
+function filterByChannel(channel) {
+    currentChannel = channel;
+    fetchConversations();
+}
+
+// Take over a conversation
+function takeOverConversation(convoId) {
+    fetch('/handoff', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            conversation_id: convoId,
+        }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.message) {
+                currentFilter = 'you'; // Force switch to "You" filter after taking over
+                fetchConversations(); // Refresh the conversation list
+                if (currentConversationId === convoId) {
+                    loadConversation(convoId); // Reload the current conversation
+                }
+            } else {
+                alert('Error assigning chat: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error during handoff:', error));
+}
+
+// Load a conversation into the active panel
+function loadConversation(convoId) {
     currentConversationId = convoId;
-    socket.emit('join_conversation', { conversation_id: convoId });
-
-    const chatHeader = document.getElementById('chat-header');
-    const inputContainer = document.getElementById('input-container');
-    const chatTitle = document.getElementById('chat-title');
-    if (chatHeader && inputContainer && chatTitle) {
-        chatHeader.style.display = 'flex';
-        inputContainer.style.display = 'flex';
-        chatTitle.textContent = username;
-    } else {
-        console.error('Chat header, input container, or chat title not found.');
+    const chatBox = document.getElementById('chatBox');
+    const clientName = document.getElementById('clientName');
+    if (!chatBox || !clientName) {
+        console.error('Chat box or client name element not found.');
         return;
     }
 
-    const conversationItems = document.querySelectorAll('.conversation-item');
-    conversationItems.forEach(item => item.classList.remove('active'));
-    const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username));
-    if (selectedItem) {
-        selectedItem.classList.add('active');
-    }
+    fetch(`/messages?conversation_id=${convoId}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            const messages = data.messages;
+            const username = data.username;
+            chatBox.innerHTML = '';
 
-    const chatLoadingSpinner = document.getElementById('chat-loading-spinner');
-    if (chatLoadingSpinner) {
-        chatLoadingSpinner.style.display = 'block';
-    } else {
-        console.warn('Chat loading spinner not found. Proceeding without spinner.');
-    }
+            messages.forEach(msg => {
+                const div = document.createElement('div');
+                const isUser = msg.sender === 'user';
+                div.className = 'message'; // Add the base message class
+                div.classList.add(isUser ? 'user-message' : 'agent-message');
 
-    try {
-        // Fetch messages for the given conversation ID
-        const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}, Status Text: ${response.statusText}`);
-        }
+                // Message text
+                const textSpan = document.createElement('span');
+                textSpan.textContent = msg.message;
+                div.appendChild(textSpan);
 
-        // Parse the response as JSON
-        const data = await response.json();
+                // Timestamp
+                const timestampSpan = document.createElement('span');
+                timestampSpan.className = 'message-timestamp';
+                const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
+                timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
+                div.appendChild(timestampSpan);
 
-        // Validate the response data
-        if (!data || !Array.isArray(data.messages)) {
-            throw new Error('Invalid response: messages array is missing or not an array');
-        }
-
-        // Get the chat box element
-        const chatBox = document.getElementById('chat-box');
-        if (!chatBox) {
-            throw new Error('Chat box element not found in the DOM');
-        }
-
-        // Clear the chat box and reset the last message date
-        chatBox.innerHTML = '';
-        lastMessageDate = null;
-
-        // Display a message if the conversation is empty
-        if (data.messages.length === 0) {
-            const emptyMessage = document.createElement('div');
-            emptyMessage.className = 'empty-conversation';
-            emptyMessage.textContent = 'No messages in this conversation yet.';
-            emptyMessage.style.textAlign = 'center';
-            emptyMessage.style.color = '#666';
-            emptyMessage.style.padding = '20px';
-            chatBox.appendChild(emptyMessage);
-        } else {
-            // Append each message to the chat box
-            data.messages.forEach((msg, index) => {
-                try {
-                    appendMessage(msg, msg.sender);
-                } catch (appendError) {
-                    console.error(`Error appending message at index ${index}:`, appendError, msg);
-                }
+                chatBox.appendChild(div);
             });
-        }
 
-        // Scroll to the bottom of the chat box
-        chatBox.scrollTop = chatBox.scrollHeight;
-    } catch (error) {
-        console.error('Error loading messages for conversation ID', convoId, ':', error);
-        showToast(`Failed to load messages: ${error.message}`, 'error');
-    } finally {
-        if (chatLoadingSpinner) {
-            chatLoadingSpinner.style.display = 'none';
-        }
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // Update client name
+            clientName.textContent = username;
+        })
+        .catch(error => console.error('Error loading messages:', error));
+}
+
+// Send a message
+function sendMessage() {
+    if (!currentConversationId) {
+        alert('Please select a conversation.');
+        return;
     }
+
+    const messageInput = document.getElementById('messageInput');
+    if (!messageInput) {
+        console.error('Message input not found.');
+        return;
+    }
+
+    const message = messageInput.value.trim();
+    if (!message) return;
+
+    fetch('/chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            conversation_id: currentConversationId,
+            message: message,
+        }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.reply) {
+                // If AI responds, it will be handled via Socket.IO
+            } else if (data.status === 'success') {
+                // Agent message sent successfully
+                messageInput.value = ''; // Clear the input after sending
+            } else {
+                console.error('Error sending message:', data.error);
+            }
+        })
+        .catch(error => console.error('Error sending message:', error));
+}
+
+// Hand back to AI
+function handBackToAI(convoId) {
+    fetch('/handback-to-ai', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ conversation_id: convoId }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.message) {
+                alert(data.message); // Temporary feedback; consider a better UI solution
+                socket.emit('refresh_conversations', { conversation_id: convoId });
+                if (currentConversationId === convoId) {
+                    loadConversation(convoId); // Refresh the chat panel
+                }
+            } else {
+                alert('Failed to hand back to AI: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error handing back to AI:', error));
 }
 
 // Socket.IO event listeners
-socket.on('connect', () => {
-    isConnected = true;
-    showToast('Connected to server', 'success');
-});
-
-socket.on('disconnect', () => {
-    isConnected = false;
-    showToast('Disconnected from server', 'error');
-});
-
-socket.on('live_message', (data) => {
+socket.on('new_message', (data) => {
+    console.log('New message received:', data);
     if (data.convo_id === currentConversationId) {
-        appendMessage({ message: data.message, timestamp: new Date().toISOString() }, data.sender);
-    }
-    const conversationList = document.getElementById('conversation-list');
-    if (!conversationList) {
-        console.error('Conversation list not found.');
-        return;
-    }
-    const convoItem = Array.from(conversationList.children).find(item => item.textContent.includes(data.username));
-    if (convoItem) {
-        convoItem.querySelector('.last-message').textContent = data.message;
-    }
-});
+        const chatBox = document.getElementById('chatBox');
+        if (chatBox) {
+            const div = document.createElement('div');
+            const isUser = data.sender === 'user';
+            div.className = 'message'; // Add the base message class
+            div.classList.add(isUser ? 'user-message' : 'agent-message');
 
-socket.on('typing', (data) => {
-    if (data.conversation_id === currentConversationId && data.agent !== currentAgent) {
-        const chatBox = document.getElementById('chat-box');
-        if (!chatBox) {
-            console.error('Chat box not found.');
-            return;
+            const textSpan = document.createElement('span');
+            textSpan.textContent = data.message;
+            div.appendChild(textSpan);
+
+            const timestampSpan = document.createElement('span');
+            timestampSpan.className = 'message-timestamp';
+            const now = new Date();
+            timestampSpan.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+            div.appendChild(timestampSpan);
+
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
         }
-        let typingIndicator = chatBox.querySelector('.typing-indicator');
-        if (!typingIndicator) {
-            typingIndicator = document.createElement('div');
-            typingIndicator.className = 'typing-indicator';
-            typingIndicator.innerHTML = '<div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
-            chatBox.appendChild(typingIndicator);
-        }
-        typingIndicator.style.display = 'block';
-        setTimeout(() => {
-            typingIndicator.style.display = 'none';
-        }, 3000);
     }
+    fetchConversations();
 });
 
 socket.on('error', (data) => {
-    showToast(data.message, 'error');
+    console.error('Error received:', data);
+    alert(data.message);
 });
 
-socket.on('refresh_conversations', () => {
+socket.on('refresh_conversations', (data) => {
+    console.log('Refresh conversations event received:', data);
+    const conversationId = data.conversation_id;
+    pollVisibility(conversationId);
     fetchConversations();
 });
 
-socket.on('settings_updated', (settings) => {
-    if ('ai_enabled' in settings) {
-        const aiToggle = document.getElementById('ai-toggle');
-        const aiToggleError = document.getElementById('ai-toggle-error');
-        if (aiToggle && aiToggleError) {
-            aiToggle.checked = settings.ai_enabled === '1';
-            aiToggleError.style.display = 'none';
-            showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-        } else {
-            console.error('AI toggle or error element not found during settings update.');
-        }
-    }
-});
-
-socket.on("reconnect", (attempt) => {
-    fetchConversations();
-    fetchSettings();
-    if (currentConversationId) {
-        socket.emit('join_conversation', { conversation_id: currentConversationId });
-    }
-    showToast('Reconnected to server', 'success');
-});
-
-socket.on("reconnect_error", (error) => {
-    showToast('Failed to reconnect to server', 'error');
-});
+// Poll visibility of a conversation
+function pollVisibility(conversationId) {
+    fetch(`/check-visibility?conversation_id=${conversationId}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.visible) {
+                console.log(`Conversation ${conversationId} is now visible`);
+                fetchConversations(); // Refresh the list again to be sure
+            } else {
+                console.log(`Conversation ${conversationId} is not yet visible, polling again...`);
+                setTimeout(() => pollVisibility(conversationId), 1000);
+            }
+        })
+        .catch(error => {
+            console.error('Error polling visibility:', error);
+            setTimeout(() => pollVisibility(conversationId), 1000);
+        });
+}
