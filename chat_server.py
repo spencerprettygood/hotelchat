@@ -229,9 +229,18 @@ def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
         logger.info(f"Connection object: {type(conn)}")
-        # Drop the table if it exists (to ensure the new schema is applied)
+        # Drop the tables and any dependent objects
         c.execute("DROP TABLE IF EXISTS conversations CASCADE")
-        # Create the table with the correct schema
+        c.execute("DROP TABLE IF EXISTS agents CASCADE")
+        # Create the agents table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS agents (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password TEXT NOT NULL
+            )
+        """)
+        # Create the conversations table with additional columns
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id SERIAL PRIMARY KEY,
@@ -239,22 +248,40 @@ def init_db():
                 message TEXT NOT NULL,
                 response TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                agent_id TEXT
+                agent_id TEXT,
+                channel TEXT,
+                visible_in_conversations BOOLEAN DEFAULT TRUE,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.commit()
         logger.info("✅ Database initialized with PostgreSQL")
+
+        # Add test agents if the table is empty
+        c.execute("SELECT COUNT(*) FROM agents")
+        count = c.fetchone()[0]
+        if count == 0:
+            test_agents = [
+                ("agent1", "password1"),
+                ("agent2", "password2"),
+            ]
+            c.executemany(
+                "INSERT INTO agents (username, password) VALUES (%s, %s)",
+                test_agents
+            )
+            conn.commit()
+            logger.info("✅ Added test agents")
 
         # Add test conversations if the table is empty
         c.execute("SELECT COUNT(*) FROM conversations")
         count = c.fetchone()[0]
         if count == 0:
             test_conversations = [
-                ("+1234567890", "Hello, how can I help you?", "Hi! I'd like some assistance.", "2023-10-01 10:00:00", None),
-                ("+0987654321", "What are your hours?", "Our hours are 9 AM to 5 PM.", "2023-10-01 10:05:00", None),
+                ("+1234567890", "Hello, how can I help you?", "Hi! I'd like some assistance.", "2023-10-01 10:00:00", "agent1", "whatsapp", True, "2023-10-01 10:00:00"),
+                ("+0987654321", "What are your hours?", "Our hours are 9 AM to 5 PM.", "2023-10-01 10:05:00", "agent2", "whatsapp", True, "2023-10-01 10:05:00"),
             ]
             c.executemany(
-                "INSERT INTO conversations (phone_number, message, response, timestamp, agent_id) VALUES (%s, %s, %s, %s, %s)",
+                "INSERT INTO conversations (phone_number, message, response, timestamp, agent_id, channel, visible_in_conversations, last_updated) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 test_conversations
             )
             conn.commit()
