@@ -986,18 +986,20 @@ def whatsapp():
             return jsonify({"error": "Missing message or phone number"}), 400
 
         conversation_id = phone_number
+        chat_id = phone_number  # Set chat_id to the same value as conversation_id
 
         conn = get_db_connection()
         c = conn.cursor(cursor_factory=DictCursor)
 
+        logger.info(f"Inserting conversation: conversation_id={conversation_id}, chat_id={chat_id}, username={username}")
         c.execute("""
-            INSERT INTO conversations (conversation_id, username, phone_number, channel, last_message_timestamp)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO conversations (conversation_id, chat_id, username, phone_number, channel, last_message_timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (conversation_id) DO UPDATE
             SET last_message_timestamp = EXCLUDED.last_message_timestamp,
                 username = EXCLUDED.username
             RETURNING ai_enabled, handoff_notified
-        """, (conversation_id, username, phone_number, "whatsapp", timestamp))
+        """, (conversation_id, chat_id, username, phone_number, "whatsapp", timestamp))
         convo = c.fetchone()
 
         c.execute("""
