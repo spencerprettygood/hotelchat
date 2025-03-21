@@ -200,74 +200,36 @@ def get_db_connection():
 
 # Initialize the database (create tables if they don't exist)
 def init_db():
-    try:
-        with get_db_connection() as conn:
-            logger.info(f"Connection object: {type(conn)}")  # Debug: Log the type of conn
-            c = conn.cursor()
-            # Create conversations table with last_updated column
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL,
-                    chat_id TEXT,
-                    channel TEXT NOT NULL,
-                    ai_enabled INTEGER DEFAULT 1,
-                    handoff_notified INTEGER DEFAULT 0,
-                    assigned_agent TEXT,
-                    booking_intent TEXT,
-                    visible_in_conversations INTEGER DEFAULT 0,
-                    last_updated TIMESTAMP
-                )
-            """)
-            # Add last_updated column if it doesn't exist (for existing databases)
-            try:
-                c.execute("ALTER TABLE conversations ADD COLUMN last_updated TIMESTAMP")
-                logger.info("✅ Added last_updated column to conversations table")
-                # Populate last_updated for existing rows
-                c.execute("UPDATE conversations SET last_updated = CURRENT_TIMESTAMP WHERE last_updated IS NULL")
-                logger.info("✅ Populated last_updated for existing conversations")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" not in str(e).lower():
-                    raise  # Re-raise if it's not a "column already exists" error
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        logger.info(f"Connection object: {type(conn)}")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id SERIAL PRIMARY KEY,
+                phone_number TEXT NOT NULL,
+                message TEXT NOT NULL,
+                response TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                agent_id TEXT
+            )
+        """)
+        conn.commit()
+        logger.info("✅ Database initialized with PostgreSQL")
 
-            # Create messages table
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id INTEGER,
-                    sender TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-                )
-            """)
-
-            # Create settings table
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                )
-            """)
-            # Ensure ai_enabled has a default value
-            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('ai_enabled', '1'))
-
-            # Create agents table
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS agents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL
-                )
-            """)
-            # Add a default agent for testing (username: admin, password: password)
-            c.execute("INSERT OR IGNORE INTO agents (username, password) VALUES (?, ?)", ('admin', 'password'))
-
+        # Add test conversations if the table is empty
+        c.execute("SELECT COUNT(*) FROM conversations")
+        count = c.fetchone()[0]
+        if count == 0:
+            test_conversations = [
+                ("+1234567890", "Hello, how can I help you?", "Hi! I'd like some assistance.", "2023-10-01 10:00:00", None),
+                ("+0987654321", "What are your hours?", "Our hours are 9 AM to 5 PM.", "2023-10-01 10:05:00", None),
+            ]
+            c.executemany(
+                "INSERT INTO conversations (phone_number, message, response, timestamp, agent_id) VALUES (%s, %s, %s, %s, %s)",
+                test_conversations
+            )
             conn.commit()
-            logger.info("✅ Database initialized")
-    except Exception as e:
-        logger.error(f"❌ Error initializing database: {e}")
-        raise
+            logger.info("✅ Added test conversations")
 
 # Add test conversations (for development purposes)
 def add_test_conversations():
