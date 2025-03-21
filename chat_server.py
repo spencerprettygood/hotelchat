@@ -171,20 +171,25 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Database connection
 @contextmanager
 def get_db_connection():
     try:
-        conn = sqlite3.connect("/var/data/chat.db")
-        conn.row_factory = sqlite3.Row
-        logger.info("✅ Opened database connection")
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            cursor_factory=DictCursor
+        )
+        logger.info("✅ Opened PostgreSQL database connection")
         yield conn
     except Exception as e:
-        logger.error(f"❌ Error opening database connection: {e}")
+        logger.error(f"❌ Error opening PostgreSQL database connection: {e}")
         raise
     finally:
         conn.close()
-        logger.info("✅ Closed database connection")
+        logger.info("✅ Closed PostgreSQL database connection")
 
 # Initialize the database (create tables if they don't exist)
 def init_db():
