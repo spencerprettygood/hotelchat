@@ -384,33 +384,62 @@ async function loadConversation(convoId, username) {
     }
 
     try {
+    // Fetch messages for the given conversation ID
         const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
         if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
+            throw new Error(`HTTP error! Status: ${response.status}, Status Text: ${response.statusText}`);
         }
+
+    // Parse the response as JSON
         const data = await response.json();
+
+        // Validate the response data
+        if (!data || !Array.isArray(data.messages)) {
+            throw new Error('Invalid response: messages array is missing or not an array');
+        }
+
+        // Get the chat box element
         const chatBox = document.getElementById('chat-box');
         if (!chatBox) {
-            console.error('Chat box not found.');
-            return;
+            throw new Error('Chat box element not found in the DOM');
         }
+
+        // Clear the chat box and reset the last message date
         chatBox.innerHTML = '';
         lastMessageDate = null;
-        const messages = data.messages;
-        messages.forEach(msg => {
-            appendMessage(msg, msg.sender);
-        });
+
+        // Display a message if the conversation is empty
+        if (data.messages.length === 0) {
+            const emptyMessage = document.createElement('div');
+            emptyMessage.className = 'empty-conversation';
+            emptyMessage.textContent = 'No messages in this conversation yet.';
+            emptyMessage.style.textAlign = 'center';
+            emptyMessage.style.color = '#666';
+            emptyMessage.style.padding = '20px';
+            chatBox.appendChild(emptyMessage);
+        } else {
+            // Append each message to the chat box
+            data.messages.forEach((msg, index) => {
+                try {
+                    appendMessage(msg, msg.sender);
+                } catch (appendError) {
+                    console.error(`Error appending message at index ${index}:`, appendError, msg);
+                }
+            });
+        }
+
+    // Scroll to the bottom of the chat box
         chatBox.scrollTop = chatBox.scrollHeight;
-    } catch (error) {
-        console.error('Error loading messages:', error);
-        showToast('Error loading messages', 'error');
-    } finally {
+      } catch (error) {
+        // Log detailed error information and show a toast
+        console.error('Error loading messages for conversation ID', convoId, ':', error);
+        showToast(`Failed to load messages: ${error.message}`, 'error');
+      } finally {
+        // Hide the loading spinner if it exists
         if (chatLoadingSpinner) {
             chatLoadingSpinner.style.display = 'none';
         }
     }
-}
-
 // Socket.IO event listeners
 socket.on('connect', () => {
     isConnected = true;
