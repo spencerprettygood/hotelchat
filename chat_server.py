@@ -336,20 +336,20 @@ def get_conversations():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT id, username, latest_message, assigned_agent, channel, visible_in_conversations FROM conversations ORDER BY last_updated DESC")
+            c.execute("SELECT id, phone_number, message, agent_id, channel, visible_in_con_conversations FROM conversations ORDER BY last_updated DESC")
             raw_conversations = c.fetchall()
             logger.info(f"✅ Raw conversations from database: {raw_conversations}")
-            c.execute("SELECT id, username, chat_id, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC")
+            c.execute("SELECT id, phone_number, channel, agent_id FROM conversations WHERE visible_in_conversations = TRUE ORDER BY last_updated DESC")
             conversations = []
             for row in c.fetchall():
-                convo_id, username, chat_id, channel, assigned_agent = row
-                display_name = chat_id if channel == "telegram" else username
+                convo_id, phone_number, channel, agent_id = row
+                display_name = phone_number  # Simplified; adjust if chat_id is added later
                 conversations.append({
                     "id": convo_id,
-                    "username": username,
-                    "chat_id": chat_id,
+                    "username": phone_number,
+                    "chat_id": phone_number,
                     "channel": channel,
-                    "assigned_agent": assigned_agent,
+                    "assigned_agent": agent_id,
                     "display_name": f"{display_name} ({channel})" if channel else display_name
                 })
             logger.info(f"✅ Fetched conversations for dashboard: {conversations}")
