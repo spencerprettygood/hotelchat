@@ -203,6 +203,9 @@ def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
         logger.info(f"Connection object: {type(conn)}")
+        # Drop the table if it exists (to ensure the new schema is applied)
+        c.execute("DROP TABLE IF EXISTS conversations")
+        # Create the table with the correct schema
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id SERIAL PRIMARY KEY,
@@ -231,33 +234,7 @@ def init_db():
             conn.commit()
             logger.info("✅ Added test conversations")
 
-# Add test conversations (for development purposes)
-def add_test_conversations():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            # Check if test conversations already exist
-            c.execute("SELECT COUNT(*) FROM conversations WHERE channel = 'test'")
-            count = c.fetchone()[0]
-            if count == 0:
-                # Add 5 test conversations
-                for i in range(1, 6):
-                    c.execute("INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations, last_updated) VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP)", 
-                              (f"test_user_{i}", "test"))
-                    convo_id = c.lastrowid
-                    # Add a test message for each conversation
-                    c.execute("INSERT INTO messages (conversation_id, sender, message) VALUES (?, ?, ?)",
-                              (convo_id, "user", f"Test message {i}"))
-                conn.commit()
-                logger.info("✅ Added test conversations")
-            else:
-                logger.info("✅ Test conversations already exist, skipping insertion")
-    except Exception as e:
-        logger.error(f"❌ Error adding test conversations: {e}")
-        raise
-
 init_db()
-add_test_conversations()
 
 def log_message(convo_id, user, message, sender):
     with get_db_connection() as conn:
