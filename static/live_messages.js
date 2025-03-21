@@ -452,7 +452,90 @@ async function fetchConversations() {
     }
 }
 
+async function fetchConversations() {
+    const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
+    if (!convoLoadingSpinner) {
+        console.error('Conversation loading spinner not found.');
+        return;
+    }
+    convoLoadingSpinner.style.display = 'block';
+    try {
+        const response = await fetch('/live-messages/all-whatsapp-messages');
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        console.log('Fetched conversations:', data);
+
+        const conversationList = document.getElementById('conversation-list');
+        if (!conversationList) {
+            console.error('Conversation list not found.');
+            return;
+        }
+        conversationList.innerHTML = '';
+
+        const conversations = Array.isArray(data) ? data : data.conversations || [];
+        if (conversations.length === 0) {
+            console.warn('No conversations found.');
+            const emptyMessage = document.createElement('div');
+            emptyMessage.className = 'empty-conversations';
+            emptyMessage.textContent = 'No conversations available.';
+            emptyMessage.style.textAlign = 'center';
+            emptyMessage.style.color = '#666';
+            emptyMessage.style.padding = '20px';
+            conversationList.appendChild(emptyMessage);
+            return;
+        }
+
+        conversations.forEach(convo => {
+            if (!convo.conversation_id) {
+                console.warn('Skipping conversation with missing conversation_id:', convo);
+                return;
+            }
+
+            const convoItem = document.createElement('div');
+            convoItem.classList.add('conversation-item');
+            if (currentConversationId === convo.conversation_id) {
+                convoItem.classList.add('active');
+            }
+
+            let lastMessage = 'No messages';
+            if (convo.last_message) {
+                lastMessage = convo.last_message;
+            } else if (convo.messages && Array.isArray(convo.messages) && convo.messages.length > 0) {
+                lastMessage = convo.messages[convo.messages.length - 1].message;
+            }
+
+            convoItem.innerHTML = `
+                <div class="avatar"></div>
+                <div class="info">
+                    <div class="name">${convo.username || convo.conversation_id}</div>
+                    <div class="last-message">${lastMessage}</div>
+                </div>
+            `;
+            convoItem.addEventListener('click', () => loadConversation(convo.conversation_id, convo.username || convo.conversation_id));
+            conversationList.appendChild(convoItem);
+
+            // Automatically load the first conversation if none is selected
+            if (!currentConversationId && conversations[0] === convo) {
+                loadConversation(convo.conversation_id, convo.username || convo.conversation_id);
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching conversations:', error);
+        showToast('Error fetching conversations: ' + error.message, 'error');
+    } finally {
+        convoLoadingSpinner.style.display = 'none';
+    }
+}
+
 async function loadConversation(convoId, username) {
+    if (!convoId) {
+        console.error('Cannot load conversation: convoId is undefined');
+        showToast('Failed to load conversation: Invalid conversation ID', 'error');
+        return;
+    }
+
     if (currentConversationId) {
         socket.emit('leave_conversation', { conversation_id: currentConversationId });
     }
@@ -465,7 +548,7 @@ async function loadConversation(convoId, username) {
     if (chatHeader && inputContainer && chatTitle) {
         chatHeader.style.display = 'flex';
         inputContainer.style.display = 'flex';
-        chatTitle.textContent = username;
+        chatTitle.textContent = username || convoId;
     } else {
         console.error('Chat header, input container, or chat title not found.');
         return;
@@ -473,7 +556,7 @@ async function loadConversation(convoId, username) {
 
     const conversationItems = document.querySelectorAll('.conversation-item');
     conversationItems.forEach(item => item.classList.remove('active'));
-    const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username));
+    const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username || convoId));
     if (selectedItem) {
         selectedItem.classList.add('active');
     }
@@ -506,7 +589,7 @@ async function loadConversation(convoId, username) {
         }
 
         chatBox.innerHTML = '';
-        lastMessageDate = null; // Reassign, don't redeclare
+        lastMessageDate = null;
 
         if (messages.length === 0) {
             const emptyMessage = document.createElement('div');
