@@ -72,8 +72,8 @@ function addDateSeparator(dateStr) {
     chatBox.appendChild(separator);
 }
 
-// Append a message to the chat box
 function appendMessage(msg, sender) {
+    console.log('Appending message:', msg, 'Sender:', sender);
     const chatBox = document.getElementById('chat-box');
     if (!chatBox) {
         console.error('Chat box not found.');
