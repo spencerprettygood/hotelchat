@@ -452,8 +452,6 @@ async function fetchConversations() {
     }
 }
 
-// Declare lastMessageDate globally
-
 async function loadConversation(convoId, username) {
     if (currentConversationId) {
         socket.emit('leave_conversation', { conversation_id: currentConversationId });
@@ -488,35 +486,28 @@ async function loadConversation(convoId, username) {
     }
 
     try {
-        // Fetch messages for the given conversation ID
         const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
         if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}, Status Text: ${response.statusText}`);
         }
 
-        // Parse the response as JSON
         const data = await response.json();
-        console.log('Fetched messages for conversation ID', convoId, ':', data); // Debugging log
+        console.log('Fetched messages for conversation ID', convoId, ':', data);
 
-        // Handle both flat [...] and { messages: [...] } response structures
         const messages = Array.isArray(data) ? data : data.messages || [];
 
-        // Validate the response data
         if (!Array.isArray(messages)) {
             throw new Error('Invalid response: messages is not an array');
         }
 
-        // Get the chat box element
         const chatBox = document.getElementById('chat-box');
         if (!chatBox) {
             throw new Error('Chat box element not found in the DOM');
         }
 
-        // Clear the chat box and reset the last message date
         chatBox.innerHTML = '';
-        lastMessageDate = null;
+        lastMessageDate = null; // Reassign, don't redeclare
 
-        // Display a message if the conversation is empty
         if (messages.length === 0) {
             const emptyMessage = document.createElement('div');
             emptyMessage.className = 'empty-conversation';
@@ -526,7 +517,6 @@ async function loadConversation(convoId, username) {
             emptyMessage.style.padding = '20px';
             chatBox.appendChild(emptyMessage);
         } else {
-            // Append each message to the chat box
             messages.forEach((msg, index) => {
                 try {
                     appendMessage(msg, msg.sender);
@@ -536,7 +526,6 @@ async function loadConversation(convoId, username) {
             });
         }
 
-        // Scroll to the bottom of the chat box
         chatBox.scrollTop = chatBox.scrollHeight;
     } catch (error) {
         console.error('Error loading messages for conversation ID', convoId, ':', error);
