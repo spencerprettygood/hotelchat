@@ -1291,16 +1291,13 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    try:
-        logger.info(f"ℹ️ Client disconnected: {request.sid}")
-        if 'conversation_id' in session:
-            convo_id = session.get('conversation_id')
-            if convo_id:
-                logger.info(f"ℹ️ Client {request.sid} leaving conversation {convo_id}")
-                emit('leave_conversation', {'conversation_id': convo_id}, room=convo_id, skip_sid=request.sid)
-                session.pop('conversation_id', None)
-    except Exception as e:
-        logger.error(f"❌ Error during disconnect for client {request.sid}: {str(e)}")
+    sid = request.sid
+    logger.info(f"ℹ️ Client disconnected: {sid}")
+    for room in rooms():
+        if room != sid:  # Exclude the client's own SID room
+            logger.info(f"ℹ️ Client {sid} leaving conversation {room}")
+            leave_room(room)
+            socketio.emit('leave_conversation', room=room)
 
 @socketio.on('join_conversation')
 def join_conversation(data):
