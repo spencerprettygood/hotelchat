@@ -453,7 +453,6 @@ async function fetchConversations() {
 }
 
 // Declare lastMessageDate globally
-let lastMessageDate = null;
 
 async function loadConversation(convoId, username) {
     if (currentConversationId) {
