@@ -272,7 +272,7 @@ class Agent(UserMixin):
 def load_user(agent_id):
     with get_db_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, username FROM agents WHERE id = ?", (agent_id,))
+        c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
         agent = c.fetchone()
         if agent:
             return Agent(agent[0], agent[1])
