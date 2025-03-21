@@ -293,18 +293,82 @@ def init_db():
         result = c.fetchone()
         if result and result['data_type'] == 'text':
             logger.info("ℹ️ Converting assigned_agent from TEXT to INTEGER")
-            c.execute("ALTER TABLE conversations ADD COLUMN assigned_agent_temp INTEGER")
-            c.execute("UPDATE conversations SET assigned_agent_temp = CAST(assigned_agent AS INTEGER) WHERE assigned_agent IS NOT NULL")
-            c.execute("ALTER TABLE conversations DROP COLUMN assigned_agent")
-            c.execute("ALTER TABLE conversations RENAME COLUMN assigned_agent_temp TO assigned_agent")
+            try:
+                c.execute("ALTER TABLE conversations ADD COLUMN assigned_agent_temp INTEGER")
+                c.execute("""
+                    UPDATE conversations 
+                    SET assigned_agent_temp = CAST(assigned_agent AS INTEGER) 
+                    WHERE assigned_agent IS NOT NULL AND assigned_agent ~ '^[0-9]+$'""")
+                c.execute("ALTER TABLE conversations DROP COLUMN assigned_agent")
+                c.execute("ALTER TABLE conversations RENAME COLUMN assigned_agent_temp TO assigned_agent")
+            except Exception as e:
+                logger.error(f"❌ Error converting assigned_agent to INTEGER: {str(e)}")
+                logger.warning("Skipping assigned_agent conversion due to error.")
+                # Clean up temporary column if it exists
+                c.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'conversations' AND column_name = 'assigned_agent_temp'
+                """)
+                if c.fetchone():
+                    c.execute("ALTER TABLE conversations DROP COLUMN assigned_agent_temp")
 
-        # Populate conversation_id and phone_number for existing rows
-        c.execute("UPDATE conversations SET conversation_id = chat_id WHERE conversation_id IS NULL")
-        c.execute("UPDATE conversations SET phone_number = chat_id WHERE phone_number IS NULL")
+        # Populate conversation_id, phone_number, and chat_id for existing rows
+        c.execute("""
+            UPDATE conversations 
+            SET conversation_id = chat_id 
+            WHERE conversation_id IS NULL AND chat_id IS NOT NULL
+        """)
+        c.execute("""
+            UPDATE conversations 
+            SET phone_number = chat_id 
+            WHERE phone_number IS NULL AND chat_id IS NOT NULL
+        """)
+        c.execute("""
+            UPDATE conversations 
+            SET chat_id = phone_number 
+            WHERE chat_id IS NULL AND phone_number IS NOT NULL
+        """)
 
         # Add NOT NULL constraints
-        c.execute("ALTER TABLE conversations ALTER COLUMN conversation_id SET NOT NULL")
-        c.execute("ALTER TABLE conversations ALTER COLUMN phone_number SET NOT NULL")
+        try:
+            c.execute("""
+                UPDATE conversations 
+                SET conversation_id = 'unknown_' || id 
+                WHERE conversation_id IS NULL
+            """)
+            c.execute("ALTER TABLE conversations ALTER COLUMN conversation_id SET NOT NULL")
+        except Exception as e:
+            logger.error(f"❌ Error adding NOT NULL constraint on conversation_id: {str(e)}")
+            raise
+
+        try:
+            c.execute("""
+                UPDATE conversations 
+                SET phone_number = 'unknown_' || id 
+                WHERE phone_number IS NULL
+            """)
+            c.execute("ALTER TABLE conversations ALTER COLUMN phone_number SET NOT NULL")
+        except Exception as e:
+            logger.error(f"❌ Error adding NOT NULL constraint on phone_number: {str(e)}")
+            raise
+
+        # Add NOT NULL constraint on chat_id
+        try:
+            c.execute("""
+                UPDATE conversations 
+                SET chat_id = phone_number 
+                WHERE chat_id IS NULL AND phone_number IS NOT NULL
+            """)
+            c.execute("""
+                UPDATE conversations 
+                SET chat_id = 'unknown_' || id 
+                WHERE chat_id IS NULL
+            """)
+            c.execute("ALTER TABLE conversations ALTER COLUMN chat_id SET NOT NULL")
+        except Exception as e:
+            logger.error(f"❌ Error adding NOT NULL constraint on chat_id: {str(e)}")
+            raise
 
         # Create messages table (for individual messages)
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
@@ -315,6 +379,18 @@ def init_db():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             channel TEXT NOT NULL          -- 'whatsapp' or 'sms'
         )''')
+
+        # Add channel column to messages table if it doesn't exist
+        c.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'messages' AND column_name = 'channel'
+        """)
+        if not c.fetchone():
+            logger.info("ℹ️ Adding missing column 'channel' to messages table")
+            c.execute("ALTER TABLE messages ADD COLUMN channel TEXT")
+            c.execute("UPDATE messages SET channel = 'whatsapp' WHERE channel IS NULL")
+            c.execute("ALTER TABLE messages ALTER COLUMN channel SET NOT NULL")
 
         # Drop the existing foreign key constraint on messages.convo_id
         c.execute("""
@@ -334,11 +410,23 @@ def init_db():
         result = c.fetchone()
         if result and result['data_type'] == 'integer':
             logger.info("ℹ️ Converting convo_id from INTEGER to TEXT in messages table")
-            c.execute("ALTER TABLE messages ADD COLUMN convo_id_temp TEXT")
-            c.execute("UPDATE messages SET convo_id_temp = CAST(convo_id AS TEXT) WHERE convo_id IS NOT NULL")
-            c.execute("ALTER TABLE messages DROP COLUMN convo_id")
-            c.execute("ALTER TABLE messages RENAME COLUMN convo_id_temp TO convo_id")
-            c.execute("ALTER TABLE messages ALTER COLUMN convo_id SET NOT NULL")
+            try:
+                c.execute("ALTER TABLE messages ADD COLUMN convo_id_temp TEXT")
+                c.execute("UPDATE messages SET convo_id_temp = CAST(convo_id AS TEXT) WHERE convo_id IS NOT NULL")
+                c.execute("ALTER TABLE messages DROP COLUMN convo_id")
+                c.execute("ALTER TABLE messages RENAME COLUMN convo_id_temp TO convo_id")
+                c.execute("ALTER TABLE messages ALTER COLUMN convo_id SET NOT NULL")
+            except Exception as e:
+                logger.error(f"❌ Error converting convo_id to TEXT in messages table: {str(e)}")
+                logger.warning("Skipping convo_id conversion due to error.")
+                # Clean up temporary column if it exists
+                c.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'messages' AND column_name = 'convo_id_temp'
+                """)
+                if c.fetchone():
+                    c.execute("ALTER TABLE messages DROP COLUMN convo_id_temp")
 
         # Update convo_id in messages to match conversation_id
         c.execute("""
@@ -363,11 +451,15 @@ def init_db():
         """)
         if not c.fetchone():
             logger.info("ℹ️ Adding foreign key constraint on messages.convo_id")
-            c.execute("""
-                ALTER TABLE messages
-                ADD CONSTRAINT messages_convo_id_fkey
-                FOREIGN KEY (convo_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE;
-            """)
+            try:
+                c.execute("""
+                    ALTER TABLE messages
+                    ADD CONSTRAINT messages_convo_id_fkey
+                    FOREIGN KEY (convo_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE;
+                """)
+            except Exception as e:
+                logger.error(f"❌ Error adding foreign key constraint on messages.convo_id: {str(e)}")
+                logger.warning("Skipping foreign key constraint due to error.")
 
         # Add index on messages.convo_id for performance
         c.execute("""
