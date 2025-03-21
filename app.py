@@ -1218,6 +1218,45 @@ def whatsapp_verify():
         logger.error(f"❌ Error in /whatsapp GET endpoint: {str(e)}")
         return jsonify({"error": "Failed to verify WhatsApp webhook"}), 500
 
+@app.route("/live-messages/messages", methods=["GET"])
+def get_messages():
+    try:
+        conversation_id = request.args.get("conversation_id")
+        if not conversation_id:
+            logger.error("❌ Missing conversation_id in /live-messages/messages request")
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        conn = get_db_connection()
+        c = conn.cursor(cursor_factory=DictCursor)
+        c.execute("""
+            SELECT message, sender, timestamp, channel
+            FROM messages
+            WHERE convo_id = %s
+            ORDER BY timestamp ASC
+        """, (conversation_id,))
+        messages = c.fetchall()
+
+        # Convert the messages to a list of dictionaries
+        messages_list = [
+            {
+                "message": msg["message"],
+                "sender": msg["sender"],
+                "timestamp": msg["timestamp"].isoformat(),
+                "channel": msg["channel"]
+            }
+            for msg in messages
+        ]
+
+        logger.info(f"✅ Fetched {len(messages_list)} messages for conversation_id {conversation_id}")
+        return jsonify(messages_list), 200
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching messages for conversation_id {conversation_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch messages"}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
 # Testing Endpoint
 @app.route("/test-ai", methods=["POST"])
 def test_ai():
