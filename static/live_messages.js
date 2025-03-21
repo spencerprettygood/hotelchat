@@ -1,3 +1,5 @@
+console.log('live_messages.js loaded successfully');
+
 // Define Socket.IO instance
 const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
     transports: ["websocket", "polling"],
@@ -41,12 +43,18 @@ function showToast(message, type = 'info') {
 // Format timestamp for display
 function formatTimestamp(timestamp) {
     const date = new Date(timestamp);
+    if (isNaN(date.getTime())) {
+        return 'Invalid Time';
+    }
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 // Format date for message separators
 function formatDateForSeparator(timestamp) {
     const date = new Date(timestamp);
+    if (isNaN(date.getTime())) {
+        return 'Unknown Date';
+    }
     const today = new Date();
     if (date.toDateString() === today.toDateString()) {
         return 'Today';
@@ -79,9 +87,21 @@ function appendMessage(msg, sender) {
         console.error('Chat box not found.');
         return;
     }
-    const messageDate = new Date(msg.timestamp);
-    const dateStr = formatDateForSeparator(msg.timestamp);
 
+    // Validate message properties
+    if (!msg || typeof msg.message !== 'string') {
+        console.error('Invalid message object:', msg);
+        return;
+    }
+
+    const timestamp = msg.timestamp || new Date().toISOString();
+    const messageDate = new Date(timestamp);
+    if (isNaN(messageDate.getTime())) {
+        console.error('Invalid timestamp in message:', msg);
+        return;
+    }
+
+    const dateStr = formatDateForSeparator(timestamp);
     if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
         addDateSeparator(dateStr);
         lastMessageDate = messageDate;
@@ -100,12 +120,67 @@ function appendMessage(msg, sender) {
 
     const meta = document.createElement('div');
     meta.className = 'message-meta';
-    const time = formatTimestamp(msg.timestamp);
+    const time = formatTimestamp(timestamp);
     meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ''}`;
     div.appendChild(meta);
 
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// Send a message from the agent
+async function sendMessage() {
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+    if (!messageInput || !sendButton) {
+        console.error('Message input or send button not found.');
+        showToast('Message input or send button not found.', 'error');
+        return;
+    }
+
+    const message = messageInput.value.trim();
+    if (!message) {
+        return;
+    }
+
+    if (!currentConversationId) {
+        showToast('No conversation selected.', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/live-messages/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                conversation_id: currentConversationId,
+                message: message,
+                sender: 'agent'
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.status !== 'success') {
+            throw new Error(data.error || 'Unknown error');
+        }
+
+        // Clear the input and disable the send button
+        messageInput.value = '';
+        sendButton.disabled = true;
+
+        // Append the message to the chat box
+        appendMessage({ message, timestamp: new Date().toISOString() }, 'agent');
+
+        // Update the conversation list
+        fetchConversations();
+    } catch (error) {
+        console.error('Error sending message:', error);
+        showToast(`Failed to send message: ${error.message}`, 'error');
+    }
 }
 
 // Check authentication status on page load
@@ -135,6 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 socket.emit('typing', { conversation_id: currentConversationId, agent: currentAgent });
             }
         });
+        sendButton.addEventListener('click', sendMessage);
     } else {
         console.error('Message input or send button not found.');
     }
@@ -374,7 +450,9 @@ async function loadConversation(convoId, username) {
     const conversationItems = document.querySelectorAll('.conversation-item');
     conversationItems.forEach(item => item.classList.remove('active'));
     const selectedItem = Array.from(conversationItems).find(item => item.textContent.includes(username));
-    if (selectedItem) selectedItem.classList.add('active');
+    if (selectedItem) {
+        selectedItem.classList.add('active');
+    }
 
     const chatLoadingSpinner = document.getElementById('chat-loading-spinner');
     if (chatLoadingSpinner) {
@@ -384,13 +462,13 @@ async function loadConversation(convoId, username) {
     }
 
     try {
-    // Fetch messages for the given conversation ID
+        // Fetch messages for the given conversation ID
         const response = await fetch(`/live-messages/messages?conversation_id=${convoId}`);
         if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}, Status Text: ${response.statusText}`);
         }
 
-    // Parse the response as JSON
+        // Parse the response as JSON
         const data = await response.json();
 
         // Validate the response data
@@ -428,18 +506,18 @@ async function loadConversation(convoId, username) {
             });
         }
 
-    // Scroll to the bottom of the chat box
+        // Scroll to the bottom of the chat box
         chatBox.scrollTop = chatBox.scrollHeight;
-      } catch (error) {
-        // Log detailed error information and show a toast
+    } catch (error) {
         console.error('Error loading messages for conversation ID', convoId, ':', error);
         showToast(`Failed to load messages: ${error.message}`, 'error');
-      } finally {
-        // Hide the loading spinner if it exists
+    } finally {
         if (chatLoadingSpinner) {
             chatLoadingSpinner.style.display = 'none';
         }
     }
+}
+
 // Socket.IO event listeners
 socket.on('connect', () => {
     isConnected = true;
