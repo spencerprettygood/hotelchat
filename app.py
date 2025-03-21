@@ -1236,7 +1236,6 @@ def get_messages():
         """, (conversation_id,))
         messages = c.fetchall()
 
-        # Convert the messages to a list of dictionaries
         messages_list = [
             {
                 "message": msg["message"],
@@ -1256,7 +1255,6 @@ def get_messages():
     finally:
         if 'conn' in locals():
             conn.close()
-
 # Testing Endpoint
 @app.route("/test-ai", methods=["POST"])
 def test_ai():
