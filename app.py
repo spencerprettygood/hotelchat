@@ -962,6 +962,140 @@ def chat():
         logger.error(f"❌ Error in /chat endpoint: {str(e)}")
         return jsonify({"error": "Failed to process chat message"}), 500
 
+
+def detect_language(message, convo_id):
+    """
+    Detect the language of the message (placeholder implementation).
+    In the previous version, this function likely used a library like langdetect.
+    For now, we'll return 'en' or 'es' based on simple keyword detection.
+    
+    Args:
+        message (str): The message to analyze.
+        convo_id (str): The conversation ID.
+    
+    Returns:
+        str: 'en' for English, 'es' for Spanish.
+    """
+    try:
+        spanish_keywords = ["hola", "gracias", "reservar", "sí", "por favor"]
+        if any(keyword in message.lower() for keyword in spanish_keywords):
+            return "es"
+        return "en"
+    except Exception as e:
+        logger.error(f"❌ Error detecting language for convo_id {convo_id}: {e}", exc_info=True)
+        return "en"  # Default to English
+
+def get_ai_response(message, conversation_id):
+    """
+    Generate an AI response to the user's message, incorporating language detection,
+    booking intent handling, and escalation to an agent if needed.
+    
+    Args:
+        message (str): The user's message.
+        conversation_id (str): The ID of the conversation.
+    
+    Returns:
+        str: The AI's response, or None if no response is generated.
+    """
+    try:
+        # Connect to the database to fetch conversation details
+        conn = get_db_connection()
+        c = conn.cursor(cursor_factory=DictCursor)
+        
+        # Fetch conversation details
+        c.execute("""
+            SELECT ai_enabled, handoff_notified, booking_intent
+            FROM conversations
+            WHERE conversation_id = %s
+        """, (conversation_id,))
+        convo = c.fetchone()
+        
+        if not convo:
+            logger.error(f"❌ Conversation not found for conversation_id {conversation_id}")
+            return None
+        
+        ai_enabled = convo["ai_enabled"]
+        handoff_notified = convo["handoff_notified"]
+        booking_intent = convo.get("booking_intent")  # Might be NULL
+        
+        # Detect the language of the message
+        language = detect_language(message, conversation_id)
+        
+        # Check for booking intent confirmation ("yes", "proceed", "sí")
+        if booking_intent and ("yes" in message.lower() or "proceed" in message.lower() or "sí" in message.lower()):
+            response = (
+                f"Great! An agent will assist you with booking for {booking_intent}. Please wait."
+                if language == "en"
+                else f"¡Excelente! Un agente te ayudará con la reserva para {booking_intent}. Por favor, espera."
+            )
+            # Update the conversation to notify handoff
+            c.execute("""
+                UPDATE conversations
+                SET handoff_notified = 1
+                WHERE conversation_id = %s
+            """, (conversation_id,))
+            conn.commit()
+            socketio.emit("refresh_conversations", {})
+            return response
+        
+        # Check for booking request ("book", "booking", "reservar")
+        if "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
+            response = (
+                "I’ll connect you with a team member to assist with your booking."
+                if language == "en"
+                else "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
+            )
+            # Update the conversation to notify handoff
+            c.execute("""
+                UPDATE conversations
+                SET handoff_notified = 1
+                WHERE conversation_id = %s
+            """, (conversation_id,))
+            conn.commit()
+            socketio.emit("refresh_conversations", {})
+            return response
+        
+        # Check for help request ("HELP", "AYUDA")
+        if "HELP" in message.upper() or "AYUDA" in message.upper():
+            response = (
+                "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you."
+                if language == "en"
+                else "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
+            )
+            # Update the conversation to notify handoff
+            c.execute("""
+                UPDATE conversations
+                SET handoff_notified = 1
+                WHERE conversation_id = %s
+            """, (conversation_id,))
+            conn.commit()
+            socketio.emit("refresh_conversations", {})
+            return response
+        
+        # Generate a generic AI response (placeholder)
+        # In a real implementation, this would call an AI service (e.g., OpenAI, Google Gemini)
+        response = f"AI response to '{message}': Thank you for your message! How can I assist you today?"
+        
+        # Check if the response indicates a failure (e.g., contains "sorry" or "lo siento")
+        if "sorry" in response.lower() or "lo siento" in response.lower():
+            if not handoff_notified:
+                c.execute("""
+                    UPDATE conversations
+                    SET handoff_notified = 1
+                    WHERE conversation_id = %s
+                """, (conversation_id,))
+                conn.commit()
+                socketio.emit("refresh_conversations", {})
+        
+        return response
+    
+    except Exception as e:
+        logger.error(f"❌ Error generating AI response for conversation_id {conversation_id}: {e}", exc_info=True)
+        return None
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
     conn = None
@@ -1025,7 +1159,9 @@ def whatsapp():
                     "sender": "ai",
                     "username": username
                 })
+                logger.info(f"✅ Sent WhatsApp message - To: {phone_number}, Body: {ai_response}")
             else:
+                logger.info(f"ℹ️ No AI response generated for message: {message}")
                 if not handoff_notified:
                     c.execute("""
                         UPDATE conversations
@@ -1034,6 +1170,7 @@ def whatsapp():
                     """, (conversation_id,))
                     socketio.emit("refresh_conversations", {})
         else:
+            logger.info(f"AI response skipped for conversation_id {conversation_id}: ai_enabled={ai_enabled}")
             socketio.emit("refresh_conversations", {})
 
         conn.commit()
