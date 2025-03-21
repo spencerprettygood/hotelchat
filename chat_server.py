@@ -23,6 +23,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from contextlib import contextmanager
 
+eventlet.monkey_patch()
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ socketio = SocketIO(
 
 login_manager = LoginManager()
 login_manager.init_app(app)
+login_manager.login_view = "login
+
 
 # Initialize OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -98,6 +102,29 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASS = os.getenv("DB_PASS")
+
+# Validate required environment variables
+required_vars = {
+    "DB_HOST": DB_HOST,
+    "DB_NAME": DB_NAME,
+    "DB_USER": DB_USER,
+    "DB_PASS": DB_PASS,
+}
+for var_name, var_value in required_vars.items():
+    if not var_value:
+        logger.error(f"❌ Missing required environment variable: {var_name}")
+        raise ValueError(f"Missing required environment variable: {var_name}")
+
+app = Flask(__name__, static_folder='static', template_folder='templates')
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
+CORS(app)
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="eventlet",
+    ping_timeout=60,
+    ping_interval=25
+)
 
 # Load or define the Q&A reference document
 try:
@@ -267,6 +294,9 @@ class Agent(UserMixin):
     def __init__(self, id, username):
         self.id = id
         self.username = username
+
+    def get_id(self):
+        return str(self.id)
 
 @login_manager.user_loader
 def load_user(agent_id):
