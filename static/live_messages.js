@@ -396,30 +396,54 @@ async function fetchConversations() {
             throw new Error(`HTTP error! Status: ${response.status}`);
         }
         const data = await response.json();
+        console.log('Fetched conversations:', data); // Debugging log
+
         const conversationList = document.getElementById('conversation-list');
         if (!conversationList) {
             console.error('Conversation list not found.');
             return;
         }
         conversationList.innerHTML = '';
-        if (data.conversations) {
-            data.conversations.forEach(convo => {
-                const convoItem = document.createElement('div');
-                convoItem.classList.add('conversation-item');
-                if (currentConversationId === convo.convo_id) {
-                    convoItem.classList.add('active');
-                }
-                convoItem.innerHTML = `
-                    <div class="avatar"></div>
-                    <div class="info">
-                        <div class="name">${convo.username}</div>
-                        <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
-                    </div>
-                `;
-                convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
-                conversationList.appendChild(convoItem);
-            });
+
+        // Handle both { conversations: [...] } and flat [...] response structures
+        const conversations = Array.isArray(data) ? data : data.conversations || [];
+        if (conversations.length === 0) {
+            console.warn('No conversations found.');
+            const emptyMessage = document.createElement('div');
+            emptyMessage.className = 'empty-conversations';
+            emptyMessage.textContent = 'No conversations available.';
+            emptyMessage.style.textAlign = 'center';
+            emptyMessage.style.color = '#666';
+            emptyMessage.style.padding = '20px';
+            conversationList.appendChild(emptyMessage);
+            return;
         }
+
+        conversations.forEach(convo => {
+            const convoItem = document.createElement('div');
+            convoItem.classList.add('conversation-item');
+            if (currentConversationId === convo.conversation_id) { // Use conversation_id instead of convo_id
+                convoItem.classList.add('active');
+            }
+
+            // Determine the last message
+            let lastMessage = 'No messages';
+            if (convo.last_message) {
+                lastMessage = convo.last_message;
+            } else if (convo.messages && Array.isArray(convo.messages) && convo.messages.length > 0) {
+                lastMessage = convo.messages[convo.messages.length - 1].message;
+            }
+
+            convoItem.innerHTML = `
+                <div class="avatar"></div>
+                <div class="info">
+                    <div class="name">${convo.username || convo.conversation_id}</div>
+                    <div class="last-message">${lastMessage}</div>
+                </div>
+            `;
+            convoItem.addEventListener('click', () => loadConversation(convo.conversation_id, convo.username || convo.conversation_id));
+            conversationList.appendChild(convoItem);
+        });
     } catch (error) {
         console.error('Error fetching conversations:', error);
         showToast('Error fetching conversations: ' + error.message, 'error');
@@ -427,6 +451,9 @@ async function fetchConversations() {
         convoLoadingSpinner.style.display = 'none';
     }
 }
+
+// Declare lastMessageDate globally
+let lastMessageDate = null;
 
 async function loadConversation(convoId, username) {
     if (currentConversationId) {
@@ -470,10 +497,14 @@ async function loadConversation(convoId, username) {
 
         // Parse the response as JSON
         const data = await response.json();
+        console.log('Fetched messages for conversation ID', convoId, ':', data); // Debugging log
+
+        // Handle both flat [...] and { messages: [...] } response structures
+        const messages = Array.isArray(data) ? data : data.messages || [];
 
         // Validate the response data
-        if (!data || !Array.isArray(data.messages)) {
-            throw new Error('Invalid response: messages array is missing or not an array');
+        if (!Array.isArray(messages)) {
+            throw new Error('Invalid response: messages is not an array');
         }
 
         // Get the chat box element
@@ -487,7 +518,7 @@ async function loadConversation(convoId, username) {
         lastMessageDate = null;
 
         // Display a message if the conversation is empty
-        if (data.messages.length === 0) {
+        if (messages.length === 0) {
             const emptyMessage = document.createElement('div');
             emptyMessage.className = 'empty-conversation';
             emptyMessage.textContent = 'No messages in this conversation yet.';
@@ -497,7 +528,7 @@ async function loadConversation(convoId, username) {
             chatBox.appendChild(emptyMessage);
         } else {
             // Append each message to the chat box
-            data.messages.forEach((msg, index) => {
+            messages.forEach((msg, index) => {
                 try {
                     appendMessage(msg, msg.sender);
                 } catch (appendError) {
