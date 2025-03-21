@@ -189,10 +189,13 @@ def get_db_connection():
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
-        # Drop existing tables (for schema reset)
+        # Drop existing tables to ensure schema consistency
         c.execute("DROP TABLE IF EXISTS messages")
         c.execute("DROP TABLE IF EXISTS conversations")
-        # Create conversations table with additional columns
+        c.execute("DROP TABLE IF EXISTS agents")
+        c.execute("DROP TABLE IF EXISTS settings")
+        
+        # Create conversations table
         c.execute('''CREATE TABLE IF NOT EXISTS conversations (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL,
@@ -205,7 +208,8 @@ def init_db():
             visible_in_conversations INTEGER DEFAULT 1,
             last_updated TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
-        # Rest of the function remains the same...
+        
+        # Create messages table
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
             convo_id INTEGER,
@@ -215,13 +219,30 @@ def init_db():
             timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (convo_id) REFERENCES conversations (id)
         )''')
+        
+        # Create agents table
+        c.execute('''CREATE TABLE IF NOT EXISTS agents (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL
+        )''')
+        
+        # Create settings table
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )''')
+        
         # Initialize settings
         c.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
                   ('ai_enabled', '1'))
+        
+        # Seed a default agent (username: "admin", password: "password123")
+        c.execute(
+            "INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
+            ('admin', 'password123')
+        )
+        
         # Add test conversations
         c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
         if c.fetchone()['count'] == 0:
@@ -248,9 +269,9 @@ def init_db():
             )
         else:
             logger.info("ℹ️ Test conversations already exist, skipping insertion")
+        
         conn.commit()
         logger.info("✅ Database initialized")
-
 # Add test conversations (for development purposes)
 def add_test_conversations():
     try:
