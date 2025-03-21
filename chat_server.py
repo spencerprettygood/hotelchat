@@ -258,10 +258,11 @@ def add_test_conversations():
             if count == 0:
                 # Add 5 test conversations
                 for i in range(1, 6):
+                    # Include all NOT NULL columns: username, chat_id, channel
                     c.execute(
-                        "INSERT INTO conversations (username, channel, ai_enabled, visible_in_conversations, last_updated) "
-                        "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                        (f"test_user_{i}", "test", 1, 0, datetime.now().isoformat())
+                        "INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations, last_updated) "
+                        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                        (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, datetime.now().isoformat())
                     )
                     convo_id = c.fetchone()['id']
                     # Add a test message for each conversation
