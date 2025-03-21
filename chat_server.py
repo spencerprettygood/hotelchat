@@ -369,15 +369,6 @@ def logout():
     logger.info("✅ Logout successful")
     return jsonify({"message": "Logged out successfully"})
 
-@app.route("/live-messages")
-def live_messages_page():
-    try:
-        logger.info("Attempting to render live-messages.html")
-        return render_template("live-messages.html")
-    except Exception as e:
-        logger.error(f"❌ Error rendering live-messages.html: {str(e)}")
-        return jsonify({"error": f"Failed to render live messages page: {str(e)}"}), 500
-
 @app.route("/all-whatsapp-messages", methods=["GET"])
 def get_all_whatsapp_messages():
     try:
@@ -1209,10 +1200,31 @@ def test_ai():
     except Exception as e:
         logger.error(f"❌ Error in /test-ai endpoint: {e}")
         return jsonify({"error": "Failed to test AI"}), 500
+        
+
+@app.route("/debug/templates")
+def debug_templates():
+    try:
+        template_dir = os.path.join(app.root_path, app.template_folder)
+        files = os.listdir(template_dir)
+        logger.info(f"✅ Template directory contents: {files}")
+        return jsonify({"template_files": files})
+    except Exception as e:
+        logger.error(f"❌ Error listing template files: {str(e)}")
+        return jsonify({"error": f"Failed to list template files: {str(e)}"}), 500
 
 @app.route("/")
 def index():
     return render_template("dashboard.html")
+
+@app.route("/live-messages")
+def live_messages_page():
+    try:
+        logger.info("Attempting to render live-messages.html")
+        return render_template("live-messages.html")
+    except Exception as e:
+        logger.error(f"❌ Error rendering live-messages.html: {str(e)}")
+        return jsonify({"error": f"Failed to render live messages page: {str(e)}"}), 500
 
 @socketio.on("connect")
 def handle_connect():
