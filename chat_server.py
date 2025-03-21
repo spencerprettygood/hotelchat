@@ -371,7 +371,12 @@ def logout():
 
 @app.route("/live-messages")
 def live_messages_page():
-    return render_template("live-messages.html")
+    try:
+        logger.info("Attempting to render live-messages.html")
+        return render_template("live-messages.html")
+    except Exception as e:
+        logger.error(f"❌ Error rendering live-messages.html: {str(e)}")
+        return jsonify({"error": f"Failed to render live messages page: {str(e)}"}), 500
 
 @app.route("/all-whatsapp-messages", methods=["GET"])
 def get_all_whatsapp_messages():
