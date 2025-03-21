@@ -204,7 +204,7 @@ def init_db():
         c = conn.cursor()
         logger.info(f"Connection object: {type(conn)}")
         # Drop the table if it exists (to ensure the new schema is applied)
-        c.execute("DROP TABLE IF EXISTS conversations")
+        c.execute("DROP TABLE IF EXISTS conversations CASCADE")
         # Create the table with the correct schema
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
