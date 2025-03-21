@@ -189,6 +189,9 @@ def get_db_connection():
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
+        # Drop existing tables (for schema reset)
+        c.execute("DROP TABLE IF EXISTS messages")
+        c.execute("DROP TABLE IF EXISTS conversations")
         # Create conversations table with additional columns
         c.execute('''CREATE TABLE IF NOT EXISTS conversations (
             id SERIAL PRIMARY KEY,
@@ -202,6 +205,7 @@ def init_db():
             visible_in_conversations INTEGER DEFAULT 1,
             last_updated TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
+        # Rest of the function remains the same...
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
             convo_id INTEGER,
