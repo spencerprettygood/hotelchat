@@ -174,6 +174,7 @@ except FileNotFoundError:
 
 @contextmanager
 def get_db_connection():
+    conn = None  # Initialize conn as None
     try:
         conn = psycopg2.connect(
             host=DB_HOST,
@@ -189,8 +190,9 @@ def get_db_connection():
         logger.error(f"❌ Error opening PostgreSQL database connection: {e}")
         raise
     finally:
-        conn.close()
-        logger.info("✅ Closed PostgreSQL database connection")
+        if conn is not None:  # Only close if conn was successfully created
+            conn.close()
+            logger.info("✅ Closed PostgreSQL database connection")
 
 # Initialize the database (create tables if they don't exist)
 def init_db():
