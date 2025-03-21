@@ -306,7 +306,6 @@ def logout():
     return jsonify({"message": "Logged out successfully"})
 
 @app.route("/live-messages")
-@login_required
 def live_messages_page():
     return render_template("live-messages.html")
 
