@@ -256,23 +256,20 @@ def add_test_conversations():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Check if test conversations already exist
             c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('test',))
             count = c.fetchone()['count']
             if count == 0:
-                # Add 5 test conversations
                 for i in range(1, 6):
-                    # Include all NOT NULL columns: username, chat_id, channel
                     c.execute(
                         "INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations, last_updated) "
                         "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
                         (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, datetime.now().isoformat())
                     )
                     convo_id = c.fetchone()['id']
-                    # Add a test message for each conversation
+                    # Include username in the messages table insert
                     c.execute(
-                        "INSERT INTO messages (convo_id, sender, message, timestamp) VALUES (%s, %s, %s, %s)",
-                        (convo_id, "user", f"Test message {i}", datetime.now().isoformat())
+                        "INSERT INTO messages (convo_id, username, sender, message, timestamp) VALUES (%s, %s, %s, %s, %s)",
+                        (convo_id, f"test_user_{i}", "user", f"Test message {i}", datetime.now().isoformat())
                     )
                 conn.commit()
                 logger.info("✅ Added test conversations")
