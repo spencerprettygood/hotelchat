@@ -1,9 +1,12 @@
-const socket = io();
+const socket = io({
+    transports: ["websocket", "polling"],
+});
 
 let currentConversationId = null;
-let currentFilter = 'unassigned'; // Default filter
-let currentChannel = null; // Default: no channel filter
-let currentAgent = null; // Store the current agent's username
+let currentFilter = 'unassigned';
+let currentChannel = null;
+let currentAgent = null;
+let lastMessageDate = null;
 
 // Check authentication status on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -16,15 +19,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     checkAuthStatus();
     fetchConversations();
-    setInterval(fetchConversations, 10000); // Poll every 10 seconds
+    setInterval(fetchConversations, 10000);
 
-    // Add event listener for Enter key to send messages
     const messageInput = document.getElementById('messageInput');
     if (messageInput) {
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' || e.keyCode === 13) {
-                e.preventDefault(); // Prevent default behavior (e.g., new line)
-                sendMessage(); // Call the sendMessage function
+                e.preventDefault();
+                sendMessage();
             }
         });
     } else {
@@ -45,8 +47,8 @@ function checkAuthStatus() {
             const loginPage = document.getElementById('loginPage');
             const dashboardSection = document.getElementById('dashboard');
             if (data.is_authenticated) {
-                currentAgent = data.agent; // Assuming /check-auth returns the agent's username
-                console.log("Current Agent:", currentAgent); // Debug log
+                currentAgent = data.agent;
+                console.log("Current Agent:", currentAgent);
                 loginPage.style.display = 'none';
                 dashboardSection.style.display = 'block';
                 fetchConversations();
@@ -85,8 +87,8 @@ function login() {
         })
         .then(data => {
             if (data.message === 'Login successful') {
-                currentAgent = data.agent; // Assuming /login returns the agent's username
-                console.log("Current Agent:", currentAgent); // Debug log
+                currentAgent = data.agent;
+                console.log("Current Agent:", currentAgent);
                 document.getElementById('loginPage').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
                 fetchConversations();
@@ -112,7 +114,7 @@ if (logoutButton) {
             })
             .then(data => {
                 if (data.message === 'Logged out successfully') {
-                    currentAgent = null; // Clear the current agent
+                    currentAgent = null;
                     document.getElementById('loginPage').style.display = 'flex';
                     document.getElementById('dashboard').style.display = 'none';
                 }
@@ -130,7 +132,7 @@ function fetchConversations() {
         return;
     }
 
-    fetch('/conversations')
+    fetch(`/conversations?filter=${currentFilter}${currentChannel ? `&channel=${currentChannel}` : ''}`)
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
@@ -140,66 +142,41 @@ function fetchConversations() {
         .then(conversations => {
             conversationList.innerHTML = '';
 
-            // Filter conversations based on currentFilter and currentChannel
-            let filteredConversations = conversations.filter(convo => {
-                // Filter by channel
-                if (currentChannel && convo.channel !== currentChannel) {
-                    return false;
-                }
-                // Filter by assignment
-                if (currentFilter === 'unassigned') {
-                    return !convo.assigned_agent;
-                } else if (currentFilter === 'you') {
-                    return convo.assigned_agent === currentAgent;
-                } else if (currentFilter === 'team') {
-                    return convo.assigned_agent && convo.assigned_agent !== currentAgent;
-                }
-                return true; // 'all' filter
-            });
+            updateCounts();
 
-            // Update counts
-            updateCounts(conversations);
-
-            filteredConversations.forEach(convo => {
-                console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent); // Debug log
+            conversations.forEach(convo => {
+                console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent);
                 const li = document.createElement('li');
-                // Add spacing via CSS class
-                li.className = 'conversation-item'; // Add a class for styling
+                li.className = 'conversation-item';
 
-                // Create a container for the conversation info and button
                 const convoContainer = document.createElement('div');
                 convoContainer.style.display = 'flex';
                 convoContainer.style.justifyContent = 'space-between';
                 convoContainer.style.alignItems = 'center';
 
-                // Conversation info
                 const convoInfo = document.createElement('span');
                 convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
 
-                // Add "Take Over" button for unassigned conversations
-                if (currentFilter === 'unassigned' && !convo.assigned_agent) {
+                if (!convo.assigned_agent) {
                     const takeOverButton = document.createElement('button');
                     takeOverButton.textContent = 'Take Over';
                     takeOverButton.onclick = (e) => {
-                        e.stopPropagation(); // Prevent triggering loadConversation
+                        e.stopPropagation();
                         takeOverConversation(convo.id);
                     };
-                    takeOverButton.className = 'take-over-btn'; // Use a CSS class for consistency
+                    takeOverButton.className = 'take-over-btn';
                     convoContainer.appendChild(takeOverButton);
-                }
-
-                // Add "Hand Back to AI" button for conversations assigned to the current agent
-                if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
+                } else if (convo.assigned_agent === currentAgent) {
                     const handBackButton = document.createElement('button');
                     handBackButton.textContent = 'Hand Back to AI';
                     handBackButton.onclick = (e) => {
-                        e.stopPropagation(); // Prevent triggering loadConversation
+                        e.stopPropagation();
                         handBackToAI(convo.id);
                     };
-                    handBackButton.className = 'handback-button'; // Use the CSS class from dashboard.html
+                    handBackButton.className = 'handback-button';
                     convoContainer.appendChild(handBackButton);
                 }
 
@@ -211,18 +188,31 @@ function fetchConversations() {
 }
 
 // Update conversation counts
-function updateCounts(conversations) {
-    const unassignedCount = document.getElementById('unassignedCount');
-    const yourCount = document.getElementById('yourCount');
-    const teamCount = document.getElementById('teamCount');
-    const allCount = document.getElementById('allCount');
-
-    if (unassignedCount && yourCount && teamCount && allCount) {
-        unassignedCount.textContent = conversations.filter(c => !c.assigned_agent).length;
-        yourCount.textContent = conversations.filter(c => c.assigned_agent === currentAgent).length;
-        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== currentAgent).length;
-        allCount.textContent = conversations.length;
-    }
+function updateCounts() {
+    fetch('/conversations?filter=unassigned')
+        .then(response => response.json())
+        .then(data => {
+            const unassignedCount = document.getElementById('unassignedCount');
+            if (unassignedCount) unassignedCount.textContent = data.length;
+        });
+    fetch('/conversations?filter=you')
+        .then(response => response.json())
+        .then(data => {
+            const yourCount = document.getElementById('yourCount');
+            if (yourCount) yourCount.textContent = data.length;
+        });
+    fetch('/conversations?filter=team')
+        .then(response => response.json())
+        .then(data => {
+            const teamCount = document.getElementById('teamCount');
+            if (teamCount) teamCount.textContent = data.length;
+        });
+    fetch('/conversations?filter=all')
+        .then(response => response.json())
+        .then(data => {
+            const allCount = document.getElementById('allCount');
+            if (allCount) allCount.textContent = data.length;
+        });
 }
 
 // Load conversations based on filter
@@ -239,14 +229,12 @@ function filterByChannel(channel) {
 
 // Take over a conversation
 function takeOverConversation(convoId) {
-    fetch('/handoff', {
+    fetch('/takeover', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            conversation_id: convoId,
-        }),
+        body: JSON.stringify({ convo_id: convoId }),
     })
         .then(response => {
             if (!response.ok) {
@@ -255,17 +243,74 @@ function takeOverConversation(convoId) {
             return response.json();
         })
         .then(data => {
-            if (data.message) {
-                currentFilter = 'you'; // Force switch to "You" filter after taking over
-                fetchConversations(); // Refresh the conversation list
+            if (data.status === 'success') {
+                currentFilter = 'you';
+                fetchConversations();
                 if (currentConversationId === convoId) {
-                    loadConversation(convoId); // Reload the current conversation
+                    loadConversation(convoId);
                 }
             } else {
                 alert('Error assigning chat: ' + data.error);
             }
         })
-        .catch(error => console.error('Error during handoff:', error));
+        .catch(error => console.error('Error during takeover:', error));
+}
+
+// Hand back to AI
+function handBackToAI(convoId) {
+    fetch('/handback', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ convo_id: convoId }),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'success') {
+                alert('Conversation handed back to AI successfully');
+                socket.emit('refresh_conversations', { conversation_id: convoId });
+                if (currentConversationId === convoId) {
+                    currentConversationId = null;
+                    const chatBox = document.getElementById('chatBox');
+                    const clientName = document.getElementById('clientName');
+                    if (chatBox) chatBox.innerHTML = '';
+                    if (clientName) clientName.textContent = '-';
+                }
+            } else {
+                alert('Failed to hand back to AI: ' + data.error);
+            }
+        })
+        .catch(error => console.error('Error handing back to AI:', error));
+}
+
+// Format date for separator
+function formatDateForSeparator(timestamp) {
+    const date = new Date(timestamp);
+    const today = new Date();
+    if (date.toDateString() === today.toDateString()) {
+        return 'Today';
+    }
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) {
+        return 'Yesterday';
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// Add date separator
+function addDateSeparator(dateStr) {
+    const chatBox = document.getElementById('chatBox');
+    const separator = document.createElement('div');
+    separator.className = 'date-separator';
+    separator.textContent = dateStr;
+    chatBox.appendChild(separator);
 }
 
 // Load a conversation into the active panel
@@ -278,48 +323,58 @@ function loadConversation(convoId) {
         return;
     }
 
-    fetch(`/messages?conversation_id=${convoId}`)
+    fetch(`/messages/${convoId}`)
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
             }
             return response.json();
         })
-        .then(data => {
-            const messages = data.messages;
-            const username = data.username;
+        .then(messages => {
             chatBox.innerHTML = '';
+            lastMessageDate = null;
 
             messages.forEach(msg => {
+                const messageDate = new Date(msg.timestamp);
+                const dateStr = formatDateForSeparator(msg.timestamp);
+
+                if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
+                    addDateSeparator(dateStr);
+                    lastMessageDate = messageDate;
+                }
+
                 const div = document.createElement('div');
-                const isUser = msg.sender === 'user';
-                div.className = 'message'; // Add the base message class
-                div.classList.add(isUser ? 'user-message' : 'agent-message');
-
-                // Message text
-                const textSpan = document.createElement('span');
-                textSpan.textContent = msg.message;
-                div.appendChild(textSpan);
-
-                // Timestamp
-                const timestampSpan = document.createElement('span');
-                timestampSpan.className = 'message-timestamp';
-                const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
-                timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
-                div.appendChild(timestampSpan);
-
+                let senderClass = msg.sender.toLowerCase();
+                if (senderClass === 'user') {
+                    senderClass = 'user';
+                } else if (senderClass === 'ai') {
+                    senderClass = 'ai';
+                } else if (senderClass === 'agent') {
+                    senderClass = 'agent';
+                } else {
+                    senderClass = 'user'; // Default to user
+                }
+                div.className = `message ${senderClass}`;
+                div.innerHTML = `
+                    <div class="message-bubble">${msg.message}</div>
+                    <span class="message-timestamp">${new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                `;
                 chatBox.appendChild(div);
             });
 
             chatBox.scrollTop = chatBox.scrollHeight;
 
             // Update client name
-            clientName.textContent = username;
+            fetch(`/conversations?filter=${currentFilter}${currentChannel ? `&channel=${currentChannel}` : ''}`)
+                .then(response => response.json())
+                .then(conversations => {
+                    const convo = conversations.find(c => c.id === convoId);
+                    clientName.textContent = convo ? convo.username : '-';
+                });
         })
         .catch(error => console.error('Error loading messages:', error));
 }
 
-// Send a message
 function sendMessage() {
     if (!currentConversationId) {
         alert('Please select a conversation.');
@@ -329,11 +384,15 @@ function sendMessage() {
     const messageInput = document.getElementById('messageInput');
     if (!messageInput) {
         console.error('Message input not found.');
+        alert('Error: Message input field not found.');
         return;
     }
 
     const message = messageInput.value.trim();
-    if (!message) return;
+    if (!message) {
+        alert('Please enter a message to send.');
+        return;
+    }
 
     fetch('/chat', {
         method: 'POST',
@@ -341,56 +400,30 @@ function sendMessage() {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            conversation_id: currentConversationId,
+            convo_id: currentConversationId,
             message: message,
+            channel: 'whatsapp'
         }),
     })
         .then(response => {
             if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+                throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
             }
             return response.json();
         })
         .then(data => {
-            if (data.reply) {
-                // If AI responds, it will be handled via Socket.IO
-            } else if (data.status === 'success') {
-                // Agent message sent successfully
-                messageInput.value = ''; // Clear the input after sending
+            if (data.status === 'success') {
+                messageInput.value = '';
+                // Message will be appended via Socket.IO 'new_message' event
             } else {
                 console.error('Error sending message:', data.error);
+                alert('Failed to send message: ' + (data.error || 'Unknown error'));
             }
         })
-        .catch(error => console.error('Error sending message:', error));
-}
-
-// Hand back to AI
-function handBackToAI(convoId) {
-    fetch('/handback-to-ai', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ conversation_id: convoId }),
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.message) {
-                alert(data.message); // Temporary feedback; consider a better UI solution
-                socket.emit('refresh_conversations', { conversation_id: convoId });
-                if (currentConversationId === convoId) {
-                    loadConversation(convoId); // Refresh the chat panel
-                }
-            } else {
-                alert('Failed to hand back to AI: ' + data.error);
-            }
-        })
-        .catch(error => console.error('Error handing back to AI:', error));
+        .catch(error => {
+            console.error('Error sending message:', error);
+            alert('Error sending message: ' + error.message);
+        });
 }
 
 // Socket.IO event listeners
@@ -399,21 +432,30 @@ socket.on('new_message', (data) => {
     if (data.convo_id === currentConversationId) {
         const chatBox = document.getElementById('chatBox');
         if (chatBox) {
+            const messageDate = new Date(data.timestamp || new Date());
+            const dateStr = formatDateForSeparator(messageDate);
+
+            if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
+                addDateSeparator(dateStr);
+                lastMessageDate = messageDate;
+            }
+
             const div = document.createElement('div');
-            const isUser = data.sender === 'user';
-            div.className = 'message'; // Add the base message class
-            div.classList.add(isUser ? 'user-message' : 'agent-message');
-
-            const textSpan = document.createElement('span');
-            textSpan.textContent = data.message;
-            div.appendChild(textSpan);
-
-            const timestampSpan = document.createElement('span');
-            timestampSpan.className = 'message-timestamp';
-            const now = new Date();
-            timestampSpan.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-            div.appendChild(timestampSpan);
-
+            let senderClass = data.sender.toLowerCase();
+            if (senderClass === 'user') {
+                senderClass = 'user';
+            } else if (senderClass === 'ai') {
+                senderClass = 'ai';
+            } else if (senderClass === 'agent') {
+                senderClass = 'agent';
+            } else {
+                senderClass = 'user'; // Default to user
+            }
+            div.className = `message ${senderClass}`;
+            div.innerHTML = `
+                <div class="message-bubble">${data.message}</div>
+                <span class="message-timestamp">${new Date(data.timestamp || new Date()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            `;
             chatBox.appendChild(div);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
@@ -429,30 +471,30 @@ socket.on('error', (data) => {
 socket.on('refresh_conversations', (data) => {
     console.log('Refresh conversations event received:', data);
     const conversationId = data.conversation_id;
-    pollVisibility(conversationId);
     fetchConversations();
+    if (currentConversationId === conversationId) {
+        fetch(`/conversations?filter=${currentFilter}${currentChannel ? `&channel=${currentChannel}` : ''}`)
+            .then(response => response.json())
+            .then(conversations => {
+                if (!conversations.some(convo => convo.id === conversationId)) {
+                    currentConversationId = null;
+                    const chatBox = document.getElementById('chatBox');
+                    const clientName = document.getElementById('clientName');
+                    if (chatBox) chatBox.innerHTML = '';
+                    if (clientName) clientName.textContent = '-';
+                }
+            });
+    }
 });
 
-// Poll visibility of a conversation
-function pollVisibility(conversationId) {
-    fetch(`/check-visibility?conversation_id=${conversationId}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.visible) {
-                console.log(`Conversation ${conversationId} is now visible`);
-                fetchConversations(); // Refresh the list again to be sure
-            } else {
-                console.log(`Conversation ${conversationId} is not yet visible, polling again...`);
-                setTimeout(() => pollVisibility(conversationId), 1000);
-            }
-        })
-        .catch(error => {
-            console.error('Error polling visibility:', error);
-            setTimeout(() => pollVisibility(conversationId), 1000);
-        });
-}
+socket.on("reconnect", (attempt) => {
+    console.log(`Reconnected to Socket.IO after ${attempt} attempts`);
+    fetchConversations();
+    if (currentConversationId) {
+        loadConversation(currentConversationId);
+    }
+});
+
+socket.on("reconnect_error", (error) => {
+    console.error("Reconnection failed:", error);
+});
