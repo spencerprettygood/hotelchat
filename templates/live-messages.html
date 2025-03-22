@@ -520,7 +520,7 @@
         }
     </style>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
+        <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
 <script>
     const socket = io({
         transports: ["websocket", "polling"],
@@ -617,13 +617,17 @@
             chatBox.innerHTML = "";
             lastMessageDate = null;
             if (data.messages && data.messages.length > 0) {
+                console.log("Loaded messages:", data.messages);
                 data.messages.forEach(msg => appendMessage(msg, msg.sender));
             } else {
+                console.log("No messages found");
                 chatBox.innerHTML = "<p>No messages yet.</p>";
             }
         } catch (error) {
             console.error("Error loading all messages:", error);
             showToast("Error loading messages", "error");
+            const chatBox = document.getElementById("chat-box");
+            chatBox.innerHTML = "<p>Failed to load messages.</p>";
         } finally {
             chatLoadingSpinner.style.display = "none";
         }
@@ -695,7 +699,7 @@
                     document.getElementById("dashboard").style.display = "flex";
                     fetchConversations();
                     fetchSettings();
-                    loadAllMessages(); // Load historical messages on page load
+                    loadAllMessages();
                 } else {
                     document.getElementById("loginPage").style.display = "flex";
                     document.getElementById("dashboard").style.display = "none";
@@ -788,7 +792,7 @@
             console.error("Error fetching settings:", error);
             showToast("Error fetching settings, defaulting AI to enabled", "error");
             const aiToggle = document.getElementById("ai-toggle");
-            aiToggle.checked = true; // Default to enabled if fetch fails
+            aiToggle.checked = true;
         }
     }
 
