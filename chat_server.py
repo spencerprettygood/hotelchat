@@ -265,15 +265,28 @@ def init_db():
         if not settings_table_exists:
             c.execute('''CREATE TABLE settings (
                 key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
+                value TEXT NOT NULL,
+                last_updated TEXT DEFAULT CURRENT_TIMESTAMP
             )''')
             logger.info("Created settings table")
+        else:
+            # Migration: Add last_updated column if it doesn't exist
+            c.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns 
+                    WHERE table_name = 'settings' AND column_name = 'last_updated'
+                )
+            """)
+            last_updated_exists = c.fetchone()[0]
+            if not last_updated_exists:
+                c.execute("ALTER TABLE settings ADD COLUMN last_updated TEXT DEFAULT CURRENT_TIMESTAMP")
+                logger.info("Added last_updated column to settings table")
 
-        # Seed initial data (only if tables were just created or are empty)
+        # Seed initial data (only if tables are empty)
         c.execute("SELECT COUNT(*) FROM settings")
         if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
-                      ('ai_enabled', '1'))
+            c.execute("INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) ON CONFLICT (key) DO NOTHING",
+                      ('ai_enabled', '1', datetime.now(timezone.utc).isoformat()))
             logger.info("Inserted default settings")
 
         c.execute("SELECT COUNT(*) FROM agents")
@@ -282,7 +295,6 @@ def init_db():
                       ('admin', 'password123'))
             logger.info("Inserted default admin user")
 
-        # Only insert test conversations if there are no existing conversations
         c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
         if c.fetchone()[0] == 0:
             logger.info("ℹ️ Inserting test conversations")
@@ -312,6 +324,7 @@ def init_db():
 
         conn.commit()
         logger.info("✅ Database initialized")
+        
 # Add test conversations (for development purposes)
 def add_test_conversations():
     try:
