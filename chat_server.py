@@ -1392,19 +1392,6 @@ def whatsapp():
         logger.error(f"❌ Error in /whatsapp POST: {e}")
         return jsonify({"error": "Failed to process WhatsApp message"}), 500
 
-def log_message(convo_id, username, message, sender):
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                (convo_id, username, message, sender, datetime.now().isoformat())
-            )
-            conn.commit()
-    except Exception as e:
-        logger.error(f"❌ Database error in log_message: {e}")
-        raise
-
 # Socket.IO Event Handlers
 @socketio.on("connect")
 def handle_connect():
