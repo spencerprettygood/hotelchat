@@ -493,29 +493,7 @@
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
         }
-
-        function formatTimestamp(timestamp) {
-            const date = new Date(timestamp + "Z"); // Append "Z" to indicate UTC
-            if (isNaN(date.getTime())) {
-                console.error("Invalid timestamp:", timestamp);
-                return "Invalid time";
-            }
-            return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        }
-
-        function formatDateForSeparator(timestamp) {
-            const date = new Date(timestamp + "Z"); // Append "Z" to indicate UTC
-            if (isNaN(date.getTime())) {
-                console.error("Invalid timestamp for date separator:", timestamp);
-                return "Unknown Date";
-            }
-            const today = new Date();
-            if (date.toDateString() === today.toDateString()) return "Today";
-            const yesterday = new Date(today);
-            yesterday.setDate(today.getDate() - 1);
-            if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
-            return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-        }
+        
 
         function addDateSeparator(dateStr) {
             const chatBox = document.getElementById("chat-box");
@@ -526,38 +504,74 @@
         }
 
         function appendMessage(msg, sender) {
+            console.log("Appending message:", msg, "Sender:", sender);
             const chatBox = document.getElementById("chat-box");
-            const messageDate = new Date(msg.timestamp);
+            // Try parsing the timestamp with and without appending "Z"
+            let messageDate = new Date(msg.timestamp);
+            if (isNaN(messageDate.getTime())) {
+                messageDate = new Date(msg.timestamp + "Z");
+            }
             if (isNaN(messageDate.getTime())) {
                 console.error("Invalid message timestamp:", msg.timestamp);
                 return; // Skip invalid messages
             }
             const dateStr = formatDateForSeparator(msg.timestamp);
-
+        
             if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
+                console.log("Adding date separator:", dateStr);
                 addDateSeparator(dateStr);
                 lastMessageDate = messageDate;
             }
-
+        
             const div = document.createElement("div");
             const isUser = sender === "user";
             const isAgent = sender === "agent";
             div.className = "message";
             div.classList.add(isUser ? "user-message" : isAgent ? "agent-message" : "ai-message");
-
+        
             const bubble = document.createElement("div");
             bubble.className = "message-bubble";
             bubble.textContent = msg.message;
             div.appendChild(bubble);
-
+        
             const meta = document.createElement("div");
             meta.className = "message-meta";
             const time = formatTimestamp(msg.timestamp);
             meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ""}`;
             div.appendChild(meta);
-
+        
             chatBox.appendChild(div);
+            console.log("Message appended to chatBox:", div);
             chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        
+        function formatTimestamp(timestamp) {
+            let date = new Date(timestamp);
+            if (isNaN(date.getTime())) {
+                date = new Date(timestamp + "Z");
+            }
+            if (isNaN(date.getTime())) {
+                console.error("Invalid timestamp:", timestamp);
+                return "Invalid time";
+            }
+            return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        }
+        
+        function formatDateForSeparator(timestamp) {
+            let date = new Date(timestamp);
+            if (isNaN(date.getTime())) {
+                date = new Date(timestamp + "Z");
+            }
+            if (isNaN(date.getTime())) {
+                console.error("Invalid timestamp for date separator:", timestamp);
+                return "Unknown Date";
+            }
+            const today = new Date();
+            if (date.toDateString() === today.toDateString()) return "Today";
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+            if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+            return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
         }
 
         async function loadMessagesForConversation(convoId) {
