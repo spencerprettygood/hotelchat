@@ -797,6 +797,14 @@
         }
     }
 
+    function addDateSeparator(dateStr) {
+        const chatBox = document.getElementById("chat-box");
+        const separator = document.createElement("div");
+        separator.className = "date-separator";
+        separator.textContent = dateStr;
+        chatBox.appendChild(separator);
+    }
+
     async function fetchSettings() {
         try {
             const response = await fetch("/settings");
