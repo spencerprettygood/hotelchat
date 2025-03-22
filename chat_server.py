@@ -528,6 +528,7 @@ def get_all_whatsapp_messages():
         logger.info("Fetching all WhatsApp conversations")
         with get_db_connection() as conn:
             c = conn.cursor()
+            logger.info("Executing query to fetch conversations")
             c.execute(
                 "SELECT id, chat_id, username, last_updated "
                 "FROM conversations "
@@ -539,6 +540,7 @@ def get_all_whatsapp_messages():
             result = []
             for convo in conversations:
                 convo_id, chat_id, username, last_updated = convo
+                logger.info(f"Fetching messages for convo_id {convo_id}")
                 c.execute(
                     "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp ASC",
                     (convo_id,)
@@ -555,9 +557,10 @@ def get_all_whatsapp_messages():
                         for msg in messages
                     ]
                 })
+            logger.info("Returning conversations response")
             return jsonify({"conversations": result})
     except Exception as e:
-        logger.error(f"Error fetching all WhatsApp messages: {str(e)}")
+        logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to fetch conversations"}), 500
     finally:
         release_db_connection(conn)
