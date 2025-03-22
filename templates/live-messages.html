@@ -470,6 +470,7 @@
         let currentAgent = null;
         let lastMessageDate = null;
         let isConnected = false;
+        let sentMessages = new Set(); // Track sent messages to prevent duplication
 
         function showToast(message, type = "info") {
             const toastContainer = document.getElementById("toast-container");
@@ -684,20 +685,30 @@
                 return;
             }
 
+            const timestamp = new Date().toISOString();
             const tempMessage = {
                 message: message,
-                timestamp: new Date().toISOString(),
+                timestamp: timestamp,
                 sender: "agent",
             };
-            appendMessage(tempMessage, "agent");
-            messageInput.value = "";
-            sendButton.disabled = true;
 
+            // Add the message locally for instant feedback
+            appendMessage(tempMessage, "agent");
+
+            // Track the sent message to prevent duplication
+            const messageKey = `agent:${message}:${timestamp}`;
+            sentMessages.add(messageKey);
+            console.log("Added to sentMessages:", messageKey);
+
+            // Emit the message to the server
             socket.emit("agent_message", {
                 convo_id: currentConversationId,
                 message: message,
                 channel: "whatsapp",
             });
+
+            messageInput.value = "";
+            sendButton.disabled = true;
         }
 
         document.addEventListener("DOMContentLoaded", () => {
@@ -792,6 +803,17 @@
 
         socket.on("live_message", (data) => {
             console.log("Received live_message:", data);
+
+            // Create a unique key for the message to check for duplicates
+            const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
+            console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
+
+            // Skip appending if this is an agent message we already added locally
+            if (data.sender === "agent" && sentMessages.has(messageKey)) {
+                console.log("Skipping duplicate agent message:", messageKey);
+                sentMessages.delete(messageKey); // Clean up the Set
+                return;
+            }
 
             // Fetch the updated conversation list to get the correct order
             fetchConversations().then(() => {
