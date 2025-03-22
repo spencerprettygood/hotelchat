@@ -1417,13 +1417,14 @@ def handle_disconnect():
 
 @socketio.on("join_conversation")
 def handle_join_conversation(data):
+    logger.info(f"Received join_conversation data: {data}")
     convo_id = data.get("convo_id")
     if not convo_id:
         logger.error("❌ Missing convo_id in join_conversation event")
         emit("error", {"message": "Missing conversation ID"})
         return
-    join_room(convo_id)
-    logger.info(f"✅ Client joined conversation room: {convo_id}")
+    join_room(str(convo_id))
+    logger.info(f"✅ Client joined conversation {convo_id}")
     emit("status", {"message": f"Joined conversation {convo_id}"})
 
 @socketio.on("leave_conversation")
