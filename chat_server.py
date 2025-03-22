@@ -301,13 +301,13 @@ def add_test_conversations():
 init_db()
 add_test_conversations()
 
-def log_message(convo_id, user, message, sender):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        try:
+def log_message(convo_id, username, message, sender):
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
             c.execute(
-                "INSERT INTO messages (convo_id, sender, message, timestamp) VALUES (%s, %s, %s, %s)",
-                (convo_id, sender, message, datetime.now().isoformat())
+                "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
+                (convo_id, username, message, sender, datetime.now().isoformat())
             )
             c.execute(
                 "UPDATE conversations SET last_updated = %s WHERE id = %s",
@@ -321,10 +321,10 @@ def log_message(convo_id, user, message, sender):
                 logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
             conn.commit()
             logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
-        except psycopg2.Error as e:
-            logger.error(f"❌ Database error in log_message: {str(e)}")
-            conn.rollback()
-            raise
+    except psycopg2.Error as e:
+        logger.error(f"❌ Database error in log_message: {str(e)}")
+        conn.rollback()
+        raise
 
 class Agent(UserMixin):
     def __init__(self, id, username):
@@ -1418,9 +1418,9 @@ def handle_disconnect():
 @socketio.on("join_conversation")
 def handle_join_conversation(data):
     logger.info(f"Received join_conversation data: {data}")
-    convo_id = data.get("convo_id")
+    convo_id = data.get("conversation_id")  # Changed from "convo_id"
     if not convo_id:
-        logger.error("❌ Missing convo_id in join_conversation event")
+        logger.error("❌ Missing conversation_id in join_conversation event")
         emit("error", {"message": "Missing conversation ID"})
         return
     join_room(str(convo_id))
@@ -1429,12 +1429,12 @@ def handle_join_conversation(data):
 
 @socketio.on("leave_conversation")
 def handle_leave_conversation(data):
-    convo_id = data.get("convo_id")
+    convo_id = data.get("conversation_id")  # Changed from "convo_id"
     if not convo_id:
-        logger.error("❌ Missing convo_id in leave_conversation event")
+        logger.error("❌ Missing conversation_id in leave_conversation event")
         emit("error", {"message": "Missing conversation ID"})
         return
-    leave_room(convo_id)
+    leave_room(str(convo_id))  # Ensure str() here too
     logger.info(f"✅ Client left conversation room: {convo_id}")
     emit("status", {"message": f"Left conversation {convo_id}"})
 
