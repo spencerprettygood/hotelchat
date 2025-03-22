@@ -1282,17 +1282,52 @@ def instagram():
         logger.error(f"❌ Error in /instagram endpoint: {str(e)}")
         return jsonify({"error": "Failed to process Instagram message"}), 500
 
+from flask import Flask, request, jsonify, Response  # Add Response import
+# ... other imports ...
+
+app = Flask(__name__)
+
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
-    # ...
+    if request.method == "GET":
+        return Response("Method not allowed", status=405)
+
+    # Extract Twilio WhatsApp data
+    form = request.form
+    message_body = form.get("Body", "").strip()
+    chat_id = form.get("From", "").replace("whatsapp:", "")
+    if not message_body or not chat_id:
+        logger.error("❌ Missing message body or chat_id in WhatsApp request")
+        return Response("Missing required fields", status=400)
+
     try:
+        # Get or create conversation
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT id, username FROM conversations WHERE chat_id = %s AND channel = %s",
+                (chat_id, "whatsapp")
+            )
+            result = c.fetchone()
+            if result:
+                convo_id, username = result
+            else:
+                username = chat_id  # Use chat_id as username if new conversation
+                c.execute(
+                    "INSERT INTO conversations (chat_id, channel, username, last_updated) VALUES (%s, %s, %s, %s) RETURNING id",
+                    (chat_id, "whatsapp", username, datetime.now().isoformat())
+                )
+                convo_id = c.fetchone()[0]
+                conn.commit()
+                socketio.emit("refresh_conversations", {"message": "New conversation added"})
+
         # Log user message
         log_message(convo_id, username, message_body, "user")
         socketio.emit("live_message", {
             "convo_id": convo_id,
             "message": message_body,
             "sender": "user",
-            "chat_id": chat_id,  # Use chat_id instead of username
+            "chat_id": chat_id,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
         logger.info(f"Emitted live_message for user message: {message_body}")
@@ -1313,13 +1348,14 @@ def whatsapp():
                     "convo_id": convo_id,
                     "message": response,
                     "sender": "ai",
-                    "chat_id": chat_id,  # Use chat_id
+                    "chat_id": chat_id,
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
                 logger.info(f"Emitted live_message for AI response: {response}")
             else:
                 logger.error(f"Failed to send AI response to WhatsApp for chat_id {chat_id}")
         return Response("Message processed", status=200)
+
     except Exception as e:
         logger.error(f"❌ Error in /whatsapp: {str(e)}")
         return Response("Error processing message", status=500)
