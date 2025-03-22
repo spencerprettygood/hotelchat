@@ -62,6 +62,8 @@ db_pool = SimpleConnectionPool(
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5)
 
+from tasks import process_whatsapp_message, send_whatsapp_message_task
+
 # Initialize OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
