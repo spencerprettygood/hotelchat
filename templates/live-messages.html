@@ -576,6 +576,14 @@
         return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
     }
 
+    function addDateSeparator(dateStr) {
+        const chatBox = document.getElementById("chat-box");
+        const separator = document.createElement("div");
+        separator.className = "date-separator";
+        separator.textContent = dateStr;
+        chatBox.appendChild(separator);
+    }
+    
     function appendMessage(msg, sender) {
         const chatBox = document.getElementById("chat-box");
         const messageDate = new Date(msg.timestamp);
@@ -796,15 +804,7 @@
             convoLoadingSpinner.style.display = "none";
         }
     }
-
-    function addDateSeparator(dateStr) {
-        const chatBox = document.getElementById("chat-box");
-        const separator = document.createElement("div");
-        separator.className = "date-separator";
-        separator.textContent = dateStr;
-        chatBox.appendChild(separator);
-    }
-
+    
     async function fetchSettings() {
         try {
             const response = await fetch("/settings");
