@@ -1284,8 +1284,36 @@ def instagram():
         logger.error(f"❌ Error in /instagram endpoint: {str(e)}")
         return jsonify({"error": "Failed to process Instagram message"}), 500
 
-@app.route("/whatsapp", methods=["POST"])
+@app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
+    if request.method == "GET":
+        try:
+            # Return all WhatsApp conversations/messages for debugging (optional login required)
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "SELECT c.id, c.username, c.chat_id, m.message, m.sender, m.timestamp "
+                    "FROM conversations c LEFT JOIN messages m ON c.id = m.convo_id "
+                    "WHERE c.channel = %s ORDER BY m.timestamp DESC LIMIT 10",
+                    ("whatsapp",)
+                )
+                rows = c.fetchall()
+                messages = [
+                    {
+                        "convo_id": row["id"],
+                        "username": row["username"],
+                        "chat_id": row["chat_id"],
+                        "message": row["message"],
+                        "sender": row["sender"],
+                        "timestamp": row["timestamp"]
+                    } for row in rows
+                ]
+                return jsonify(messages), 200
+        except Exception as e:
+            logger.error(f"❌ Error in /whatsapp GET: {e}")
+            return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+
+    # Existing POST logic for Twilio
     try:
         from_number = request.form.get("From")
         message_body = request.form.get("Body")
@@ -1311,7 +1339,7 @@ def whatsapp():
                     (datetime.now().isoformat(), convo_id)
                 )
             else:
-                username = prefixed_from  # Use phone number as username for new conversations
+                username = prefixed_from
                 c.execute(
                     "INSERT INTO conversations (username, chat_id, channel, last_updated) VALUES (%s, %s, %s, %s) RETURNING id",
                     (username, prefixed_from, "whatsapp", datetime.now().isoformat())
@@ -1319,7 +1347,6 @@ def whatsapp():
                 convo_id = c.fetchone()["id"]
             conn.commit()
 
-            # Log user message
             log_message(convo_id, username, message_body, "user")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
@@ -1336,7 +1363,6 @@ def whatsapp():
                 "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
-            # Generate and log AI response
             if "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
                 response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en" else \
                           "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
@@ -1363,7 +1389,7 @@ def whatsapp():
                 logger.error(f"❌ Failed to send AI response to WhatsApp for {from_number}")
             return jsonify({}), 200
     except Exception as e:
-        logger.error(f"❌ Error in /whatsapp endpoint: {e}")
+        logger.error(f"❌ Error in /whatsapp POST: {e}")
         return jsonify({"error": "Failed to process WhatsApp message"}), 500
 
 def log_message(convo_id, username, message, sender):
