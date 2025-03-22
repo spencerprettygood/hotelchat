@@ -451,9 +451,9 @@ def settings():
         try:
             with get_db_connection() as conn:
                 c = conn.cursor()
-                c.execute("SELECT key, value FROM settings")
-                settings = {row[0]: row[1] for row in c.fetchall()}
-                return jsonify(settings)
+                c.execute("SELECT key, value, last_updated FROM settings")
+                settings = {row['key']: {'value': row['value'], 'last_updated': row['last_updated']} for row in c.fetchall()}
+                return jsonify({key: val['value'] for key, val in settings.items()})
         except Exception as e:
             logger.error(f"❌ Error fetching settings: {str(e)}")
             return jsonify({"error": "Failed to fetch settings"}), 500
@@ -466,11 +466,13 @@ def settings():
             if not key or value is None:
                 return jsonify({"error": "Missing key or value"}), 400
 
+            current_timestamp = datetime.now(timezone.utc).isoformat()
             with get_db_connection() as conn:
                 c = conn.cursor()
                 c.execute(
-                    "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = %s",
-                    (key, value, value)
+                    "INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (key) DO UPDATE SET value = %s, last_updated = %s",
+                    (key, value, current_timestamp, value, current_timestamp)
                 )
                 conn.commit()
                 socketio.emit("settings_updated", {key: value})
