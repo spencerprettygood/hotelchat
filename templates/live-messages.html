@@ -520,7 +520,7 @@
         }
     </style>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-        <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
+<script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
 <script>
     const socket = io({
         transports: ["websocket", "polling"],
@@ -532,6 +532,7 @@
     });
 
     let currentConversationId = null;
+    let currentChatId = null; // Store the selected chat_id
     let currentAgent = null;
     let lastMessageDate = null;
     let isConnected = false;
@@ -606,26 +607,29 @@
         chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    async function loadAllMessages() {
+    async function loadMessagesForConversation(convoId) {
         const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
         chatLoadingSpinner.style.display = "block";
         try {
-            const response = await fetch("/all-messages");
-            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+            const response = await fetch(`/messages/${convoId}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
+            }
             const data = await response.json();
             const chatBox = document.getElementById("chat-box");
             chatBox.innerHTML = "";
             lastMessageDate = null;
             if (data.messages && data.messages.length > 0) {
-                console.log("Loaded messages:", data.messages);
+                console.log("Loaded messages for convo_id", convoId, ":", data.messages);
                 data.messages.forEach(msg => appendMessage(msg, msg.sender));
             } else {
-                console.log("No messages found");
+                console.log("No messages found for convo_id", convoId);
                 chatBox.innerHTML = "<p>No messages yet.</p>";
             }
         } catch (error) {
-            console.error("Error loading all messages:", error);
-            showToast("Error loading messages", "error");
+            console.error("Error loading messages for convo_id", convoId, ":", error);
+            showToast(`Error loading messages: ${error.message}`, "error");
             const chatBox = document.getElementById("chat-box");
             chatBox.innerHTML = "<p>Failed to load messages.</p>";
         } finally {
@@ -699,7 +703,9 @@
                     document.getElementById("dashboard").style.display = "flex";
                     fetchConversations();
                     fetchSettings();
-                    loadAllMessages();
+                    // Do not load messages until a conversation is selected
+                    const chatBox = document.getElementById("chat-box");
+                    chatBox.innerHTML = "<p>Select a conversation to view messages.</p>";
                 } else {
                     document.getElementById("loginPage").style.display = "flex";
                     document.getElementById("dashboard").style.display = "none";
@@ -731,8 +737,8 @@
                     document.getElementById("dashboard").style.display = "flex";
                     fetchConversations();
                     fetchSettings();
-                    loadAllMessages();
-                    showToast("Login successful", "success");
+                    const chatBox = document.getElementById("chat-box");
+                    chatBox.innerHTML = "<p>Select a conversation to view messages.</p>";
                 } else {
                     showToast("Login failed: " + data.message, "error");
                 }
@@ -748,7 +754,10 @@
         convoLoadingSpinner.style.display = "block";
         try {
             const response = await fetch("/all-whatsapp-messages");
-            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
+            }
             const data = await response.json();
             const conversationList = document.getElementById("conversation-list");
             conversationList.innerHTML = "";
@@ -772,10 +781,10 @@
             }
             const chatHeader = document.getElementById("chat-header");
             chatHeader.style.display = "flex";
-            document.getElementById("chat-title").textContent = "All Live Messages";
+            // Do not set chat-title here; it will be set in selectConversation
         } catch (error) {
             console.error("Error fetching conversations:", error);
-            showToast("Error fetching conversations", "error");
+            showToast(`Error fetching conversations: ${error.message}`, "error");
         } finally {
             convoLoadingSpinner.style.display = "none";
         }
@@ -801,6 +810,7 @@
             socket.emit("leave_conversation", { conversation_id: currentConversationId });
         }
         currentConversationId = convoId;
+        currentChatId = chatId; // Store the selected chat_id
         socket.emit("join_conversation", { conversation_id: convoId });
 
         const conversationList = document.getElementById("conversation-list");
@@ -811,6 +821,12 @@
                 item.classList.add("active");
             }
         }
+
+        // Update chat header with the selected conversation's chat_id
+        document.getElementById("chat-title").textContent = chatId;
+
+        // Load messages for the selected conversation
+        loadMessagesForConversation(convoId);
 
         const inputContainer = document.getElementById("input-container");
         inputContainer.style.display = "flex";
@@ -880,7 +896,10 @@
 
     socket.on("live_message", (data) => {
         console.log("Received live_message:", data);
-        appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
+        // Only append the message if it belongs to the currently selected conversation
+        if (data.convo_id === currentConversationId) {
+            appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
+        }
         const conversationList = document.getElementById("conversation-list");
         const convoItem = Array.from(conversationList.children).find(item =>
             item.textContent.includes(data.chat_id)
@@ -910,8 +929,8 @@
         console.log("Socket.IO reconnected after", attempt, "attempts");
         fetchConversations();
         fetchSettings();
-        loadAllMessages();
         if (currentConversationId) {
+            loadMessagesForConversation(currentConversationId);
             socket.emit("join_conversation", { conversation_id: currentConversationId });
         }
         showToast("Reconnected to server", "success");
