@@ -2,7 +2,7 @@ import gevent
 from gevent import monkey
 monkey.patch_all()
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -15,32 +15,46 @@ import requests
 import json
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
-from tasks import process_whatsapp_message, send_whatsapp_message_task
 from datetime import datetime, timezone, timedelta
 import time
 import logging
 import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from psycopg2.pool import SimpleConnectionPool
 from cachetools import TTLCache
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# Set up logging
+# Set up logging with both stream and file handlers
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chat_server")
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-logger.addHandler(handler)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logger.addHandler(stream_handler)
+# Add file handler for persistent logging on Render
+file_handler = logging.FileHandler("chat_server.log")
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logger.addHandler(file_handler)
 
+# Validate critical environment variables
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    logger.error("⚠️ DATABASE_URL not set in environment variables")
+    raise ValueError("DATABASE_URL not set")
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    logger.error("⚠️ SECRET_KEY not set in environment variables")
+    raise ValueError("SECRET_KEY not set")
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
+app.config["SECRET_KEY"] = SECRET_KEY
 CORS(app)
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
-    async_mode="gevent",  # Changed to gevent for compatibility with Gunicorn
+    cors_allowed_origins=["http://localhost:5000", "https://your-production-domain.onrender.com"],  # Restrict in production
+    async_mode="gevent",
     ping_timeout=120,
     ping_interval=30,
     logger=True,
@@ -52,16 +66,17 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Initialize connection pool
-database_url = os.getenv("DATABASE_URL").replace("postgres://", "postgresql://", 1)
+database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 db_pool = SimpleConnectionPool(
     minconn=1,
-    maxconn=20,  # Adjust based on Render's limits
+    maxconn=10,  # Reduced to avoid exceeding Render's connection limits
     dsn=database_url
 )
 
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5)
 
+# Import tasks after app and logger are initialized to avoid circular imports
 from tasks import process_whatsapp_message, send_whatsapp_message_task
 
 # Initialize OpenAI
@@ -88,20 +103,22 @@ credentials = service_account.Credentials.from_service_account_info(
 )
 service = build('calendar', 'v3', credentials=credentials)
 
+# Messaging API tokens
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     logger.error("⚠️ TELEGRAM_BOT_TOKEN not set in environment variables")
     raise ValueError("TELEGRAM_BOT_TOKEN not set")
-
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+if not INSTAGRAM_ACCESS_TOKEN:
+    logger.error("⚠️ INSTAGRAM_ACCESS_TOKEN not set in environment variables")
+    raise ValueError("INSTAGRAM_ACCESS_TOKEN not set")
 INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
-
 if not TWILIO_ACCOUNT_SID:
     logger.error("⚠️ TWILIO_ACCOUNT_SID not set in environment variables")
     raise ValueError("TWILIO_ACCOUNT_SID not set")
@@ -112,7 +129,9 @@ if not TWILIO_WHATSAPP_NUMBER:
     logger.error("⚠️ TWILIO_WHATSAPP_NUMBER not set in environment variables")
     raise ValueError("TWILIO_WHATSAPP_NUMBER not set")
 
-WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", None)
+WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN")
+if not WHATSAPP_API_TOKEN:
+    logger.warning("⚠️ WHATSAPP_API_TOKEN not set, some WhatsApp features may not work")
 WHATSAPP_API_URL = "https://api.whatsapp.com"
 
 # Load or define the Q&A reference document
@@ -196,7 +215,7 @@ except FileNotFoundError:
 def get_db_connection():
     try:
         conn = db_pool.getconn()
-        conn.cursor_factory = DictCursor  # Ensure DictCursor is set
+        conn.cursor_factory = DictCursor
         logger.info("✅ Database connection retrieved from pool")
         return conn
     except Exception as e:
@@ -229,7 +248,6 @@ def get_ai_enabled():
         return settings_cache["ai_enabled"]
     except Exception as e:
         logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}")
-        # Fallback to default values in case of error
         return ("1", "1970-01-01T00:00:00Z")
 
 def init_db():
@@ -301,7 +319,7 @@ def init_db():
             c.execute('''CREATE TABLE agents (
                 id SERIAL PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
-                password TEXT NOT NULL
+                password_hash TEXT NOT NULL  -- Renamed to password_hash for clarity
             )''')
             logger.info("Created agents table")
 
@@ -326,60 +344,59 @@ def init_db():
                 logger.info("Added last_updated column to settings table")
 
         # Create indexes for frequently queried columns
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_conversations_chat_id ON conversations (chat_id);
-        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chat_id ON conversations (chat_id);")
         logger.info("Created index idx_conversations_chat_id")
 
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_convo_id ON messages (convo_id);
-        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo_id ON messages (convo_id);")
         logger.info("Created index idx_messages_convo_id")
 
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_settings_key ON settings (key);
-        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_settings_key ON settings (key);")
         logger.info("Created index idx_settings_key")
 
-        # Seed initial data (only if tables are empty)
-        c.execute("SELECT COUNT(*) FROM settings")
-        if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) ON CONFLICT (key) DO NOTHING",
-                      ('ai_enabled', '1', datetime.now(timezone.utc).isoformat()))
-            logger.info("Inserted default settings")
+        # Seed initial data (only in development or if explicitly enabled)
+        if os.getenv("SEED_INITIAL_DATA", "false").lower() == "true":
+            c.execute("SELECT COUNT(*) FROM settings")
+            if c.fetchone()[0] == 0:
+                c.execute(
+                    "INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) ON CONFLICT (key) DO NOTHING",
+                    ('ai_enabled', '1', datetime.now(timezone.utc).isoformat())
+                )
+                logger.info("Inserted default settings")
 
-        c.execute("SELECT COUNT(*) FROM agents")
-        if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
-                      ('admin', 'password123'))
-            logger.info("Inserted default admin user")
+            c.execute("SELECT COUNT(*) FROM agents")
+            if c.fetchone()[0] == 0:
+                c.execute(
+                    "INSERT INTO agents (username, password_hash) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
+                    ('admin', generate_password_hash('password123'))
+                )
+                logger.info("Inserted default admin user")
 
-        c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
-        if c.fetchone()[0] == 0:
-            logger.info("ℹ️ Inserting test conversations")
-            test_timestamp1 = "2025-03-22T00:00:00Z"
-            c.execute(
-                "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                ('TestUser1', '123456789', 'whatsapp', None, 1, 0, test_timestamp1)
-            )
-            convo_id1 = c.fetchone()['id']
-            c.execute(
-                "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', test_timestamp1)
-            )
-            test_timestamp2 = "2025-03-22T00:00:01Z"
-            c.execute(
-                "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                ('TestUser2', '987654321', 'whatsapp', None, 1, 0, test_timestamp2)
-            )
-            convo_id2 = c.fetchone()['id']
-            c.execute(
-                "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                (convo_id2, 'TestUser2', 'Can I book a room?', 'user', test_timestamp2)
-            )
-            logger.info("Inserted test conversations")
+            c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
+            if c.fetchone()[0] == 0:
+                logger.info("ℹ️ Inserting test conversations")
+                test_timestamp1 = "2025-03-22T00:00:00Z"
+                c.execute(
+                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    ('TestUser1', '123456789', 'whatsapp', None, 1, 0, test_timestamp1)
+                )
+                convo_id1 = c.fetchone()['id']
+                c.execute(
+                    "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
+                    (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', test_timestamp1)
+                )
+                test_timestamp2 = "2025-03-22T00:00:01Z"
+                c.execute(
+                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    ('TestUser2', '987654321', 'whatsapp', None, 1, 0, test_timestamp2)
+                )
+                convo_id2 = c.fetchone()['id']
+                c.execute(
+                    "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
+                    (convo_id2, 'TestUser2', 'Can I book a room?', 'user', test_timestamp2)
+                )
+                logger.info("Inserted test conversations")
 
         conn.commit()
         logger.info("✅ Database initialized")
@@ -387,6 +404,9 @@ def init_db():
 
 # Add test conversations (for development purposes)
 def add_test_conversations():
+    if os.getenv("SEED_INITIAL_DATA", "false").lower() != "true":
+        logger.info("Skipping test conversations (SEED_INITIAL_DATA not enabled)")
+        return
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -397,12 +417,12 @@ def add_test_conversations():
                     c.execute(
                         "INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations, last_updated) "
                         "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                        (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, datetime.now().isoformat())
+                        (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, datetime.now(timezone.utc).isoformat())
                     )
                     convo_id = c.fetchone()['id']
                     c.execute(
                         "INSERT INTO messages (convo_id, username, sender, message, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                        (convo_id, f"test_user_{i}", "user", f"Test message {i}", datetime.now().isoformat())
+                        (convo_id, f"test_user_{i}", "user", f"Test message {i}", datetime.now(timezone.utc).isoformat())
                     )
                 conn.commit()
                 logger.info("✅ Added test conversations")
@@ -419,7 +439,7 @@ add_test_conversations()
 
 def log_message(convo_id, username, message, sender):
     try:
-        timestamp = datetime.now(timezone.utc).isoformat()  # Use ISO format with UTC
+        timestamp = datetime.now(timezone.utc).isoformat()
         logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -431,7 +451,7 @@ def log_message(convo_id, username, message, sender):
             conn.commit()
             logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
             release_db_connection(conn)
-        return timestamp  # Return the timestamp for use in emissions
+        return timestamp
     except Exception as e:
         logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
         raise
@@ -483,11 +503,11 @@ def login():
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT id, username FROM agents WHERE username = %s AND password = %s",
-                (username, password)
+                "SELECT id, username, password_hash FROM agents WHERE username = %s",
+                (username,)
             )
             agent = c.fetchone()
-            if agent:
+            if agent and check_password_hash(agent['password_hash'], password):
                 agent_obj = Agent(agent['id'], agent['username'])
                 login_user(agent_obj)
                 logger.info(f"✅ Login successful for agent: {agent['username']}")
@@ -565,7 +585,6 @@ def settings():
                     (key, value, current_timestamp, value, current_timestamp)
                 )
                 conn.commit()
-                # Invalidate cache if ai_enabled is updated
                 if key == "ai_enabled":
                     settings_cache.pop("ai_enabled", None)
                     logger.info("✅ Invalidated ai_enabled cache after update")
@@ -637,7 +656,7 @@ def handoff():
             c = conn.cursor()
             c.execute(
                 "UPDATE conversations SET assigned_agent = %s, ai_enabled = 0, last_updated = %s WHERE id = %s",
-                (current_user.username, datetime.now().isoformat(), convo_id)
+                (current_user.username, datetime.now(timezone.utc).isoformat(), convo_id)
             )
             conn.commit()
             release_db_connection(conn)
@@ -663,7 +682,7 @@ def handback_to_ai():
             c = conn.cursor()
             c.execute(
                 "UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, last_updated = %s WHERE id = %s",
-                (datetime.now().isoformat(), convo_id)
+                (datetime.now(timezone.utc).isoformat(), convo_id)
             )
             conn.commit()
             release_db_connection(conn)
@@ -739,7 +758,6 @@ def get_messages_for_conversation(convo_id):
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Fetch conversation details
             c.execute(
                 "SELECT username FROM conversations WHERE id = %s",
                 (convo_id,)
@@ -750,7 +768,6 @@ def get_messages_for_conversation(convo_id):
                 release_db_connection(conn)
                 return jsonify({"error": "Conversation not found"}), 404
 
-            # Fetch messages for the conversation (limited to 50 to prevent long-running queries)
             c.execute(
                 "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 50",
                 (convo_id,)
@@ -759,7 +776,7 @@ def get_messages_for_conversation(convo_id):
             messages = [
                 {"message": msg["message"], "sender": msg["sender"], "timestamp": msg["timestamp"]}
                 for msg in messages
-            ][::-1]  # Reverse to maintain chronological order
+            ][::-1]
             logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
             release_db_connection(conn)
 
@@ -819,57 +836,81 @@ def send_telegram_message(chat_id, text):
     return False
 
 def send_whatsapp_message(phone_number, text):
-    # Offload to Celery task to avoid blocking
     logger.info(f"Offloading WhatsApp message to Celery task for {phone_number}")
     return send_whatsapp_message_task.delay(phone_number, text)
 
 def send_instagram_message(user_id, text):
     start_time = time.time()
     logger.info(f"Starting send_instagram_message to {user_id}")
-    try:
-        response = requests.post(
-            f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
-            json={"recipient": {"id": user_id}, "message": {"text": text}}
-        )
-        response.raise_for_status()
-        logger.info(f"✅ Sent Instagram message to {user_id}: {text}")
-        logger.info(f"Finished send_instagram_message in {time.time() - start_time:.2f} seconds")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Error sending Instagram message to {user_id}: {str(e)}")
-        return False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
+                json={"recipient": {"id": user_id}, "message": {"text": text}},
+                timeout=10
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Sent Instagram message to {user_id}: {text}")
+            logger.info(f"Finished send_instagram_message in {time.time() - start_time:.2f} seconds")
+            return True
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"❌ Instagram API error (Attempt {attempt + 1}/{max_retries}): {str(e)}, Response: {e.response.text}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Instagram request failed (Attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            return False
+    logger.error(f"❌ Failed to send Instagram message after {max_retries} attempts")
+    return False
 
 def check_availability(check_in, check_out):
     start_time = time.time()
     logger.info(f"Starting check_availability from {check_in} to {check_out}")
-    try:
-        current_date = check_in
-        while current_date < check_out:
-            start_time_dt = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-            end_time_dt = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
+    max_retries = 3
+    current_date = check_in
+    while current_date < check_out:
+        start_time_dt = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
+        end_time_dt = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
 
-            events_result = service.events().list(
-                calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',
-                timeMin=start_time_dt,
-                timeMax=end_time_dt,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            events = events_result.get('items', [])
+        for attempt in range(max_retries):
+            try:
+                events_result = service.events().list(
+                    calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',
+                    timeMin=start_time_dt,
+                    timeMax=end_time_dt,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
+                events = events_result.get('items', [])
 
-            if any(event.get('summary') == "Fully Booked" for event in events):
-                result = f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
-                logger.info(f"Finished check_availability (not available) in {time.time() - start_time:.2f} seconds")
-                return result
+                if any(event.get('summary') == "Fully Booked" for event in events):
+                    result = f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
+                    logger.info(f"Finished check_availability (not available) in {time.time() - start_time:.2f} seconds")
+                    return result
+                break  # Success, move to next date
+            except HttpError as e:
+                logger.error(f"❌ Google Calendar API error (Attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
+            except Exception as e:
+                logger.error(f"❌ Unexpected error in check_availability (Attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
+        current_date += timedelta(days=1)
 
-            current_date += timedelta(days=1)
-
-        result = f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are available."
-        logger.info(f"Finished check_availability (available) in {time.time() - start_time:.2f} seconds")
-        return result
-    except Exception as e:
-        logger.error(f"❌ Google Calendar API error: {str(e)}")
-        return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
+    result = f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are available."
+    logger.info(f"Finished check_availability (available) in {time.time() - start_time:.2f} seconds")
+    return result
 
 def ai_respond(message, convo_id):
     start_time = time.time()
@@ -1034,7 +1075,6 @@ def whatsapp():
             logger.error("❌ GET method not allowed for /whatsapp")
             return Response("Method not allowed", status=405)
 
-        # Extract Twilio WhatsApp data
         form = request.form
         message_body = form.get("Body", "").strip()
         from_number = form.get("From", "")
@@ -1043,10 +1083,7 @@ def whatsapp():
             logger.error("❌ Missing message body or chat_id in WhatsApp request")
             return Response("Missing required fields", status=400)
 
-        # Log the user message timestamp immediately
         user_timestamp = datetime.now(timezone.utc).isoformat()
-
-        # Offload processing to Celery
         process_whatsapp_message.delay(from_number, chat_id, message_body, user_timestamp)
         logger.info(f"Finished /whatsapp (queued) in {time.time() - start_time:.2f} seconds")
         return Response("Message queued for processing", status=202)
@@ -1128,10 +1165,7 @@ def handle_agent_message(data):
             username, chat_id, convo_channel = result
             release_db_connection(conn)
 
-        # Log the agent's message
         agent_timestamp = log_message(convo_id, username, message, "agent")
-
-        # Emit to the UI
         emit("new_message", {
             "convo_id": convo_id,
             "message": message,
@@ -1148,18 +1182,14 @@ def handle_agent_message(data):
             "timestamp": agent_timestamp,
         })
 
-        # Send to WhatsApp (offloaded to Celery)
         if convo_channel == "whatsapp":
             if not chat_id:
                 logger.error(f"❌ No chat_id found for convo_id {convo_id}")
                 emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp: No chat_id found", "channel": "whatsapp"})
                 return
             task = send_whatsapp_message(chat_id, message)
-            # Since this is a Socket.IO handler, we don't wait for the Celery task to complete
-            # The task will log its own success/failure
             logger.info(f"Offloaded WhatsApp message for convo_id {convo_id} to Celery task")
 
-        # Update last_updated timestamp
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
@@ -1177,7 +1207,7 @@ def handle_agent_message(data):
 if __name__ == "__main__":
     try:
         logger.info("✅ Starting Flask-SocketIO server")
-        socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+        socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)  # Debug disabled for production
     except Exception as e:
         logger.error(f"❌ Failed to start server: {str(e)}")
         raise
