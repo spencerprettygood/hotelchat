@@ -1287,7 +1287,6 @@ def instagram():
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
     try:
-        # Extract Twilio data
         from_number = request.form.get("From")
         message_body = request.form.get("Body")
         if not from_number or not message_body:
@@ -1299,7 +1298,6 @@ def whatsapp():
 
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Check if conversation exists
             c.execute(
                 "SELECT id, username FROM conversations WHERE chat_id = %s AND channel = %s",
                 (prefixed_from, "whatsapp")
@@ -1313,7 +1311,7 @@ def whatsapp():
                     (datetime.now().isoformat(), convo_id)
                 )
             else:
-                username = prefixed_from  # Use phone number as username if new conversation
+                username = prefixed_from  # Use phone number as username for new conversations
                 c.execute(
                     "INSERT INTO conversations (username, chat_id, channel, last_updated) VALUES (%s, %s, %s, %s) RETURNING id",
                     (username, prefixed_from, "whatsapp", datetime.now().isoformat())
@@ -1321,7 +1319,7 @@ def whatsapp():
                 convo_id = c.fetchone()["id"]
             conn.commit()
 
-            # Log incoming user message
+            # Log user message
             log_message(convo_id, username, message_body, "user")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
@@ -1345,7 +1343,7 @@ def whatsapp():
             else:
                 response = ai_respond(message_body, convo_id)
 
-            log_message(convo_id, username, response, "ai")  # Use fetched username
+            log_message(convo_id, username, response, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": response,
@@ -1361,32 +1359,25 @@ def whatsapp():
                 "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
-            # Send AI response to WhatsApp
             if not send_whatsapp_message(from_number, response):
                 logger.error(f"❌ Failed to send AI response to WhatsApp for {from_number}")
-                socketio.emit("error", {"convo_id": convo_id, "message": "Failed to send AI response to WhatsApp", "channel": "whatsapp"})
-
-            # Handle handoff if needed
-            if "sorry" in response.lower() or "lo siento" in response.lower():
-                c = conn.cursor()
-                c.execute(
-                    "SELECT handoff_notified FROM conversations WHERE id = %s",
-                    (convo_id,)
-                )
-                handoff_notified = c.fetchone()["handoff_notified"]
-                if not handoff_notified:
-                    c.execute(
-                        "UPDATE conversations SET handoff_notified = %s, visible_in_conversations = %s, last_updated = %s WHERE id = %s",
-                        (1, 1, datetime.now().isoformat(), convo_id)
-                    )
-                    conn.commit()
-                    socketio.emit("refresh_conversations", {"conversation_id": convo_id, "user": from_number, "channel": "whatsapp"})
-
             return jsonify({}), 200
     except Exception as e:
         logger.error(f"❌ Error in /whatsapp endpoint: {e}")
         return jsonify({"error": "Failed to process WhatsApp message"}), 500
-        
+
+def log_message(convo_id, username, message, sender):
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
+                (convo_id, username, message, sender, datetime.now().isoformat())
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Database error in log_message: {e}")
+        raise
 
 # Socket.IO Event Handlers
 @socketio.on("connect")
