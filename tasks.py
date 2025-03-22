@@ -1,3 +1,5 @@
+from chat_server import logger  # In send_whatsapp_message_task
+from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled  # In process_whatsapp_message
 from celery import Celery
 import os
 
