@@ -615,12 +615,15 @@
         const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
         chatLoadingSpinner.style.display = "block";
         try {
+            console.log(`Fetching messages for convo_id ${convoId}`);
             const response = await fetch(`/messages/${convoId}`);
             if (!response.ok) {
                 const errorText = await response.text();
                 throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
             }
             const data = await response.json();
+            console.log("Received messages for convo_id", convoId, ":", data);
+    
             const chatBox = document.getElementById("chat-box");
             chatBox.innerHTML = "";
             lastMessageDate = null;
