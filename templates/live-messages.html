@@ -554,12 +554,20 @@
     }
 
     function formatTimestamp(timestamp) {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) {
+        console.error("Invalid timestamp:", timestamp);
+        return "Invalid time";
     }
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
     function formatDateForSeparator(timestamp) {
         const date = new Date(timestamp);
+        if (isNaN(date.getTime())) {
+            console.error("Invalid timestamp for date separator:", timestamp);
+            return "Unknown Date";
+        }
         const today = new Date();
         if (date.toDateString() === today.toDateString()) return "Today";
         const yesterday = new Date(today);
@@ -568,17 +576,13 @@
         return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
     }
 
-    function addDateSeparator(dateStr) {
-        const chatBox = document.getElementById("chat-box");
-        const separator = document.createElement("div");
-        separator.className = "date-separator";
-        separator.textContent = dateStr;
-        chatBox.appendChild(separator);
-    }
-
     function appendMessage(msg, sender) {
         const chatBox = document.getElementById("chat-box");
         const messageDate = new Date(msg.timestamp);
+        if (isNaN(messageDate.getTime())) {
+            console.error("Invalid message timestamp:", msg.timestamp);
+            return; // Skip invalid messages
+        }
         const dateStr = formatDateForSeparator(msg.timestamp);
 
         if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
@@ -591,7 +595,7 @@
         const isAgent = sender === "agent";
         div.className = "message";
         div.classList.add(isUser ? "user-message" : isAgent ? "agent-message" : "ai-message");
-
+    
         const bubble = document.createElement("div");
         bubble.className = "message-bubble";
         bubble.textContent = msg.message;
