@@ -106,8 +106,10 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             logger.info(f"AI response skipped for convo_id {convo_id}")
             return
 
+      # In process_whatsapp_message
         # Send and log AI response
-        if send_whatsapp_message(from_number, response):
+        task = send_whatsapp_message(from_number, response)  # Returns AsyncResult
+        if task.get():  # Wait for the task to complete (this is fine in a Celery task)
             ai_timestamp = log_message(convo_id, username, response, "ai")
             with get_db_connection() as conn:
                 c = conn.cursor()
@@ -135,6 +137,22 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             logger.info(f"Emitted live_message for AI response: {response}")
         else:
             logger.error(f"Failed to send AI response to WhatsApp for chat_id {chat_id}")
+            except Exception as e:
+                logger.error(f"Error in process_whatsapp_message task: {str(e)}")
 
+
+
+@celery_app.task
+def send_whatsapp_message_task(to_number, message):
+    from chat_server import client, logger
+    try:
+        message = client.messages.create(
+            body=message,
+            from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
+            to=f"whatsapp:{to_number}"
+        )
+        logger.info(f"Sent WhatsApp message to {to_number}: {message.sid}")
+        return True
     except Exception as e:
-        logger.error(f"Error in process_whatsapp_message task: {str(e)}")
+        logger.error(f"Failed to send WhatsApp message to {to_number}: {str(e)}")
+        return False
