@@ -39,8 +39,8 @@ socketio = SocketIO(
     app,
     cors_allowed_origins="*",
     async_mode="eventlet",
-    ping_timeout=60,
-    ping_interval=25,
+    ping_timeout=120,
+    ping_interval=30,
     logger=True,  # Enable Socket.IO logging for debugging
     engineio_logger=True  # Enable Engine.IO logging for debugging
 )
@@ -187,6 +187,14 @@ def get_db_connection():
     except Exception as e:
         logger.error(f"❌ Failed to connect to database: {e}")
         raise Exception(f"Failed to connect to database: {e}")
+
+def release_db_connection(conn):
+    if conn:
+        try:
+            conn.close()
+            logger.info("✅ Database connection closed")
+        except Exception as e:
+            logger.error(f"❌ Failed to close database connection: {e}")
 
 def init_db():
     with get_db_connection() as conn:
