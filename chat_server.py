@@ -524,46 +524,43 @@ def check_visibility():
 
 @app.route("/all-whatsapp-messages", methods=["GET"])
 def get_all_whatsapp_messages():
-    logger.info("Fetching WhatsApp conversations from /all-whatsapp-messages")
     try:
+        logger.info("Fetching all WhatsApp conversations")
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Fetch all WhatsApp conversations where visible_in_conversations = 1
             c.execute(
                 "SELECT id, chat_id, username, last_updated "
                 "FROM conversations "
-                "WHERE channel = 'whatsapp' AND visible_in_conversations = 1 "
+                "WHERE channel = 'whatsapp' "
                 "ORDER BY last_updated DESC"
             )
-            conversations = [
-                {"convo_id": row[0], "chat_id": row[1], "username": row[2], "last_updated": row[3]}
-                for row in c.fetchall()
-            ]
-
-            # Log the fetched conversations
-            logger.info(f"Fetched conversations: {[convo['chat_id'] for convo in conversations]}")
-
-            # Fetch messages for each conversation
+            conversations = c.fetchall()
+            logger.info(f"Found {len(conversations)} conversations: {[(c[0], c[1]) for c in conversations]}")
+            result = []
             for convo in conversations:
+                convo_id, chat_id, username, last_updated = convo
                 c.execute(
-                    "SELECT message, sender, timestamp "
-                    "FROM messages "
-                    "WHERE convo_id = %s "
-                    "ORDER BY timestamp ASC",
-                    (convo["convo_id"],)
+                    "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp ASC",
+                    (convo_id,)
                 )
-                messages = [
-                    {"message": row[0], "sender": row[1], "timestamp": row[2]}
-                    for row in c.fetchall()
-                ]
-                convo["messages"] = messages
-                logger.info(f"Messages for convo_id {convo['convo_id']}: {len(messages)} messages")
-
-            logger.info(f"Retrieved {len(conversations)} conversations")
-            return jsonify({"conversations": conversations})
+                messages = c.fetchall()
+                logger.info(f"Found {len(messages)} messages for convo_id {convo_id} (chat_id {chat_id})")
+                result.append({
+                    "convo_id": convo_id,
+                    "chat_id": chat_id,
+                    "username": username,
+                    "last_updated": last_updated,
+                    "messages": [
+                        {"message": msg[0], "sender": msg[1], "timestamp": msg[2]}
+                        for msg in messages
+                    ]
+                })
+            return jsonify({"conversations": result})
     except Exception as e:
-        logger.error(f"❌ Error in /all-whatsapp-messages: {str(e)}")
-        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+        logger.error(f"Error fetching all WhatsApp messages: {str(e)}")
+        return jsonify({"error": "Failed to fetch conversations"}), 500
+    finally:
+        release_db_connection(conn)
 
 @app.route("/all-messages", methods=["GET"])
 def get_all_messages():
