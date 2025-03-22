@@ -1,5 +1,6 @@
-import eventlet
-eventlet.monkey_patch()
+import gevent
+from gevent import monkey
+monkey.patch_all()
 
 from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
@@ -14,7 +15,7 @@ import requests
 import json
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
-from tasks import process_whatsapp_message
+from tasks import process_whatsapp_message, send_whatsapp_message_task
 from datetime import datetime, timezone, timedelta
 import time
 import logging
@@ -26,7 +27,10 @@ from cachetools import TTLCache
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chat_server")
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logger.addHandler(handler)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -36,7 +40,7 @@ CORS(app)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="eventlet",
+    async_mode="gevent",  # Changed to gevent for compatibility with Gunicorn
     ping_timeout=120,
     ping_interval=30,
     logger=True,
@@ -437,29 +441,43 @@ class Agent(UserMixin):
 
 @login_manager.user_loader
 def load_user(agent_id):
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
-        agent = c.fetchone()
-        if agent:
+    start_time = time.time()
+    logger.info(f"Starting load_user for agent_id {agent_id}")
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
+            agent = c.fetchone()
+            if agent:
+                release_db_connection(conn)
+                logger.info(f"Finished load_user for agent_id {agent_id} in {time.time() - start_time:.2f} seconds")
+                return Agent(agent['id'], agent['username'])
             release_db_connection(conn)
-            return Agent(agent['id'], agent['username'])
-        release_db_connection(conn)
-    return None
+        logger.info(f"Finished load_user for agent_id {agent_id} (not found) in {time.time() - start_time:.2f} seconds")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Error in load_user: {str(e)}")
+        return None
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method == "GET":
-        if current_user.is_authenticated:
-            return redirect(request.args.get("next", "/conversations"))
-        return render_template("login.html")
+    start_time = time.time()
+    logger.info("Starting /login endpoint")
     try:
+        if request.method == "GET":
+            if current_user.is_authenticated:
+                logger.info(f"User already authenticated, redirecting in {time.time() - start_time:.2f} seconds")
+                return redirect(request.args.get("next", "/conversations"))
+            logger.info(f"Rendering login page in {time.time() - start_time:.2f} seconds")
+            return render_template("login.html")
+        
         data = request.get_json()
         username = data.get("username")
         password = data.get("password")
         if not username or not password:
             logger.error("❌ Missing username or password in /login request")
             return jsonify({"message": "Missing username or password"}), 400
+        
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
@@ -473,9 +491,11 @@ def login():
                 logger.info(f"✅ Login successful for agent: {agent['username']}")
                 next_page = request.args.get("next", "/conversations")
                 release_db_connection(conn)
+                logger.info(f"Finished /login (success) in {time.time() - start_time:.2f} seconds")
                 return jsonify({"message": "Login successful", "agent": agent['username'], "redirect": next_page})
             logger.error("❌ Invalid credentials in /login request")
             release_db_connection(conn)
+            logger.info(f"Finished /login (failed) in {time.time() - start_time:.2f} seconds")
             return jsonify({"message": "Invalid credentials"}), 401
     except Exception as e:
         logger.error(f"❌ Error in /login: {e}")
@@ -484,10 +504,13 @@ def login():
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
+    start_time = time.time()
+    logger.info("Starting /logout endpoint")
     try:
         username = current_user.username
         logout_user()
         logger.info(f"✅ Logout successful for agent: {username}")
+        logger.info(f"Finished /logout in {time.time() - start_time:.2f} seconds")
         return jsonify({"message": "Logged out successfully"})
     except Exception as e:
         logger.error(f"❌ Error in /logout: {e}")
@@ -495,11 +518,15 @@ def logout():
 
 @app.route("/check-auth", methods=["GET"])
 def check_auth():
+    start_time = time.time()
+    logger.info("Starting /check-auth endpoint")
     try:
-        return jsonify({
+        result = {
             "is_authenticated": current_user.is_authenticated,
             "agent": current_user.username if current_user.is_authenticated else None
-        })
+        }
+        logger.info(f"Finished /check-auth in {time.time() - start_time:.2f} seconds")
+        return jsonify(result)
     except Exception as e:
         logger.error(f"❌ Error in /check-auth: {e}")
         return jsonify({"error": "Failed to check authentication"}), 500
@@ -507,24 +534,24 @@ def check_auth():
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings():
-    if request.method == "GET":
-        try:
+    start_time = time.time()
+    logger.info("Starting /settings endpoint")
+    try:
+        if request.method == "GET":
             with get_db_connection() as conn:
                 c = conn.cursor()
                 c.execute("SELECT key, value, last_updated FROM settings")
                 settings = {row['key']: {'value': row['value'], 'last_updated': row['last_updated']} for row in c.fetchall()}
                 release_db_connection(conn)
+                logger.info(f"Finished /settings GET in {time.time() - start_time:.2f} seconds")
                 return jsonify({key: val['value'] for key, val in settings.items()})
-        except Exception as e:
-            logger.error(f"❌ Error fetching settings: {str(e)}")
-            return jsonify({"error": "Failed to fetch settings"}), 500
 
-    elif request.method == "POST":
-        try:
+        elif request.method == "POST":
             data = request.get_json()
             key = data.get("key")
             value = data.get("value")
             if not key or value is None:
+                logger.error("Missing key or value in /settings POST")
                 return jsonify({"error": "Missing key or value"}), 400
 
             current_timestamp = datetime.now(timezone.utc).isoformat()
@@ -542,25 +569,34 @@ def settings():
                     logger.info("✅ Invalidated ai_enabled cache after update")
                 release_db_connection(conn)
                 socketio.emit("settings_updated", {key: value})
+                logger.info(f"Finished /settings POST in {time.time() - start_time:.2f} seconds")
                 return jsonify({"status": "success"})
-        except Exception as e:
-            logger.error(f"❌ Error updating settings: {str(e)}")
-            return jsonify({"error": "Failed to update settings"}), 500
+    except Exception as e:
+        logger.error(f"❌ Error in /settings: {str(e)}")
+        return jsonify({"error": "Failed to update settings"}), 500
 
 # Page Endpoints
 @app.route("/live-messages/")
 @login_required
 def live_messages_page():
+    start_time = time.time()
+    logger.info("Starting /live-messages endpoint")
     try:
-        return render_template("live-messages.html")
+        result = render_template("live-messages.html")
+        logger.info(f"Finished /live-messages in {time.time() - start_time:.2f} seconds")
+        return result
     except Exception as e:
         logger.error(f"❌ Error rendering live-messages page: {e}")
         return jsonify({"error": "Failed to load live-messages page"}), 500
 
 @app.route("/")
 def index():
+    start_time = time.time()
+    logger.info("Starting / endpoint")
     try:
-        return render_template("dashboard.html")
+        result = render_template("dashboard.html")
+        logger.info(f"Finished / in {time.time() - start_time:.2f} seconds")
+        return result
     except Exception as e:
         logger.error(f"❌ Error rendering dashboard page: {e}")
         return jsonify({"error": "Failed to load dashboard page"}), 500
@@ -568,6 +604,8 @@ def index():
 @app.route("/conversations", methods=["GET"])
 @login_required
 def get_conversations():
+    start_time = time.time()
+    logger.info("Starting /conversations endpoint")
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -576,6 +614,7 @@ def get_conversations():
             )
             conversations = [{"id": row["id"], "username": row["username"], "channel": row["channel"], "assigned_agent": row["assigned_agent"]} for row in c.fetchall()]
             release_db_connection(conn)
+            logger.info(f"Finished /conversations in {time.time() - start_time:.2f} seconds")
             return jsonify(conversations)
     except Exception as e:
         logger.error(f"❌ Error in /conversations: {e}")
@@ -584,10 +623,13 @@ def get_conversations():
 @app.route("/handoff", methods=["POST"])
 @login_required
 def handoff():
+    start_time = time.time()
+    logger.info("Starting /handoff endpoint")
     try:
         data = request.get_json()
         convo_id = data.get("conversation_id")
         if not convo_id:
+            logger.error("Missing conversation_id in /handoff")
             return jsonify({"error": "Missing conversation_id"}), 400
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -598,6 +640,7 @@ def handoff():
             conn.commit()
             release_db_connection(conn)
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+        logger.info(f"Finished /handoff in {time.time() - start_time:.2f} seconds")
         return jsonify({"message": "Conversation assigned successfully"})
     except Exception as e:
         logger.error(f"❌ Error in /handoff: {e}")
@@ -606,10 +649,13 @@ def handoff():
 @app.route("/handback-to-ai", methods=["POST"])
 @login_required
 def handback_to_ai():
+    start_time = time.time()
+    logger.info("Starting /handback-to-ai endpoint")
     try:
         data = request.get_json()
         convo_id = data.get("conversation_id")
         if not convo_id:
+            logger.error("Missing conversation_id in /handback-to-ai")
             return jsonify({"error": "Missing conversation_id"}), 400
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -620,6 +666,7 @@ def handback_to_ai():
             conn.commit()
             release_db_connection(conn)
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+        logger.info(f"Finished /handback-to-ai in {time.time() - start_time:.2f} seconds")
         return jsonify({"message": "Conversation handed back to AI"})
     except Exception as e:
         logger.error(f"❌ Error in /handback-to-ai: {e}")
@@ -628,9 +675,12 @@ def handback_to_ai():
 @app.route("/check-visibility", methods=["GET"])
 @login_required
 def check_visibility():
+    start_time = time.time()
+    logger.info("Starting /check-visibility endpoint")
     try:
         convo_id = request.args.get("conversation_id")
         if not convo_id:
+            logger.error("Missing conversation_id in /check-visibility")
             return jsonify({"error": "Missing conversation_id"}), 400
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -640,6 +690,7 @@ def check_visibility():
             )
             result = c.fetchone()
             release_db_connection(conn)
+            logger.info(f"Finished /check-visibility in {time.time() - start_time:.2f} seconds")
             return jsonify({"visible": bool(result["visible_in_conversations"])})
     except Exception as e:
         logger.error(f"❌ Error in /check-visibility: {e}")
@@ -648,8 +699,9 @@ def check_visibility():
 @app.route("/all-whatsapp-messages", methods=["GET"])
 @login_required
 def get_all_whatsapp_messages():
+    start_time = time.time()
+    logger.info("Starting /all-whatsapp-messages endpoint")
     try:
-        logger.info("Fetching all WhatsApp conversations")
         with get_db_connection() as conn:
             c = conn.cursor()
             logger.info("Executing query to fetch conversations")
@@ -670,8 +722,8 @@ def get_all_whatsapp_messages():
                 }
                 for convo in conversations
             ]
-            logger.info("Returning conversations response")
             release_db_connection(conn)
+            logger.info(f"Finished /all-whatsapp-messages in {time.time() - start_time:.2f} seconds")
             return jsonify({"conversations": result})
     except Exception as e:
         logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
@@ -680,7 +732,8 @@ def get_all_whatsapp_messages():
 @app.route("/messages/<int:convo_id>", methods=["GET"])
 @login_required
 def get_messages_for_conversation(convo_id):
-    logger.info(f"Fetching messages for convo_id {convo_id}")
+    start_time = time.time()
+    logger.info(f"Starting /messages/{convo_id} endpoint")
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -695,21 +748,23 @@ def get_messages_for_conversation(convo_id):
                 release_db_connection(conn)
                 return jsonify({"error": "Conversation not found"}), 404
 
-            # Fetch messages for the conversation
+            # Fetch messages for the conversation (limited to 50 to prevent long-running queries)
             c.execute(
-                "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp ASC",
+                "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 50",
                 (convo_id,)
             )
             messages = c.fetchall()
+            messages = [
+                {"message": msg["message"], "sender": msg["sender"], "timestamp": msg["timestamp"]}
+                for msg in messages
+            ][::-1]  # Reverse to maintain chronological order
             logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
             release_db_connection(conn)
 
+            logger.info(f"Finished /messages/{convo_id} in {time.time() - start_time:.2f} seconds")
             return jsonify({
                 "username": convo["username"],
-                "messages": [
-                    {"message": msg["message"], "sender": msg["sender"], "timestamp": msg["timestamp"]}
-                    for msg in messages
-                ]
+                "messages": messages
             })
     except Exception as e:
         logger.error(f"❌ Error in /messages/{convo_id}: {str(e)}")
@@ -717,6 +772,8 @@ def get_messages_for_conversation(convo_id):
 
 # Messaging Helper Functions
 def send_telegram_message(chat_id, text):
+    start_time = time.time()
+    logger.info(f"Starting send_telegram_message to {chat_id}")
     url = f"{TELEGRAM_API_URL}/sendMessage"
     if not chat_id or not isinstance(chat_id, str):
         logger.error(f"❌ Invalid chat_id: {chat_id}")
@@ -742,6 +799,7 @@ def send_telegram_message(chat_id, text):
             response.raise_for_status()
             logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
             time.sleep(0.5)
+            logger.info(f"Finished send_telegram_message in {time.time() - start_time:.2f} seconds")
             return True
         except requests.exceptions.HTTPError as e:
             logger.error(f"❌ Telegram API error (Attempt {attempt + 1}/{max_retries}): {str(e)}, Response: {e.response.text}")
@@ -759,32 +817,13 @@ def send_telegram_message(chat_id, text):
     return False
 
 def send_whatsapp_message(phone_number, text):
-    try:
-        if not TWILIO_WHATSAPP_NUMBER.startswith("whatsapp:"):
-            logger.error(f"❌ TWILIO_WHATSAPP_NUMBER must start with 'whatsapp:': {TWILIO_WHATSAPP_NUMBER}")
-            return False
-
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-        if not phone_number.startswith("whatsapp:"):
-            phone_number = f"whatsapp:{phone_number}"
-
-        message = client.messages.create(
-            body=text,
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=phone_number
-        )
-
-        logger.info(f"✅ Sent WhatsApp message to {phone_number}: {text}, SID: {message.sid}")
-        return True
-    except TwilioRestException as e:
-        logger.error(f"❌ Twilio error sending WhatsApp message: {str(e)}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ Error sending WhatsApp message: {str(e)}")
-        return False
+    # Offload to Celery task to avoid blocking
+    logger.info(f"Offloading WhatsApp message to Celery task for {phone_number}")
+    return send_whatsapp_message_task.delay(phone_number, text)
 
 def send_instagram_message(user_id, text):
+    start_time = time.time()
+    logger.info(f"Starting send_instagram_message to {user_id}")
     try:
         response = requests.post(
             f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
@@ -792,40 +831,47 @@ def send_instagram_message(user_id, text):
         )
         response.raise_for_status()
         logger.info(f"✅ Sent Instagram message to {user_id}: {text}")
+        logger.info(f"Finished send_instagram_message in {time.time() - start_time:.2f} seconds")
         return True
     except Exception as e:
         logger.error(f"❌ Error sending Instagram message to {user_id}: {str(e)}")
         return False
 
 def check_availability(check_in, check_out):
-    logger.info(f"✅ Checking availability from {check_in} to {check_out}")
+    start_time = time.time()
+    logger.info(f"Starting check_availability from {check_in} to {check_out}")
     try:
         current_date = check_in
         while current_date < check_out:
-            start_time = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-            end_time = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
+            start_time_dt = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
+            end_time_dt = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
 
             events_result = service.events().list(
                 calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',
-                timeMin=start_time,
-                timeMax=end_time,
+                timeMin=start_time_dt,
+                timeMax=end_time_dt,
                 singleEvents=True,
                 orderBy='startTime'
             ).execute()
             events = events_result.get('items', [])
 
             if any(event.get('summary') == "Fully Booked" for event in events):
-                return f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
+                result = f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
+                logger.info(f"Finished check_availability (not available) in {time.time() - start_time:.2f} seconds")
+                return result
 
             current_date += timedelta(days=1)
 
-        return f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are available."
+        result = f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are available."
+        logger.info(f"Finished check_availability (available) in {time.time() - start_time:.2f} seconds")
+        return result
     except Exception as e:
         logger.error(f"❌ Google Calendar API error: {str(e)}")
         return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
 
 def ai_respond(message, convo_id):
-    logger.info(f"✅ Generating AI response for convo_id {convo_id}: {message}")
+    start_time = time.time()
+    logger.info(f"Starting ai_respond for convo_id {convo_id}: {message}")
     try:
         date_match = re.search(
             r'(?:are rooms available|availability|do you have any rooms|rooms available|what about|'
@@ -854,8 +900,10 @@ def ai_respond(message, convo_id):
                 check_in_str = f"{month1_en} {day1_es}"
                 check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
             else:
-                return "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if "sorry" in message.lower() else \
+                result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if "sorry" in message.lower() else \
                        "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
+                logger.info(f"Finished ai_respond (date error) in {time.time() - start_time:.2f} seconds")
+                return result
 
             if month2_en and day2_en:
                 check_out_str = f"{month2_en} {day2_en}"
@@ -872,8 +920,10 @@ def ai_respond(message, convo_id):
                 check_out = check_out.replace(year=check_out.year + 1)
 
             if check_out <= check_in:
-                return "The check-out date must be after the check-in date. Please provide a valid range." if "sorry" in message.lower() else \
+                result = "The check-out date must be after the check-in date. Please provide a valid range." if "sorry" in message.lower() else \
                        "La fecha de salida debe ser posterior a la fecha de entrada. Por favor, proporciona un rango válido."
+                logger.info(f"Finished ai_respond (invalid date range) in {time.time() - start_time:.2f} seconds")
+                return result
 
             availability = check_availability(check_in, check_out)
             if "are available" in availability.lower():
@@ -891,12 +941,15 @@ def ai_respond(message, convo_id):
             else:
                 response = availability if "sorry" in message.lower() else \
                            availability.replace("are not available", "no están disponibles").replace("fully booked", "completamente reservado")
+            logger.info(f"Finished ai_respond (availability check) in {time.time() - start_time:.2f} seconds")
             return response
 
         is_spanish = any(spanish_word in message.lower() for spanish_word in ["reservar", "habitación", "disponibilidad"])
         if "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
-            return "I’ll connect you with a team member to assist with your booking." if not is_spanish else \
+            result = "I’ll connect you with a team member to assist with your booking." if not is_spanish else \
                    "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
+            logger.info(f"Finished ai_respond (booking intent) in {time.time() - start_time:.2f} seconds")
+            return result
 
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -926,23 +979,32 @@ def ai_respond(message, convo_id):
                 ai_reply = response.choices[0].message.content.strip()
                 logger.info(f"✅ AI reply: {ai_reply}")
                 if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
+                    logger.info(f"Finished ai_respond (AI sorry) in {time.time() - start_time:.2f} seconds")
                     return ai_reply
+                logger.info(f"Finished ai_respond (AI success) in {time.time() - start_time:.2f} seconds")
                 return ai_reply
             except Exception as e:
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retry_attempts - 1:
-                    return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
+                    result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
                            "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
+                    logger.info(f"Finished ai_respond (OpenAI error) in {time.time() - start_time:.2f} seconds")
+                    return result
                 time.sleep(1)
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
+        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
+        logger.info(f"Finished ai_respond (general error) in {time.time() - start_time:.2f} seconds")
+        return result
 
 def detect_language(message, convo_id):
+    start_time = time.time()
+    logger.info(f"Starting detect_language for convo_id {convo_id}")
     spanish_keywords = ["hola", "gracias", "reservar", "habitación", "disponibilidad", "marzo", "abril"]
     if any(keyword in message.lower() for keyword in spanish_keywords):
+        logger.info(f"Finished detect_language (Spanish detected) in {time.time() - start_time:.2f} seconds")
         return "es"
     
     with get_db_connection() as conn:
@@ -955,30 +1017,40 @@ def detect_language(message, convo_id):
         release_db_connection(conn)
         for msg in messages:
             if any(keyword in msg['message'].lower() for keyword in spanish_keywords):
+                logger.info(f"Finished detect_language (Spanish detected in history) in {time.time() - start_time:.2f} seconds")
                 return "es"
     
+    logger.info(f"Finished detect_language (English detected) in {time.time() - start_time:.2f} seconds")
     return "en"
 
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
-    if request.method == "GET":
-        return Response("Method not allowed", status=405)
+    start_time = time.time()
+    logger.info("Starting /whatsapp endpoint")
+    try:
+        if request.method == "GET":
+            logger.error("❌ GET method not allowed for /whatsapp")
+            return Response("Method not allowed", status=405)
 
-    # Extract Twilio WhatsApp data
-    form = request.form
-    message_body = form.get("Body", "").strip()
-    from_number = form.get("From", "")
-    chat_id = from_number.replace("whatsapp:", "")
-    if not message_body or not chat_id:
-        logger.error("❌ Missing message body or chat_id in WhatsApp request")
-        return Response("Missing required fields", status=400)
+        # Extract Twilio WhatsApp data
+        form = request.form
+        message_body = form.get("Body", "").strip()
+        from_number = form.get("From", "")
+        chat_id = from_number.replace("whatsapp:", "")
+        if not message_body or not chat_id:
+            logger.error("❌ Missing message body or chat_id in WhatsApp request")
+            return Response("Missing required fields", status=400)
 
-    # Log the user message timestamp immediately
-    user_timestamp = datetime.now(timezone.utc).isoformat()
+        # Log the user message timestamp immediately
+        user_timestamp = datetime.now(timezone.utc).isoformat()
 
-    # Offload processing to Celery
-    process_whatsapp_message.delay(from_number, chat_id, message_body, user_timestamp)
-    return Response("Message queued for processing", status=202)
+        # Offload processing to Celery
+        process_whatsapp_message.delay(from_number, chat_id, message_body, user_timestamp)
+        logger.info(f"Finished /whatsapp (queued) in {time.time() - start_time:.2f} seconds")
+        return Response("Message queued for processing", status=202)
+    except Exception as e:
+        logger.error(f"❌ Error in /whatsapp: {str(e)}")
+        return Response("Failed to process WhatsApp message", status=500)
 
 # Socket.IO Event Handlers
 @socketio.on("connect")
@@ -992,29 +1064,44 @@ def handle_disconnect():
 
 @socketio.on("join_conversation")
 def handle_join_conversation(data):
-    logger.info(f"Received join_conversation data: {data}")
-    convo_id = data.get("conversation_id")
-    if not convo_id:
-        logger.error("❌ Missing conversation_id in join_conversation event")
-        emit("error", {"message": "Missing conversation ID"})
-        return
-    join_room(str(convo_id))
-    logger.info(f"✅ Client joined conversation {convo_id}")
-    emit("status", {"message": f"Joined conversation {convo_id}"})
+    start_time = time.time()
+    logger.info(f"Starting handle_join_conversation: {data}")
+    try:
+        convo_id = data.get("conversation_id")
+        if not convo_id:
+            logger.error("❌ Missing conversation_id in join_conversation event")
+            emit("error", {"message": "Missing conversation ID"})
+            return
+        join_room(str(convo_id))
+        logger.info(f"✅ Client joined conversation {convo_id}")
+        emit("status", {"message": f"Joined conversation {convo_id}"})
+        logger.info(f"Finished handle_join_conversation in {time.time() - start_time:.2f} seconds")
+    except Exception as e:
+        logger.error(f"❌ Error in handle_join_conversation: {str(e)}")
+        emit("error", {"message": "Failed to join conversation"})
 
 @socketio.on("leave_conversation")
 def handle_leave_conversation(data):
-    convo_id = data.get("conversation_id")
-    if not convo_id:
-        logger.error("❌ Missing conversation_id in leave_conversation event")
-        emit("error", {"message": "Missing conversation ID"})
-        return
-    leave_room(str(convo_id))
-    logger.info(f"✅ Client left conversation room: {convo_id}")
-    emit("status", {"message": f"Left conversation {convo_id}"})
+    start_time = time.time()
+    logger.info(f"Starting handle_leave_conversation: {data}")
+    try:
+        convo_id = data.get("conversation_id")
+        if not convo_id:
+            logger.error("❌ Missing conversation_id in leave_conversation event")
+            emit("error", {"message": "Missing conversation ID"})
+            return
+        leave_room(str(convo_id))
+        logger.info(f"✅ Client left conversation room: {convo_id}")
+        emit("status", {"message": f"Left conversation {convo_id}"})
+        logger.info(f"Finished handle_leave_conversation in {time.time() - start_time:.2f} seconds")
+    except Exception as e:
+        logger.error(f"❌ Error in handle_leave_conversation: {str(e)}")
+        emit("error", {"message": "Failed to leave conversation"})
 
 @socketio.on("agent_message")
 def handle_agent_message(data):
+    start_time = time.time()
+    logger.info(f"Starting handle_agent_message: {data}")
     try:
         convo_id = data.get("convo_id")
         message = data.get("message")
@@ -1059,16 +1146,16 @@ def handle_agent_message(data):
             "timestamp": agent_timestamp,
         })
 
-        # Send to WhatsApp
+        # Send to WhatsApp (offloaded to Celery)
         if convo_channel == "whatsapp":
             if not chat_id:
                 logger.error(f"❌ No chat_id found for convo_id {convo_id}")
                 emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp: No chat_id found", "channel": "whatsapp"})
                 return
-            if not send_whatsapp_message(chat_id, message):
-                logger.error(f"❌ Failed to send agent message to WhatsApp for chat_id {chat_id}")
-                emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": "whatsapp"})
-                return
+            task = send_whatsapp_message(chat_id, message)
+            # Since this is a Socket.IO handler, we don't wait for the Celery task to complete
+            # The task will log its own success/failure
+            logger.info(f"Offloaded WhatsApp message for convo_id {convo_id} to Celery task")
 
         # Update last_updated timestamp
         with get_db_connection() as conn:
@@ -1079,6 +1166,8 @@ def handle_agent_message(data):
             )
             conn.commit()
             release_db_connection(conn)
+        
+        logger.info(f"Finished handle_agent_message in {time.time() - start_time:.2f} seconds")
     except Exception as e:
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
