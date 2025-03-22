@@ -828,6 +828,29 @@ def detect_language(message, convo_id):
     
     return "en"
 
+@app.route("/messages/<int:convo_id>", methods=["GET"])
+def get_messages_for_conversation(convo_id):
+    logger.info(f"Fetching messages for convo_id {convo_id}")
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT m.sender, m.message, m.timestamp "
+                "FROM messages m "
+                "WHERE m.convo_id = %s "
+                "ORDER BY m.timestamp ASC",
+                (convo_id,)
+            )
+            messages = [
+                {"sender": row[0], "message": row[1], "timestamp": row[2]}
+                for row in c.fetchall()
+            ]
+            logger.info(f"Retrieved {len(messages)} messages for convo_id {convo_id}")
+            return jsonify({"messages": messages})
+    except Exception as e:
+        logger.error(f"❌ Error in /messages/{convo_id}: {str(e)}")
+        return jsonify({"error": "Failed to fetch messages"}), 500
+        
 @app.route("/messages", methods=["GET"])
 def get_messages():
     try:
