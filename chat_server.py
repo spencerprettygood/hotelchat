@@ -397,32 +397,38 @@ def check_auth():
         return jsonify({"error": "Failed to check authentication"}), 500
 
 @app.route("/settings", methods=["GET", "POST"])
-@login_required
 def settings():
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            if request.method == "GET":
-                c.execute("SELECT value FROM settings WHERE key = %s", ('ai_enabled',))
-                result = c.fetchone()
-                ai_enabled = result['value'] if result else '1'
-                return jsonify({"ai_enabled": ai_enabled})
-            elif request.method == "POST":
-                data = request.get_json()
-                key = data.get("key")
-                value = data.get("value")
-                if not key or value is None:
-                    return jsonify({"error": "Missing key or value"}), 400
+    if request.method == "GET":
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("SELECT key, value FROM settings")
+                settings = {row[0]: row[1] for row in c.fetchall()}
+                return jsonify(settings)
+        except Exception as e:
+            logger.error(f"❌ Error fetching settings: {str(e)}")
+            return jsonify({"error": "Failed to fetch settings"}), 500
+
+    elif request.method == "POST":
+        try:
+            data = request.get_json()
+            key = data.get("key")
+            value = data.get("value")
+            if not key or value is None:
+                return jsonify({"error": "Missing key or value"}), 400
+
+            with get_db_connection() as conn:
+                c = conn.cursor()
                 c.execute(
                     "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = %s",
                     (key, value, value)
                 )
                 conn.commit()
-                socketio.emit("settings_updated", {"ai_enabled": value})
+                socketio.emit("settings_updated", {key: value})
                 return jsonify({"status": "success"})
-    except Exception as e:
-        logger.error(f"❌ Error in /settings: {e}")
-        return jsonify({"error": "Failed to process settings"}), 500
+        except Exception as e:
+            logger.error(f"❌ Error updating settings: {str(e)}")
+            return jsonify({"error": "Failed to update settings"}), 500
         
 
 # Page Endpoints
