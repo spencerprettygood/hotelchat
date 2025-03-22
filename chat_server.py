@@ -565,6 +565,27 @@ def get_all_whatsapp_messages():
         logger.error(f"❌ Error in /all-whatsapp-messages: {str(e)}")
         return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
 
+@app.route("/all-messages", methods=["GET"])
+def get_all_messages():
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT m.sender, m.message, m.timestamp "
+                "FROM messages m "
+                "JOIN conversations c ON m.convo_id = c.id "
+                "WHERE c.channel = 'whatsapp' "
+                "ORDER BY m.timestamp ASC"
+            )
+            messages = [
+                {"sender": row[0], "message": row[1], "timestamp": row[2]}
+                for row in c.fetchall()
+            ]
+            return jsonify({"messages": messages})
+    except Exception as e:
+        logger.error(f"❌ Error in /all-messages: {str(e)}")
+        return jsonify({"error": "Failed to fetch messages"}), 500
+
 # Messaging Helper Functions
 def send_telegram_message(chat_id, text):
     url = f"{TELEGRAM_API_URL}/sendMessage"
