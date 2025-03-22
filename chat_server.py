@@ -15,12 +15,14 @@ import json
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 from tasks import process_whatsapp_message
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
 import logging
 import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from psycopg2.pool import SimpleConnectionPool
+from cachetools import TTLCache
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +46,17 @@ socketio = SocketIO(
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+
+# Initialize connection pool
+database_url = os.getenv("DATABASE_URL").replace("postgres://", "postgresql://", 1)
+db_pool = SimpleConnectionPool(
+    minconn=1,
+    maxconn=20,  # Adjust based on Render's limits
+    dsn=database_url
+)
+
+# Cache for ai_enabled setting with 5-second TTL
+settings_cache = TTLCache(maxsize=1, ttl=5)
 
 # Initialize OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -173,22 +186,45 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Database connection
+# Database connection with connection pooling
 def get_db_connection():
     try:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
+        conn = db_pool.getconn()
+        conn.cursor_factory = DictCursor  # Ensure DictCursor is set
+        logger.info("✅ Database connection retrieved from pool")
         return conn
     except Exception as e:
-        logger.error(f"❌ Failed to connect to database: {e}")
-        raise Exception(f"Failed to connect to database: {e}")
+        logger.error(f"❌ Failed to get database connection: {str(e)}")
+        raise Exception(f"Failed to get database connection: {str(e)}")
 
 def release_db_connection(conn):
     if conn:
         try:
-            conn.close()
-            logger.info("✅ Database connection closed")
+            db_pool.putconn(conn)
+            logger.info("✅ Database connection returned to pool")
         except Exception as e:
-            logger.error(f"❌ Failed to close database connection: {e}")
+            logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
+
+# Cache the ai_enabled setting
+def get_ai_enabled():
+    if "ai_enabled" in settings_cache:
+        logger.info("✅ Retrieved ai_enabled from cache")
+        return settings_cache["ai_enabled"]
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT value, last_updated FROM settings WHERE key = %s", ("ai_enabled",))
+            result = c.fetchone()
+            global_ai_enabled = result['value'] if result else "1"
+            ai_toggle_timestamp = result['last_updated'] if result else "1970-01-01T00:00:00Z"
+            settings_cache["ai_enabled"] = (global_ai_enabled, ai_toggle_timestamp)
+            logger.info(f"✅ Cached ai_enabled: {global_ai_enabled}, last_updated: {ai_toggle_timestamp}")
+            release_db_connection(conn)
+        return settings_cache["ai_enabled"]
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}")
+        # Fallback to default values in case of error
+        return ("1", "1970-01-01T00:00:00Z")
 
 def init_db():
     with get_db_connection() as conn:
@@ -283,6 +319,22 @@ def init_db():
                 c.execute("ALTER TABLE settings ADD COLUMN last_updated TEXT DEFAULT CURRENT_TIMESTAMP")
                 logger.info("Added last_updated column to settings table")
 
+        # Create indexes for frequently queried columns
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_chat_id ON conversations (chat_id);
+        """)
+        logger.info("Created index idx_conversations_chat_id")
+
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_convo_id ON messages (convo_id);
+        """)
+        logger.info("Created index idx_messages_convo_id")
+
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_settings_key ON settings (key);
+        """)
+        logger.info("Created index idx_settings_key")
+
         # Seed initial data (only if tables are empty)
         c.execute("SELECT COUNT(*) FROM settings")
         if c.fetchone()[0] == 0:
@@ -325,7 +377,8 @@ def init_db():
 
         conn.commit()
         logger.info("✅ Database initialized")
-        
+        release_db_connection(conn)
+
 # Add test conversations (for development purposes)
 def add_test_conversations():
     try:
@@ -349,6 +402,7 @@ def add_test_conversations():
                 logger.info("✅ Added test conversations")
             else:
                 logger.info("✅ Test conversations already exist, skipping insertion")
+            release_db_connection(conn)
     except Exception as e:
         logger.error(f"❌ Error adding test conversations: {e}")
         raise
@@ -370,6 +424,7 @@ def log_message(convo_id, username, message, sender):
             )
             conn.commit()
             logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
+            release_db_connection(conn)
         return timestamp  # Return the timestamp for use in emissions
     except Exception as e:
         logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
@@ -387,7 +442,9 @@ def load_user(agent_id):
         c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
         agent = c.fetchone()
         if agent:
+            release_db_connection(conn)
             return Agent(agent['id'], agent['username'])
+        release_db_connection(conn)
     return None
 
 @app.route("/login", methods=["GET", "POST"])
@@ -415,8 +472,10 @@ def login():
                 login_user(agent_obj)
                 logger.info(f"✅ Login successful for agent: {agent['username']}")
                 next_page = request.args.get("next", "/conversations")
+                release_db_connection(conn)
                 return jsonify({"message": "Login successful", "agent": agent['username'], "redirect": next_page})
             logger.error("❌ Invalid credentials in /login request")
+            release_db_connection(conn)
             return jsonify({"message": "Invalid credentials"}), 401
     except Exception as e:
         logger.error(f"❌ Error in /login: {e}")
@@ -454,6 +513,7 @@ def settings():
                 c = conn.cursor()
                 c.execute("SELECT key, value, last_updated FROM settings")
                 settings = {row['key']: {'value': row['value'], 'last_updated': row['last_updated']} for row in c.fetchall()}
+                release_db_connection(conn)
                 return jsonify({key: val['value'] for key, val in settings.items()})
         except Exception as e:
             logger.error(f"❌ Error fetching settings: {str(e)}")
@@ -476,6 +536,11 @@ def settings():
                     (key, value, current_timestamp, value, current_timestamp)
                 )
                 conn.commit()
+                # Invalidate cache if ai_enabled is updated
+                if key == "ai_enabled":
+                    settings_cache.pop("ai_enabled", None)
+                    logger.info("✅ Invalidated ai_enabled cache after update")
+                release_db_connection(conn)
                 socketio.emit("settings_updated", {key: value})
                 return jsonify({"status": "success"})
         except Exception as e:
@@ -510,6 +575,7 @@ def get_conversations():
                 "SELECT id, username, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC"
             )
             conversations = [{"id": row["id"], "username": row["username"], "channel": row["channel"], "assigned_agent": row["assigned_agent"]} for row in c.fetchall()]
+            release_db_connection(conn)
             return jsonify(conversations)
     except Exception as e:
         logger.error(f"❌ Error in /conversations: {e}")
@@ -530,6 +596,7 @@ def handoff():
                 (current_user.username, datetime.now().isoformat(), convo_id)
             )
             conn.commit()
+            release_db_connection(conn)
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         return jsonify({"message": "Conversation assigned successfully"})
     except Exception as e:
@@ -551,6 +618,7 @@ def handback_to_ai():
                 (datetime.now().isoformat(), convo_id)
             )
             conn.commit()
+            release_db_connection(conn)
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         return jsonify({"message": "Conversation handed back to AI"})
     except Exception as e:
@@ -571,6 +639,7 @@ def check_visibility():
                 (convo_id,)
             )
             result = c.fetchone()
+            release_db_connection(conn)
             return jsonify({"visible": bool(result["visible_in_conversations"])})
     except Exception as e:
         logger.error(f"❌ Error in /check-visibility: {e}")
@@ -602,12 +671,11 @@ def get_all_whatsapp_messages():
                 for convo in conversations
             ]
             logger.info("Returning conversations response")
+            release_db_connection(conn)
             return jsonify({"conversations": result})
     except Exception as e:
         logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to fetch conversations"}), 500
-    finally:
-        release_db_connection(conn)
 
 @app.route("/messages/<int:convo_id>", methods=["GET"])
 @login_required
@@ -624,6 +692,7 @@ def get_messages_for_conversation(convo_id):
             convo = c.fetchone()
             if not convo:
                 logger.error(f"❌ Conversation not found: {convo_id}")
+                release_db_connection(conn)
                 return jsonify({"error": "Conversation not found"}), 404
 
             # Fetch messages for the conversation
@@ -633,6 +702,7 @@ def get_messages_for_conversation(convo_id):
             )
             messages = c.fetchall()
             logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
+            release_db_connection(conn)
 
             return jsonify({
                 "username": convo["username"],
@@ -644,8 +714,6 @@ def get_messages_for_conversation(convo_id):
     except Exception as e:
         logger.error(f"❌ Error in /messages/{convo_id}: {str(e)}")
         return jsonify({"error": "Failed to fetch messages"}), 500
-    finally:
-        release_db_connection(conn)
 
 # Messaging Helper Functions
 def send_telegram_message(chat_id, text):
@@ -817,6 +885,7 @@ def ai_respond(message, convo_id):
                         (booking_intent, convo_id)
                     )
                     conn.commit()
+                    release_db_connection(conn)
                 response = f"{availability}. Would you like to book?" if "sorry" in message.lower() else \
                            f"{availability.replace('are available', 'están disponibles')}. ¿Te gustaría reservar?"
             else:
@@ -836,6 +905,7 @@ def ai_respond(message, convo_id):
                 (convo_id,)
             )
             messages = c.fetchall()
+            release_db_connection(conn)
         conversation_history = [
             {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. Detect the user's language (English or Spanish) based on their input and respond in the same language. If you don’t know the answer or the query is complex, respond with the appropriate escalation message in the user's language. Do not mention room types or pricing unless specifically asked."}
         ]
@@ -882,6 +952,7 @@ def detect_language(message, convo_id):
             (convo_id,)
         )
         messages = c.fetchall()
+        release_db_connection(conn)
         for msg in messages:
             if any(keyword in msg['message'].lower() for keyword in spanish_keywords):
                 return "es"
@@ -963,8 +1034,10 @@ def handle_agent_message(data):
             if not result:
                 logger.error(f"❌ Conversation not found: {convo_id}")
                 emit("error", {"message": "Conversation not found"})
+                release_db_connection(conn)
                 return
             username, chat_id, convo_channel = result
+            release_db_connection(conn)
 
         # Log the agent's message
         agent_timestamp = log_message(convo_id, username, message, "agent")
@@ -1005,6 +1078,7 @@ def handle_agent_message(data):
                 (agent_timestamp, convo_id)
             )
             conn.commit()
+            release_db_connection(conn)
     except Exception as e:
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
