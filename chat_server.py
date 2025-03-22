@@ -17,6 +17,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
 from datetime import datetime, timedelta
+from datetime import datetime, timezone
 import time
 import logging
 import re
@@ -302,9 +303,11 @@ def add_test_conversations():
 init_db()
 add_test_conversations()
 
+from datetime import datetime, timezone
+
 def log_message(convo_id, username, message, sender):
     try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
         with get_db_connection() as conn:
             c = conn.cursor()
