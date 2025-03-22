@@ -1081,18 +1081,19 @@ def whatsapp():
                 (chat_id, "whatsapp")
             )
             result = c.fetchone()
+            current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if result:
                 convo_id, username, ai_enabled = result
                 c.execute(
                     "UPDATE conversations SET last_updated = %s WHERE id = %s",
-                    (datetime.now().isoformat(), convo_id)
+                    (current_timestamp, convo_id)
                 )
             else:
                 username = chat_id  # Use chat_id as username if new conversation
                 ai_enabled = 1  # Default to AI enabled for new conversations
                 c.execute(
                     "INSERT INTO conversations (chat_id, channel, username, ai_enabled, last_updated) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                    (chat_id, "whatsapp", username, ai_enabled, datetime.now().isoformat())
+                    (chat_id, "whatsapp", username, ai_enabled, current_timestamp)
                 )
                 convo_id = c.fetchone()[0]
                 socketio.emit("refresh_conversations", {"message": "New conversation added"})
@@ -1105,14 +1106,14 @@ def whatsapp():
             "message": message_body,
             "sender": "user",
             "channel": "whatsapp",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": current_timestamp
         }, room=str(convo_id))
         socketio.emit("live_message", {
             "convo_id": convo_id,
             "message": message_body,
             "sender": "user",
             "chat_id": chat_id,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": current_timestamp
         })
         logger.info(f"Emitted live_message for user message: {message_body}")
 
@@ -1152,6 +1153,14 @@ def whatsapp():
         # Send and log AI response
         if send_whatsapp_message(from_number, response):
             log_message(convo_id, username, response, "ai")
+            # Update last_updated again for AI response
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE conversations SET last_updated = %s WHERE id = %s",
+                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), convo_id)
+                )
+                conn.commit()
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": response,
