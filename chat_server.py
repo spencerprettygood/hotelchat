@@ -1020,7 +1020,7 @@ def get_all_messages():
         logger.error(f"❌ Error in /all-messages: {str(e)}")
         return jsonify({"error": "Failed to fetch messages"}), 500
 
-@app.route("/whatsapp", methods=["GET", "POST"])        
+@app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
     if request.method == "GET":
         return Response("Method not allowed", status=405)
@@ -1028,7 +1028,8 @@ def whatsapp():
     # Extract Twilio WhatsApp data
     form = request.form
     message_body = form.get("Body", "").strip()
-    chat_id = form.get("From", "").replace("whatsapp:", "")
+    from_number = form.get("From", "")
+    chat_id = from_number.replace("whatsapp:", "")
     if not message_body or not chat_id:
         logger.error("❌ Missing message body or chat_id in WhatsApp request")
         return Response("Missing required fields", status=400)
@@ -1038,139 +1039,104 @@ def whatsapp():
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT id, username FROM conversations WHERE chat_id = %s AND channel = %s",
+                "SELECT id, username, ai_enabled FROM conversations WHERE chat_id = %s AND channel = %s",
                 (chat_id, "whatsapp")
             )
             result = c.fetchone()
             if result:
-                convo_id, username = result
-            else:
-                username = chat_id  # Use chat_id as username if new conversation
-                c.execute(
-                    "INSERT INTO conversations (chat_id, channel, username, last_updated) VALUES (%s, %s, %s, %s) RETURNING id",
-                    (chat_id, "whatsapp", username, datetime.now().isoformat())
-                )
-                convo_id = c.fetchone()[0]
-                conn.commit()
-                socketio.emit("refresh_conversations", {"message": "New conversation added"})
-
-        # Log user message
-        log_message(convo_id, username, message_body, "user")
-        socketio.emit("live_message", {
-            "convo_id": convo_id,
-            "message": message_body,
-            "sender": "user",
-            "chat_id": chat_id,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
-        logger.info(f"Emitted live_message for user message: {message_body}")
-
-        # AI response if enabled
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT ai_enabled FROM conversations WHERE id = %s", (convo_id,))
-            ai_enabled = c.fetchone()[0]
-            c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
-            global_ai_enabled = c.fetchone()[0] if c.rowcount > 0 else "1"
-
-        if ai_enabled and global_ai_enabled == "1":
-            response = ai_respond(message_body, convo_id)
-            if send_whatsapp_message(chat_id, response):
-                log_message(convo_id, username, response, "ai")
-                socketio.emit("live_message", {
-                    "convo_id": convo_id,
-                    "message": response,
-                    "sender": "ai",
-                    "chat_id": chat_id,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                logger.info(f"Emitted live_message for AI response: {response}")
-            else:
-                logger.error(f"Failed to send AI response to WhatsApp for chat_id {chat_id}")
-        return Response("Message processed", status=200)
-
-    except Exception as e:
-        logger.error(f"❌ Error in /whatsapp: {str(e)}")
-        return Response("Error processing message", status=500)
-
-    # Existing POST logic for Twilio
-    try:
-        from_number = request.form.get("From")
-        message_body = request.form.get("Body")
-        if not from_number or not message_body:
-            logger.error("❌ Missing From or Body in WhatsApp request")
-            return jsonify({"error": "Missing required fields"}), 400
-
-        prefixed_from = from_number.replace("whatsapp:", "")
-        language = "en" if message_body.strip().upper().startswith("EN ") else "es"
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT id, username FROM conversations WHERE chat_id = %s AND channel = %s",
-                (prefixed_from, "whatsapp")
-            )
-            result = c.fetchone()
-            if result:
-                convo_id = result["id"]
-                username = result["username"]
+                convo_id, username, ai_enabled = result
                 c.execute(
                     "UPDATE conversations SET last_updated = %s WHERE id = %s",
                     (datetime.now().isoformat(), convo_id)
                 )
             else:
-                username = prefixed_from
+                username = chat_id  # Use chat_id as username if new conversation
+                ai_enabled = 1  # Default to AI enabled for new conversations
                 c.execute(
-                    "INSERT INTO conversations (username, chat_id, channel, last_updated) VALUES (%s, %s, %s, %s) RETURNING id",
-                    (username, prefixed_from, "whatsapp", datetime.now().isoformat())
+                    "INSERT INTO conversations (chat_id, channel, username, ai_enabled, last_updated) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (chat_id, "whatsapp", username, ai_enabled, datetime.now().isoformat())
                 )
-                convo_id = c.fetchone()["id"]
+                convo_id = c.fetchone()[0]
+                socketio.emit("refresh_conversations", {"message": "New conversation added"})
             conn.commit()
 
-            log_message(convo_id, username, message_body, "user")
-            socketio.emit("new_message", {
-                "convo_id": convo_id,
-                "message": message_body,
-                "sender": "user",
-                "channel": "whatsapp",
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
-            socketio.emit("live_message", {
-                "convo_id": convo_id,
-                "message": message_body,
-                "sender": "user",
-                "username": username,
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
+        # Log user message
+        log_message(convo_id, username, message_body, "user")
+        socketio.emit("new_message", {
+            "convo_id": convo_id,
+            "message": message_body,
+            "sender": "user",
+            "channel": "whatsapp",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }, room=str(convo_id))
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "message": message_body,
+            "sender": "user",
+            "chat_id": chat_id,  # Use chat_id for live-messages page
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        logger.info(f"Emitted live_message for user message: {message_body}")
 
-            if "HELP" in message_body.upper() or "AYUDA" in message_body.upper():
-                response = "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you." if language == "en" else \
-                          "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
-            else:
-                response = ai_respond(message_body, convo_id)
+        # Determine language and check for help keywords
+        language = "en" if message_body.strip().upper().startswith("EN ") else "es"
+        help_triggered = "HELP" in message_body.upper() or "AYUDA" in message_body.upper()
 
+        # Check AI settings
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
+            result = c.fetchone()
+            global_ai_enabled = result[0] if result else "1"  # Default to enabled
+
+        # Generate AI response if enabled and no help keyword
+        if ai_enabled and global_ai_enabled == "1" and not help_triggered:
+            response = ai_respond(message_body, convo_id)
+        elif help_triggered:
+            response = (
+                "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you."
+                if language == "en"
+                else "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
+            )
+            # Disable AI for this conversation
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE conversations SET ai_enabled = %s WHERE id = %s",
+                    (0, convo_id)
+                )
+                conn.commit()
+                logger.info(f"Disabled AI for convo_id {convo_id} due to help request")
+        else:
+            logger.info(f"AI response skipped for convo_id {convo_id}: ai_enabled={ai_enabled}, global_ai_enabled={global_ai_enabled}")
+            return Response("Message processed, no AI response", status=200)
+
+        # Send and log AI response
+        if send_whatsapp_message(from_number, response):
             log_message(convo_id, username, response, "ai")
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": response,
                 "sender": "ai",
                 "channel": "whatsapp",
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }, room=str(convo_id))
             socketio.emit("live_message", {
                 "convo_id": convo_id,
                 "message": response,
                 "sender": "ai",
-                "username": username,
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                "chat_id": chat_id,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
+            logger.info(f"Emitted live_message for AI response: {response}")
+        else:
+            logger.error(f"Failed to send AI response to WhatsApp for chat_id {chat_id}")
 
-            if not send_whatsapp_message(from_number, response):
-                logger.error(f"❌ Failed to send AI response to WhatsApp for {from_number}")
-            return jsonify({}), 200
+        return Response("Message processed", status=200)
+
     except Exception as e:
-        logger.error(f"❌ Error in /whatsapp POST: {e}")
-        return jsonify({"error": "Failed to process WhatsApp message"}), 500
+        logger.error(f"❌ Error in /whatsapp: {str(e)}")
+        return Response("Error processing message", status=500)
 
 # Socket.IO Event Handlers
 @socketio.on("connect")
