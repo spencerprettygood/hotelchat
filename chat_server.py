@@ -1284,32 +1284,45 @@ def instagram():
 
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
-    if request.method == "GET":
-        try:
-            # Return all WhatsApp conversations/messages for debugging (optional login required)
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT c.id, c.username, c.chat_id, m.message, m.sender, m.timestamp "
-                    "FROM conversations c LEFT JOIN messages m ON c.id = m.convo_id "
-                    "WHERE c.channel = %s ORDER BY m.timestamp DESC LIMIT 10",
-                    ("whatsapp",)
-                )
-                rows = c.fetchall()
-                messages = [
-                    {
-                        "convo_id": row["id"],
-                        "username": row["username"],
-                        "chat_id": row["chat_id"],
-                        "message": row["message"],
-                        "sender": row["sender"],
-                        "timestamp": row["timestamp"]
-                    } for row in rows
-                ]
-                return jsonify(messages), 200
-        except Exception as e:
-            logger.error(f"❌ Error in /whatsapp GET: {e}")
-            return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+    # ...
+    try:
+        # Log user message
+        log_message(convo_id, username, message_body, "user")
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "message": message_body,
+            "sender": "user",
+            "chat_id": chat_id,  # Use chat_id instead of username
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        logger.info(f"Emitted live_message for user message: {message_body}")
+
+        # AI response if enabled
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT ai_enabled FROM conversations WHERE id = %s", (convo_id,))
+            ai_enabled = c.fetchone()[0]
+            c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
+            global_ai_enabled = c.fetchone()[0] if c.rowcount > 0 else "1"
+
+        if ai_enabled and global_ai_enabled == "1":
+            response = ai_respond(message_body, convo_id)
+            if send_whatsapp_message(chat_id, response):
+                log_message(convo_id, username, response, "ai")
+                socketio.emit("live_message", {
+                    "convo_id": convo_id,
+                    "message": response,
+                    "sender": "ai",
+                    "chat_id": chat_id,  # Use chat_id
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                logger.info(f"Emitted live_message for AI response: {response}")
+            else:
+                logger.error(f"Failed to send AI response to WhatsApp for chat_id {chat_id}")
+        return Response("Message processed", status=200)
+    except Exception as e:
+        logger.error(f"❌ Error in /whatsapp: {str(e)}")
+        return Response("Error processing message", status=500)
 
     # Existing POST logic for Twilio
     try:
@@ -1453,28 +1466,20 @@ def handle_agent_message(data):
             "message": message,
             "sender": "agent",
             "channel": convo_channel,
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }, room=convo_id)
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }, room=str(convo_id))
         emit("live_message", {
             "convo_id": convo_id,
             "message": message,
             "sender": "agent",
-            "username": username,
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            "chat_id": chat_id,  # Use chat_id
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
         if convo_channel == "whatsapp":
             if not send_whatsapp_message(chat_id, message):
                 logger.error(f"❌ Failed to send agent message to WhatsApp for chat_id {chat_id}")
                 emit("error", {"convo_id": convo_id, "message": "Failed to send message to WhatsApp", "channel": "whatsapp"})
-        elif convo_channel == "telegram":
-            if not send_telegram_message(chat_id, message):
-                logger.error(f"❌ Failed to send agent message to Telegram for chat_id {chat_id}")
-                emit("error", {"convo_id": convo_id, "message": "Failed to send message to Telegram", "channel": "telegram"})
-        elif convo_channel == "instagram":
-            if not send_instagram_message(chat_id, message):
-                logger.error(f"❌ Failed to send agent message to Instagram for chat_id {chat_id}")
-                emit("error", {"convo_id": convo_id, "message": "Failed to send message to Instagram", "channel": "instagram"})
     except Exception as e:
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
