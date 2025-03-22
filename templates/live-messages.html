@@ -6,7 +6,6 @@
     <meta name="description" content="Live WhatsApp messaging interface for Amapola Resort agents.">
     <title>Live Messages - Amapola Resort</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -179,70 +178,6 @@
             background: #e5ddd5;
             background-size: auto;
         }
-        .loading-spinner {
-            display: none;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #075E54;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: translate(-50%, -50%) rotate(0deg); }
-            100% { transform: translate(-50%, -50%) rotate(360deg); }
-        }
-    </style>
-</head>
-<body>
-    <div class="container" id="dashboard">
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <div class="profile-pic"></div>
-                <div class="title">Amapola Resort (WhatsApp)</div>
-                <div class="ai-toggle-container">
-                    <label for="ai-toggle">AI</label>
-                    <input type="checkbox" id="ai-toggle" checked aria-label="Toggle AI">
-                </div>
-                <div class="icons">
-                    <span aria-label="Menu">⋮</span>
-                </div>
-            </div>
-            <div class="conversation-list" id="conversation-list">
-                <div class="loading-spinner" id="convo-loading-spinner"></div>
-                <!-- Conversations will be appended here -->
-            </div>
-        </div>
-        <div class="chat-area">
-            <div class="chat-header" id="chat-header" style="display: none;">
-                <div class="profile-pic"></div>
-                <div class="contact-info">
-                    <h1 id="chat-title">Select a conversation</h1>
-                    <p>End-to-end encrypted</p>
-                </div>
-                <div class="icons">
-                    <span aria-label="Chat options">⋮</span>
-                </div>
-            </div>
-            <div class="chat-container" id="chat-box" aria-live="polite">
-                <div class="loading-spinner" id="chat-loading-spinner"></div>
-                <!-- Messages will be appended here -->
-            </div>
-            <div class="input-container" id="input-container" style="display: none;">
-                <span class="icon" id="emoji-icon" aria-label="Open emoji picker" role="button" tabindex="0">😊</span>
-                <span class="icon" id="attach-icon" aria-label="Attach file" role="button" tabindex="0">📎</span>
-                <input type="text" id="message-input" placeholder="Message" aria-label="Type a message">
-                <button id="send-button" aria-label="Send message" disabled></button>
-            </div>
-        </div>
-    </div>
-    <div class="toast-container" id="toast-container"></div>
-
-    <style>
         .message {
             margin-bottom: 10px;
             display: flex;
@@ -460,6 +395,49 @@
             background-color: #54656F;
         }
     </style>
+</head>
+<body>
+    <div class="container" id="dashboard">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="profile-pic"></div>
+                <div class="title">Amapola Resort (WhatsApp)</div>
+                <div class="ai-toggle-container">
+                    <label for="ai-toggle">AI</label>
+                    <input type="checkbox" id="ai-toggle" checked aria-label="Toggle AI">
+                </div>
+                <div class="icons">
+                    <span aria-label="Menu">⋮</span>
+                </div>
+            </div>
+            <div class="conversation-list" id="conversation-list">
+                <!-- Conversations will be appended here -->
+            </div>
+        </div>
+        <div class="chat-area">
+            <div class="chat-header" id="chat-header" style="display: none;">
+                <div class="profile-pic"></div>
+                <div class="contact-info">
+                    <h1 id="chat-title">Select a conversation</h1>
+                    <p>End-to-end encrypted</p>
+                </div>
+                <div class="icons">
+                    <span aria-label="Chat options">⋮</span>
+                </div>
+            </div>
+            <div class="chat-container" id="chat-box" aria-live="polite">
+                <!-- Messages will be appended here -->
+            </div>
+            <div class="input-container" id="input-container" style="display: none;">
+                <span class="icon" id="emoji-icon" aria-label="Open emoji picker" role="button" tabindex="0">😊</span>
+                <span class="icon" id="attach-icon" aria-label="Attach file" role="button" tabindex="0">📎</span>
+                <input type="text" id="message-input" placeholder="Message" aria-label="Type a message">
+                <button id="send-button" aria-label="Send message" disabled></button>
+            </div>
+        </div>
+    </div>
+    <div class="toast-container" id="toast-container"></div>
+
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
     <script>
@@ -493,7 +471,6 @@
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
         }
-        
 
         function addDateSeparator(dateStr) {
             const chatBox = document.getElementById("chat-box");
@@ -516,35 +493,35 @@
                 return; // Skip invalid messages
             }
             const dateStr = formatDateForSeparator(msg.timestamp);
-        
+
             if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
                 console.log("Adding date separator:", dateStr);
                 addDateSeparator(dateStr);
                 lastMessageDate = messageDate;
             }
-        
+
             const div = document.createElement("div");
             const isUser = sender === "user";
             const isAgent = sender === "agent";
             div.className = "message";
             div.classList.add(isUser ? "user-message" : isAgent ? "agent-message" : "ai-message");
-        
+
             const bubble = document.createElement("div");
             bubble.className = "message-bubble";
             bubble.textContent = msg.message;
             div.appendChild(bubble);
-        
+
             const meta = document.createElement("div");
             meta.className = "message-meta";
             const time = formatTimestamp(msg.timestamp);
             meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ""}`;
             div.appendChild(meta);
-        
+
             chatBox.appendChild(div);
             console.log("Message appended to chatBox:", div);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
-        
+
         function formatTimestamp(timestamp) {
             let date = new Date(timestamp);
             if (isNaN(date.getTime())) {
@@ -556,7 +533,7 @@
             }
             return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         }
-        
+
         function formatDateForSeparator(timestamp) {
             let date = new Date(timestamp);
             if (isNaN(date.getTime())) {
@@ -576,17 +553,22 @@
 
         async function loadMessagesForConversation(convoId) {
             const chatBox = document.getElementById("chat-box");
-            const conversationHeader = document.getElementById("conversation-header");
+            const chatHeader = document.getElementById("chat-header");
+            const chatTitle = document.getElementById("chat-title");
             try {
+                console.log("Fetching messages for convoId:", convoId); // Debug log
                 const response = await fetch(`/messages/${convoId}`);
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
                 }
                 const data = await response.json();
+                console.log("Messages fetched:", data); // Debug log
                 chatBox.innerHTML = ""; // Clear existing messages
-                conversationHeader.textContent = `Chat with ${data.username || "Unknown User"}`;
-        
+                lastMessageDate = null; // Reset last message date for date separators
+                chatHeader.style.display = "flex"; // Show the chat header
+                chatTitle.textContent = data.username || "Unknown User";
+
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
                         appendMessage(msg, msg.sender);
@@ -613,13 +595,20 @@
                 if (data.conversations && data.conversations.length > 0) {
                     data.conversations.forEach(convo => {
                         const convoElement = document.createElement("div");
-                        convoElement.className = "conversation";
+                        convoElement.className = "conversation-item";
                         convoElement.dataset.convoId = convo.convo_id;
+                        convoElement.dataset.chatId = convo.chat_id; // Store chat_id for selectConversation
                         convoElement.innerHTML = `
-                            <h3>${convo.username}</h3>
-                            <p>Last updated: ${new Date(convo.last_updated).toLocaleString()}</p>
+                            <div class="avatar"></div>
+                            <div class="info">
+                                <div class="name">${convo.username}</div>
+                                <div class="last-message">Last updated: ${new Date(convo.last_updated).toLocaleString()}</div>
+                            </div>
                         `;
-                        convoElement.addEventListener("click", () => loadMessagesForConversation(convo.convo_id));
+                        convoElement.addEventListener("click", () => {
+                            console.log("Selecting conversation:", convo.convo_id, convo.chat_id); // Debug log
+                            selectConversation(convo.convo_id, convo.chat_id);
+                        });
                         conversationList.appendChild(convoElement);
                     });
                 } else {
@@ -658,20 +647,19 @@
             const items = conversationList.getElementsByClassName("conversation-item");
             for (let item of items) {
                 item.classList.remove("active");
-                if (item.textContent.includes(chatId)) {
+                if (item.dataset.convoId == convoId) {
                     item.classList.add("active");
                 }
             }
 
-            // Update chat header with the selected conversation's chat_id
-            document.getElementById("chat-title").textContent = chatId;
-
-            // Load messages for the selected conversation
+            // Update chat header with the selected conversation's username
             loadMessagesForConversation(convoId);
 
             const inputContainer = document.getElementById("input-container");
             inputContainer.style.display = "flex";
-            document.getElementById("send-button").disabled = !document.getElementById("message-input").value.trim();
+            const messageInput = document.getElementById("message-input");
+            const sendButton = document.getElementById("send-button");
+            sendButton.disabled = !messageInput.value.trim();
         }
 
         function sendMessage() {
@@ -802,7 +790,7 @@
                 // After reordering, ensure the conversation is updated with the latest message
                 const conversationList = document.getElementById("conversation-list");
                 const convoItem = Array.from(conversationList.children).find(item =>
-                    item.textContent.includes(data.chat_id)
+                    item.dataset.chatId === data.chat_id
                 );
                 if (convoItem) {
                     console.log(`Ensuring conversation is updated for chat_id=${data.chat_id}`);
@@ -810,7 +798,7 @@
                     convoItem.innerHTML = `
                         <div class="avatar"></div>
                         <div class="info">
-                            <div class="name">${data.chat_id}</div>
+                            <div class="name">${data.username || "Unknown User"}</div>
                             <div class="last-message">${data.message}</div>
                         </div>
                     `;
@@ -819,7 +807,9 @@
                     }
                     // Re-attach the click event listener
                     convoItem.replaceWith(convoItem.cloneNode(true));
-                    const updatedConvoItem = conversationList.querySelector(`.conversation-item:has(.name:contains("${data.chat_id}"))`);
+                    const updatedConvoItem = Array.from(conversationList.children).find(item =>
+                        item.dataset.chatId === data.chat_id
+                    );
                     updatedConvoItem.addEventListener("click", () => selectConversation(data.convo_id, data.chat_id));
                 }
 
