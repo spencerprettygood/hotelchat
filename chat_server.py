@@ -461,30 +461,6 @@ def get_conversations():
         logger.error(f"❌ Error in /conversations: {e}")
         return jsonify({"error": "Failed to fetch conversations"}), 500
 
-@app.route("/messages", methods=["GET"])
-@login_required
-def get_messages():
-    try:
-        convo_id = request.args.get("conversation_id")
-        if not convo_id:
-            return jsonify({"error": "Missing conversation_id"}), 400
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT username FROM conversations WHERE id = %s",
-                (convo_id,)
-            )
-            username = c.fetchone()["username"]
-            c.execute(
-                "SELECT sender, message, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp ASC",
-                (convo_id,)
-            )
-            messages = [{"sender": row["sender"], "message": row["message"], "timestamp": row["timestamp"]} for row in c.fetchall()]
-            return jsonify({"username": username, "messages": messages})
-    except Exception as e:
-        logger.error(f"❌ Error in /messages: {e}")
-        return jsonify({"error": "Failed to fetch messages"}), 500
-
 @app.route("/handoff", methods=["POST"])
 @login_required
 def handoff():
