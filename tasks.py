@@ -1,6 +1,6 @@
 from celery import Celery
 import os
-from chat_server import app, get_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger
+from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled
 
 # Configure Celery with Redis
 celery_app = Celery(
@@ -28,7 +28,7 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                 (chat_id, "whatsapp")
             )
             result = c.fetchone()
-            current_timestamp = user_timestamp  # Use the provided timestamp
+            current_timestamp = user_timestamp
             if result:
                 convo_id, username, ai_enabled = result
                 c.execute(
@@ -44,6 +44,7 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                 )
                 convo_id = c.fetchone()[0]
             conn.commit()
+            release_db_connection(conn)
 
         # Log user message
         socketio.emit("new_message", {
@@ -67,13 +68,8 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
         language = "en" if message_body.strip().upper().startswith("EN ") else "es"
         help_triggered = "HELP" in message_body.upper() or "AYUDA" in message_body.upper()
 
-        # Check AI settings and toggle timestamp
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT value, last_updated FROM settings WHERE key = %s", ("ai_enabled",))
-            result = c.fetchone()
-            global_ai_enabled = result['value'] if result else "1"
-            ai_toggle_timestamp = result['last_updated'] if result else "1970-01-01T00:00:00Z"
+        # Check AI settings and toggle timestamp using cache
+        global_ai_enabled, ai_toggle_timestamp = get_ai_enabled()
 
         from datetime import datetime, timezone
         message_time = datetime.fromisoformat(user_timestamp.replace("Z", "+00:00"))
@@ -102,6 +98,7 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     (0, convo_id)
                 )
                 conn.commit()
+                release_db_connection(conn)
                 logger.info(f"Disabled AI for convo_id {convo_id} due to help request")
         else:
             logger.info(f"AI response skipped for convo_id {convo_id}")
@@ -117,6 +114,7 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     (ai_timestamp, convo_id)
                 )
                 conn.commit()
+                release_db_connection(conn)
             socketio.emit("new_message", {
                 "convo_id": convo_id,
                 "message": response,
