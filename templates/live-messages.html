@@ -609,8 +609,6 @@
 
         async function fetchConversations() {
             const conversationList = document.getElementById("conversation-list");
-            const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
-            chatLoadingSpinner.style.display = "block";
             try {
                 const response = await fetch("/all-whatsapp-messages");
                 if (!response.ok) {
@@ -637,8 +635,6 @@
             } catch (error) {
                 console.error("Error fetching conversations:", error);
                 conversationList.innerHTML = "<p>Failed to load conversations. Please try again later.</p>";
-            } finally {
-                chatLoadingSpinner.style.display = "none";
             }
         }
 
