@@ -910,7 +910,7 @@ def whatsapp():
                 (chat_id, "whatsapp")
             )
             result = c.fetchone()
-            current_timestamp = datetime.now(timezone.utc).isoformat()  # Use UTC and ISO format
+            current_timestamp = datetime.now(timezone.utc).isoformat()
             if result:
                 convo_id, username, ai_enabled = result
                 c.execute(
@@ -951,15 +951,31 @@ def whatsapp():
         language = "en" if message_body.strip().upper().startswith("EN ") else "es"
         help_triggered = "HELP" in message_body.upper() or "AYUDA" in message_body.upper()
 
-        # Check AI settings
+        # Check AI settings and toggle timestamp
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
+            c.execute("SELECT value, last_updated FROM settings WHERE key = %s", ("ai_enabled",))
             result = c.fetchone()
-            global_ai_enabled = result[0] if result else "1"
+            global_ai_enabled = result['value'] if result else "1"
+            ai_toggle_timestamp = result['last_updated'] if result else "1970-01-01T00:00:00Z"
 
-        # Generate AI response if enabled and no help keyword
-        if ai_enabled and global_ai_enabled == "1" and not help_triggered:
+        # Compare message timestamp with AI toggle timestamp
+        message_time = datetime.fromisoformat(user_timestamp.replace("Z", "+00:00"))
+        toggle_time = datetime.fromisoformat(ai_toggle_timestamp.replace("Z", "+00:00"))
+
+        # Generate AI response if:
+        # 1. AI is enabled for the conversation (ai_enabled)
+        # 2. Global AI is enabled (global_ai_enabled)
+        # 3. No help keyword is triggered
+        # 4. The message timestamp is after the AI toggle timestamp (if AI is enabled)
+        should_respond = (
+            ai_enabled and
+            global_ai_enabled == "1" and
+            not help_triggered and
+            (global_ai_enabled != "1" or message_time > toggle_time)
+        )
+
+        if should_respond:
             response = ai_respond(message_body, convo_id)
         elif help_triggered:
             response = (
@@ -976,7 +992,7 @@ def whatsapp():
                 conn.commit()
                 logger.info(f"Disabled AI for convo_id {convo_id} due to help request")
         else:
-            logger.info(f"AI response skipped for convo_id {convo_id}: ai_enabled={ai_enabled}, global_ai_enabled={global_ai_enabled}")
+            logger.info(f"AI response skipped for convo_id {convo_id}: ai_enabled={ai_enabled}, global_ai_enabled={global_ai_enabled}, message_time={message_time}, toggle_time={toggle_time}")
             return Response("Message processed, no AI response", status=200)
 
         # Send and log AI response
