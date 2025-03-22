@@ -1119,7 +1119,7 @@ def whatsapp():
             "convo_id": convo_id,
             "message": message_body,
             "sender": "user",
-            "chat_id": chat_id,  # Use chat_id for live-messages page
+            "chat_id": chat_id,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
         logger.info(f"Emitted live_message for user message: {message_body}")
