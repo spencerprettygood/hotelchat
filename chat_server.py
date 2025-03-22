@@ -428,7 +428,7 @@ def settings():
         
 
 # Page Endpoints
-@app.route("/live-messages")
+@app.route("/live-messages/")
 @login_required
 def live_messages_page():
     try:
