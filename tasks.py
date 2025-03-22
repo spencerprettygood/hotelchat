@@ -1,7 +1,12 @@
-from chat_server import logger  # In send_whatsapp_message_task
-from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled  # In process_whatsapp_message
 from celery import Celery
 import os
+
+# These imports should work if chat_server.py is in the same directory
+from chat_server import logger  # For send_whatsapp_message_task
+from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled  # For process_whatsapp_message
+from datetime import datetime, timezone
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 
 # Configure Celery with Redis
 celery_app = Celery(
@@ -21,9 +26,6 @@ celery_app.conf.update(
 
 @celery_app.task
 def send_whatsapp_message_task(to_number, message):
-    from chat_server import logger
-    from twilio.rest import Client
-    from twilio.base.exceptions import TwilioRestException
     try:
         client = Client(
             os.getenv("TWILIO_ACCOUNT_SID"),
@@ -32,6 +34,9 @@ def send_whatsapp_message_task(to_number, message):
         if not to_number.startswith("whatsapp:"):
             to_number = f"whatsapp:{to_number}"
         twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
+        if not twilio_number:
+            logger.error("❌ TWILIO_WHATSAPP_NUMBER environment variable is not set")
+            return False
         if not twilio_number.startswith("whatsapp:"):
             logger.error(f"❌ TWILIO_WHATSAPP_NUMBER must start with 'whatsapp:': {twilio_number}")
             return False
@@ -40,20 +45,17 @@ def send_whatsapp_message_task(to_number, message):
             from_=twilio_number,
             to=to_number
         )
-        logger.info(f"Sent WhatsApp message to {to_number}: {message.sid}")
+        logger.info(f"✅ Sent WhatsApp message to {to_number}: {message.sid}")
         return True
     except TwilioRestException as e:
-        logger.error(f"Failed to send WhatsApp message to {to_number}: {str(e)}")
+        logger.error(f"❌ Failed to send WhatsApp message to {to_number}: {str(e)}")
         return False
     except Exception as e:
-        logger.error(f"Error sending WhatsApp message to {to_number}: {str(e)}")
+        logger.error(f"❌ Error sending WhatsApp message to {to_number}: {str(e)}")
         return False
 
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
-    from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled
-    from datetime import datetime, timezone
-
     try:
         # Get or create conversation
         with get_db_connection() as conn:
@@ -170,4 +172,4 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             logger.error(f"Failed to send AI response to WhatsApp for chat_id {chat_id}")
 
     except Exception as e:
-        logger.error(f"Error in process_whatsapp_message task: {str(e)}")
+        logger.error(f"❌ Error in process_whatsapp_message task: {str(e)}")
