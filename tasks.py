@@ -6,8 +6,8 @@ import os
 # Configure Celery with Redis
 celery_app = Celery(
     'tasks',
-    broker=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
-    backend=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    broker=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
+    backend=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
 )
 
 celery_app.conf.update(
