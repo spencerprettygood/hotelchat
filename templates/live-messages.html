@@ -743,39 +743,39 @@
         }
 
         async function fetchConversations() {
-            const convoLoadingSpinner = document.getElementById('convo-loading-spinner');
-            convoLoadingSpinner.style.display = 'block';
+            const convoLoadingSpinner = document.getElementById("convo-loading-spinner");
+            convoLoadingSpinner.style.display = "block";
             try {
-                const response = await fetch('/all-whatsapp-messages');
+                const response = await fetch("/all-whatsapp-messages");
                 if (!response.ok) {
                     throw new Error(`HTTP error! Status: ${response.status}`);
                 }
                 const data = await response.json();
-                const conversationList = document.getElementById('conversation-list');
-                conversationList.innerHTML = '';
+                const conversationList = document.getElementById("conversation-list");
+                conversationList.innerHTML = "";
                 if (data.conversations) {
                     data.conversations.forEach(convo => {
-                        const convoItem = document.createElement('div');
-                        convoItem.classList.add('conversation-item');
+                        const convoItem = document.createElement("div");
+                        convoItem.classList.add("conversation-item");
                         if (currentConversationId === convo.convo_id) {
-                            convoItem.classList.add('active');
+                            convoItem.classList.add("active");
                         }
                         convoItem.innerHTML = `
                             <div class="avatar"></div>
                             <div class="info">
                                 <div class="name">${convo.username}</div>
-                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : 'No messages'}</div>
+                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}</div>
                             </div>
                         `;
-                        convoItem.addEventListener('click', () => loadConversation(convo.convo_id, convo.username));
+                        convoItem.addEventListener("click", () => loadConversation(convo.convo_id, convo.username));
                         conversationList.appendChild(convoItem);
                     });
                 }
             } catch (error) {
-                console.error('Error fetching conversations:', error);
-                showToast('Error fetching conversations', 'error');
+                console.error("Error fetching conversations:", error);
+                showToast("Error fetching conversations", "error");
             } finally {
-                convoLoadingSpinner.style.display = 'none';
+                convoLoadingSpinner.style.display = "none";
             }
         }
 
@@ -794,36 +794,78 @@
             }
         }
 
-        function loadConversation(convoId) {
-            if (!convoId) {
-                console.error("No conversation ID provided to loadConversation");
-                return;
-            }
-            currentConversationId = convoId;
-            socket.emit("join_conversation", { convo_id: convoId });  // Ensure this is present
-            // Existing fetch logic...
-            fetch(`/messages?conversation_id=${convoId}`)
-                .then(response => {
-                    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-                    return response.json();
-                })
-                .then(data => {
-                    // Rest of the function...
-                })
-                .catch(error => console.error('Error loading messages:', error));
+        function loadConversation(convoId, username) {
+    if (!convoId) {
+        console.error("No conversation ID provided to loadConversation");
+        showToast("Please select a valid conversation", "error");
+        return;
+    }
+    if (currentConversationId) {
+        socket.emit("leave_conversation", { conversation_id: currentConversationId });
+    }
+    currentConversationId = convoId;
+
+    // Update UI immediately
+    const conversationList = document.getElementById("conversation-list");
+    const items = conversationList.getElementsByClassName("conversation-item");
+    for (let item of items) {
+        item.classList.remove("active");
+        if (item.textContent.includes(username)) {
+            item.classList.add("active");
         }
+    }
+
+    const chatHeader = document.getElementById("chat-header");
+    const chatTitle = document.getElementById("chat-title");
+    const inputContainer = document.getElementById("input-container");
+    chatHeader.style.display = "flex";
+    chatTitle.textContent = username || "Conversation #" + convoId;
+    inputContainer.style.display = "flex";
+
+    // Clear existing messages and reset last date
+    const chatBox = document.getElementById("chat-box");
+    chatBox.innerHTML = '<div class="loading-spinner" id="chat-loading-spinner"></div>';
+    lastMessageDate = null;
+
+    // Join the conversation room
+    console.log("Emitting join_conversation with conversation_id:", convoId);
+    socket.emit("join_conversation", { conversation_id: convoId });
+
+    // Fetch and display messages
+    const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
+    chatLoadingSpinner.style.display = "block";
+    fetch(`/messages?conversation_id=${convoId}`)
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            chatBox.innerHTML = ""; // Clear spinner
+            if (data.messages && data.messages.length > 0) {
+                data.messages.forEach(msg => appendMessage(msg, msg.sender));
+            } else {
+                chatBox.innerHTML = "<p>No messages yet.</p>";
+            }
+            chatLoadingSpinner.style.display = "none";
+        })
+        .catch(error => {
+            console.error("Error loading messages:", error);
+            showToast("Failed to load messages", "error");
+            chatLoadingSpinner.style.display = "none";
+        });
+}
 
         function sendMessage() {
             if (!currentConversationId) {
-                showToast('Please select a conversation', 'error');
+                showToast("Please select a conversation", "error");
                 return;
             }
 
-            const messageInput = document.getElementById('message-input');
-            const sendButton = document.getElementById('send-button');
+            const messageInput = document.getElementById("message-input");
+            const sendButton = document.getElementById("send-button");
             const message = messageInput.value.trim();
             if (!message) {
-                showToast('Please enter a message to send', 'error');
+                showToast("Please enter a message to send", "error");
                 return;
             }
 
@@ -831,40 +873,18 @@
             const tempMessage = {
                 message: message,
                 timestamp: new Date().toISOString(),
-                sender: 'agent'
+                sender: "agent",
             };
-            appendMessage(tempMessage, 'agent');
-            messageInput.value = '';
+            appendMessage(tempMessage, "agent");
+            messageInput.value = "";
             sendButton.disabled = true;
 
-            fetch('/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    convo_id: currentConversationId,
-                    message: message,
-                    channel: 'whatsapp'
-                }),
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`Failed to send message: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.status === 'success') {
-                        showToast('Message sent successfully', 'success');
-                    } else {
-                        showToast('Failed to send message: ' + (data.error || 'Unknown error'), 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error sending message:', error);
-                    showToast('Error sending message: ' + error.message, 'error');
-                });
+            // Use Socket.IO instead of /chat for real-time agent messages
+            socket.emit("agent_message", {
+                convo_id: currentConversationId,
+                message: message,
+                channel: "whatsapp",
+            });
         }
 
         document.getElementById('ai-toggle').addEventListener('change', async (e) => {
