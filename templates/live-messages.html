@@ -520,8 +520,8 @@
         }
     </style>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
-   <script>
+<script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
+<script>
     const socket = io({
         transports: ["websocket", "polling"],
         reconnection: true,
@@ -593,7 +593,7 @@
 
         const bubble = document.createElement("div");
         bubble.className = "message-bubble";
-        bubble.textContent = msg.message; // No username/number prefix
+        bubble.textContent = msg.message;
         div.appendChild(bubble);
 
         const meta = document.createElement("div");
@@ -604,6 +604,29 @@
 
         chatBox.appendChild(div);
         chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function loadAllMessages() {
+        const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
+        chatLoadingSpinner.style.display = "block";
+        try {
+            const response = await fetch("/all-messages");
+            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+            const data = await response.json();
+            const chatBox = document.getElementById("chat-box");
+            chatBox.innerHTML = "";
+            lastMessageDate = null;
+            if (data.messages && data.messages.length > 0) {
+                data.messages.forEach(msg => appendMessage(msg, msg.sender));
+            } else {
+                chatBox.innerHTML = "<p>No messages yet.</p>";
+            }
+        } catch (error) {
+            console.error("Error loading all messages:", error);
+            showToast("Error loading messages", "error");
+        } finally {
+            chatLoadingSpinner.style.display = "none";
+        }
     }
 
     document.addEventListener("DOMContentLoaded", () => {
@@ -672,6 +695,7 @@
                     document.getElementById("dashboard").style.display = "flex";
                     fetchConversations();
                     fetchSettings();
+                    loadAllMessages(); // Load historical messages on page load
                 } else {
                     document.getElementById("loginPage").style.display = "flex";
                     document.getElementById("dashboard").style.display = "none";
@@ -703,6 +727,7 @@
                     document.getElementById("dashboard").style.display = "flex";
                     fetchConversations();
                     fetchSettings();
+                    loadAllMessages();
                     showToast("Login successful", "success");
                 } else {
                     showToast("Login failed: " + data.message, "error");
@@ -852,7 +877,7 @@
         appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
         const conversationList = document.getElementById("conversation-list");
         const convoItem = Array.from(conversationList.children).find(item =>
-            item.textContent.includes(data.username)
+            item.textContent.includes(data.chat_id)
         );
         if (convoItem) {
             convoItem.querySelector(".last-message").textContent = data.message;
@@ -879,6 +904,7 @@
         console.log("Socket.IO reconnected after", attempt, "attempts");
         fetchConversations();
         fetchSettings();
+        loadAllMessages();
         if (currentConversationId) {
             socket.emit("join_conversation", { conversation_id: currentConversationId });
         }
