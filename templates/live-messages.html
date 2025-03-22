@@ -608,8 +608,9 @@
         }
 
         async function fetchConversations() {
-            const convoLoadingSpinner = document.getElementById("convo-loading-spinner");
-            convoLoadingSpinner.style.display = "block";
+            const conversationList = document.getElementById("conversation-list");
+            const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
+            chatLoadingSpinner.style.display = "block";
             try {
                 const response = await fetch("/all-whatsapp-messages");
                 if (!response.ok) {
@@ -617,33 +618,27 @@
                     throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
                 }
                 const data = await response.json();
-                const conversationList = document.getElementById("conversation-list");
-                conversationList.innerHTML = "";
-                if (data.conversations) {
+                conversationList.innerHTML = ""; // Clear existing conversations
+                if (data.conversations && data.conversations.length > 0) {
                     data.conversations.forEach(convo => {
-                        const convoItem = document.createElement("div");
-                        convoItem.classList.add("conversation-item");
-                        if (currentConversationId === convo.convo_id) {
-                            convoItem.classList.add("active");
-                        }
-                        convoItem.innerHTML = `
-                            <div class="avatar"></div>
-                            <div class="info">
-                                <div class="name">${convo.chat_id}</div>
-                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}</div>
-                            </div>
+                        const convoElement = document.createElement("div");
+                        convoElement.className = "conversation";
+                        convoElement.dataset.convoId = convo.convo_id;
+                        convoElement.innerHTML = `
+                            <h3>${convo.username}</h3>
+                            <p>Last updated: ${new Date(convo.last_updated).toLocaleString()}</p>
                         `;
-                        convoItem.addEventListener("click", () => selectConversation(convo.convo_id, convo.chat_id));
-                        conversationList.appendChild(convoItem);
+                        convoElement.addEventListener("click", () => loadMessagesForConversation(convo.convo_id));
+                        conversationList.appendChild(convoElement);
                     });
+                } else {
+                    conversationList.innerHTML = "<p>No WhatsApp conversations found.</p>";
                 }
-                const chatHeader = document.getElementById("chat-header");
-                chatHeader.style.display = "flex";
             } catch (error) {
                 console.error("Error fetching conversations:", error);
-                showToast(`Error fetching conversations: ${error.message}`, "error");
+                conversationList.innerHTML = "<p>Failed to load conversations. Please try again later.</p>";
             } finally {
-                convoLoadingSpinner.style.display = "none";
+                chatLoadingSpinner.style.display = "none";
             }
         }
 
