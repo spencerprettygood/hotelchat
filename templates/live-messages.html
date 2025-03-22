@@ -521,461 +521,370 @@
     </style>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
-    <script>
-        const socket = io({
-            transports: ["websocket", "polling"],
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000
-        });
+   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
+<script>
+    const socket = io({
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000
+    });
 
-        let currentConversationId = null;
-        let currentAgent = null;
-        let lastMessageDate = null;
-        let isConnected = false;
+    let currentConversationId = null;
+    let currentAgent = null;
+    let lastMessageDate = null;
+    let isConnected = false;
 
-        function showToast(message, type = 'info') {
-            const toastContainer = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = `toast ${type}`;
-            toast.setAttribute('role', 'alert');
-            toast.setAttribute('aria-live', 'assertive');
-            toast.textContent = message;
-            toastContainer.appendChild(toast);
+    function showToast(message, type = "info") {
+        const toastContainer = document.getElementById("toast-container");
+        const toast = document.createElement("div");
+        toast.className = `toast ${type}`;
+        toast.setAttribute("role", "alert");
+        toast.setAttribute("aria-live", "assertive");
+        toast.textContent = message;
+        toastContainer.appendChild(toast);
 
-            setTimeout(() => {
-                toast.classList.add('show');
-            }, 100);
-
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => {
-                    toast.remove();
-                }, 300);
-            }, 3000);
-        }
-
-        function formatTimestamp(timestamp) {
-            const date = new Date(timestamp);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-
-        function formatDateForSeparator(timestamp) {
-            const date = new Date(timestamp);
-            const today = new Date();
-            if (date.toDateString() === today.toDateString()) {
-                return 'Today';
-            }
-            const yesterday = new Date(today);
-            yesterday.setDate(today.getDate() - 1);
-            if (date.toDateString() === yesterday.toDateString()) {
-                return 'Yesterday';
-            }
-            return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-        }
-
-        function addDateSeparator(dateStr) {
-            const chatBox = document.getElementById('chat-box');
-            const separator = document.createElement('div');
-            separator.className = 'date-separator';
-            separator.textContent = dateStr;
-            chatBox.appendChild(separator);
-        }
-
-        function appendMessage(msg, sender) {
-            const chatBox = document.getElementById('chat-box');
-            const messageDate = new Date(msg.timestamp);
-            const dateStr = formatDateForSeparator(msg.timestamp);
-
-            if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
-                addDateSeparator(dateStr);
-                lastMessageDate = messageDate;
-            }
-
-            const div = document.createElement('div');
-            const isUser = sender === 'user';
-            const isAgent = sender === 'agent';
-            div.className = 'message';
-            div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
-
-            const bubble = document.createElement('div');
-            bubble.className = 'message-bubble';
-            bubble.textContent = msg.message;
-            div.appendChild(bubble);
-
-            const meta = document.createElement('div');
-            meta.className = 'message-meta';
-            const time = formatTimestamp(msg.timestamp);
-            meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ''}`;
-            div.appendChild(meta);
-
-            chatBox.appendChild(div);
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            const loginPage = document.getElementById('loginPage');
-            const dashboardSection = document.getElementById('dashboard');
-            if (!loginPage || !dashboardSection) {
-                console.error('Required DOM elements (loginPage, dashboard) are missing.');
-                return;
-            }
-
-            checkAuthStatus();
-
-            const messageInput = document.getElementById('message-input');
-            const sendButton = document.getElementById('send-button');
-            if (messageInput && sendButton) {
-                messageInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter' || e.keyCode === 13) {
-                        e.preventDefault();
-                        sendMessage();
-                    }
-                });
-                messageInput.addEventListener('input', () => {
-                    sendButton.disabled = !messageInput.value.trim();
-                    if (messageInput.value.trim() && currentConversationId) {
-                        socket.emit('typing', { conversation_id: currentConversationId, agent: currentAgent });
-                    }
-                });
-            } else {
-                console.error('Message input or send button not found.');
-            }
-
-            const emojiIcon = document.getElementById('emoji-icon');
-            if (emojiIcon) {
-                const picker = document.createElement('emoji-picker');
-                picker.style.position = 'absolute';
-                picker.style.bottom = '60px';
-                picker.style.left = '20px';
-                picker.style.display = 'none';
-                document.body.appendChild(picker);
-
-                emojiIcon.addEventListener('click', () => {
-                    picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
-                });
-
-                picker.addEventListener('emoji-click', (event) => {
-                    messageInput.value += event.detail.unicode;
-                    messageInput.focus();
-                    sendButton.disabled = !messageInput.value.trim();
-                    picker.style.display = 'none';
-                });
-            }
-
-            const attachIcon = document.getElementById('attach-icon');
-            if (attachIcon) {
-                attachIcon.addEventListener('click', () => {
-                    showToast('File attachment is not yet implemented', 'info');
-                });
-            }
-        });
-
-        function checkAuthStatus() {
-            fetch('/check-auth')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    const loginPage = document.getElementById('loginPage');
-                    const dashboardSection = document.getElementById('dashboard');
-                    if (data.is_authenticated) {
-                        currentAgent = data.agent;
-                        loginPage.style.display = 'none';
-                        dashboardSection.style.display = 'flex';
-                        fetchConversations();
-                        fetchSettings();
-                    } else {
-                        loginPage.style.display = 'flex';
-                        dashboardSection.style.display = 'none';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking auth status:', error);
-                    showToast('Error checking authentication status', 'error');
-                });
-        }
-
-        function login() {
-            const usernameInput = document.getElementById('username');
-            const passwordInput = document.getElementById('password');
-            if (!usernameInput || !passwordInput) {
-                console.error('Username or password input missing.');
-                showToast('Username or password input missing', 'error');
-                return;
-            }
-
-            const username = usernameInput.value;
-            const password = passwordInput.value;
-
-            fetch('/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ username, password }),
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.message === 'Login successful') {
-                        currentAgent = data.agent;
-                        document.getElementById('loginPage').style.display = 'none';
-                        document.getElementById('dashboard').style.display = 'flex';
-                        fetchConversations();
-                        fetchSettings();
-                        showToast('Login successful', 'success');
-                    } else {
-                        showToast('Login failed: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error during login:', error);
-                    showToast('Error during login', 'error');
-                });
-        }
-
-        async function fetchConversations() {
-            const convoLoadingSpinner = document.getElementById("convo-loading-spinner");
-            convoLoadingSpinner.style.display = "block";
-            try {
-                const response = await fetch("/all-whatsapp-messages");
-                if (!response.ok) {
-                    throw new Error(`HTTP error! Status: ${response.status}`);
-                }
-                const data = await response.json();
-                const conversationList = document.getElementById("conversation-list");
-                conversationList.innerHTML = "";
-                if (data.conversations) {
-                    data.conversations.forEach(convo => {
-                        const convoItem = document.createElement("div");
-                        convoItem.classList.add("conversation-item");
-                        if (currentConversationId === convo.convo_id) {
-                            convoItem.classList.add("active");
-                        }
-                        convoItem.innerHTML = `
-                            <div class="avatar"></div>
-                            <div class="info">
-                                <div class="name">${convo.username}</div>
-                                <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}</div>
-                            </div>
-                        `;
-                        convoItem.addEventListener("click", () => loadConversation(convo.convo_id, convo.username));
-                        conversationList.appendChild(convoItem);
-                    });
-                }
-            } catch (error) {
-                console.error("Error fetching conversations:", error);
-                showToast("Error fetching conversations", "error");
-            } finally {
-                convoLoadingSpinner.style.display = "none";
-            }
-        }
-
-        async function fetchSettings() {
-            try {
-                const response = await fetch('/settings');
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch settings: ${response.status}`);
-                }
-                const settings = await response.json();
-                const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
-            } catch (error) {
-                console.error('Error fetching settings:', error);
-                showToast('Error fetching settings', 'error');
-            }
-        }
-
-        function loadConversation(convoId, username) {
-    if (!convoId) {
-        console.error("No conversation ID provided to loadConversation");
-        showToast("Please select a valid conversation", "error");
-        return;
-    }
-    if (currentConversationId) {
-        socket.emit("leave_conversation", { conversation_id: currentConversationId });
-    }
-    currentConversationId = convoId;
-
-    // Update UI immediately
-    const conversationList = document.getElementById("conversation-list");
-    const items = conversationList.getElementsByClassName("conversation-item");
-    for (let item of items) {
-        item.classList.remove("active");
-        if (item.textContent.includes(username)) {
-            item.classList.add("active");
-        }
+        setTimeout(() => toast.classList.add("show"), 100);
+        setTimeout(() => {
+            toast.classList.remove("show");
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
     }
 
-    const chatHeader = document.getElementById("chat-header");
-    const chatTitle = document.getElementById("chat-title");
-    const inputContainer = document.getElementById("input-container");
-    chatHeader.style.display = "flex";
-    chatTitle.textContent = username || "Conversation #" + convoId;
-    inputContainer.style.display = "flex";
+    function formatTimestamp(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
 
-    // Clear existing messages and reset last date
-    const chatBox = document.getElementById("chat-box");
-    chatBox.innerHTML = '<div class="loading-spinner" id="chat-loading-spinner"></div>';
-    lastMessageDate = null;
+    function formatDateForSeparator(timestamp) {
+        const date = new Date(timestamp);
+        const today = new Date();
+        if (date.toDateString() === today.toDateString()) return "Today";
+        const yesterday = new Date(today);
+        yesterday.setDate(today.getDate() - 1);
+        if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+        return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+    }
 
-    // Join the conversation room
-    console.log("Emitting join_conversation with conversation_id:", convoId);
-    socket.emit("join_conversation", { conversation_id: convoId });
+    function addDateSeparator(dateStr) {
+        const chatBox = document.getElementById("chat-box");
+        const separator = document.createElement("div");
+        separator.className = "date-separator";
+        separator.textContent = dateStr;
+        chatBox.appendChild(separator);
+    }
 
-    // Fetch and display messages
-    const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
-    chatLoadingSpinner.style.display = "block";
-    fetch(`/messages?conversation_id=${convoId}`)
-        .then(response => {
-            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-            return response.json();
-        })
-        .then(data => {
-            chatBox.innerHTML = ""; // Clear spinner
-            if (data.messages && data.messages.length > 0) {
-                data.messages.forEach(msg => appendMessage(msg, msg.sender));
-            } else {
-                chatBox.innerHTML = "<p>No messages yet.</p>";
-            }
-            chatLoadingSpinner.style.display = "none";
-        })
-        .catch(error => {
-            console.error("Error loading messages:", error);
-            showToast("Failed to load messages", "error");
-            chatLoadingSpinner.style.display = "none";
-        });
-}
+    function appendMessage(msg, sender, username) {
+        const chatBox = document.getElementById("chat-box");
+        const messageDate = new Date(msg.timestamp);
+        const dateStr = formatDateForSeparator(msg.timestamp);
 
-        function sendMessage() {
-            if (!currentConversationId) {
-                showToast("Please select a conversation", "error");
-                return;
-            }
+        if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
+            addDateSeparator(dateStr);
+            lastMessageDate = messageDate;
+        }
 
-            const messageInput = document.getElementById("message-input");
-            const sendButton = document.getElementById("send-button");
-            const message = messageInput.value.trim();
-            if (!message) {
-                showToast("Please enter a message to send", "error");
-                return;
-            }
+        const div = document.createElement("div");
+        const isUser = sender === "user";
+        const isAgent = sender === "agent";
+        div.className = "message";
+        div.classList.add(isUser ? "user-message" : isAgent ? "agent-message" : "ai-message");
 
-            // Optimistic update
-            const tempMessage = {
-                message: message,
-                timestamp: new Date().toISOString(),
-                sender: "agent",
-            };
-            appendMessage(tempMessage, "agent");
-            messageInput.value = "";
-            sendButton.disabled = true;
+        const bubble = document.createElement("div");
+        bubble.className = "message-bubble";
+        bubble.textContent = `${username}: ${msg.message}`; // Prepend username for clarity
+        div.appendChild(bubble);
 
-            // Use Socket.IO instead of /chat for real-time agent messages
-            socket.emit("agent_message", {
-                convo_id: currentConversationId,
-                message: message,
-                channel: "whatsapp",
+        const meta = document.createElement("div");
+        meta.className = "message-meta";
+        const time = formatTimestamp(msg.timestamp);
+        meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ""}`;
+        div.appendChild(meta);
+
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const loginPage = document.getElementById("loginPage");
+        const dashboardSection = document.getElementById("dashboard");
+        if (!loginPage || !dashboardSection) {
+            console.error("Required DOM elements (loginPage, dashboard) are missing.");
+            return;
+        }
+
+        checkAuthStatus();
+
+        const messageInput = document.getElementById("message-input");
+        const sendButton = document.getElementById("send-button");
+        if (messageInput && sendButton) {
+            messageInput.addEventListener("keypress", (e) => {
+                if (e.key === "Enter" || e.keyCode === 13) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+            messageInput.addEventListener("input", () => {
+                sendButton.disabled = !messageInput.value.trim() || !currentConversationId;
             });
         }
 
-        document.getElementById('ai-toggle').addEventListener('change', async (e) => {
-    const aiEnabled = e.target.checked ? '1' : '0';
-    try {
-        const response = await fetch('/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ai_enabled: aiEnabled }) // Changed to match server expectation
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to update AI settings: ${response.status}`);
+        const emojiIcon = document.getElementById("emoji-icon");
+        if (emojiIcon) {
+            const picker = document.createElement("emoji-picker");
+            picker.style.position = "absolute";
+            picker.style.bottom = "60px";
+            picker.style.left = "20px";
+            picker.style.display = "none";
+            document.body.appendChild(picker);
+
+            emojiIcon.addEventListener("click", () => {
+                picker.style.display = picker.style.display === "none" ? "block" : "none";
+            });
+
+            picker.addEventListener("emoji-click", (event) => {
+                messageInput.value += event.detail.unicode;
+                messageInput.focus();
+                sendButton.disabled = !messageInput.value.trim() || !currentConversationId;
+                picker.style.display = "none";
+            });
         }
-        const data = await response.json();
-        if (data.status !== 'success') {
-            throw new Error(data.error || 'Unknown error');
+
+        const attachIcon = document.getElementById("attach-icon");
+        if (attachIcon) {
+            attachIcon.addEventListener("click", () => {
+                showToast("File attachment is not yet implemented", "info");
+            });
         }
-        showToast(`AI has been ${aiEnabled === '1' ? 'enabled' : 'disabled'}`, 'success');
-    } catch (error) {
-        console.error('Error updating AI settings:', error);
-        e.target.checked = !e.target.checked;
-        showToast(`Error updating AI settings: ${error.message}`, 'error');
-    }
-});
+    });
 
-        socket.on('connect', () => {
-            isConnected = true;
-            showToast('Connected to server', 'success');
-        });
-
-        socket.on('disconnect', () => {
-            isConnected = false;
-            showToast('Disconnected from server', 'error');
-        });
-
-        socket.on('live_message', (data) => {
-            if (data.convo_id === currentConversationId) {
-                appendMessage({ message: data.message, timestamp: new Date().toISOString() }, data.sender);
-            }
-            const conversationList = document.getElementById('conversation-list');
-            const convoItem = Array.from(conversationList.children).find(item => item.textContent.includes(data.username));
-            if (convoItem) {
-                convoItem.querySelector('.last-message').textContent = data.message;
-            }
-        });
-
-        socket.on('typing', (data) => {
-            if (data.conversation_id === currentConversationId && data.agent !== currentAgent) {
-                const chatBox = document.getElementById('chat-box');
-                let typingIndicator = chatBox.querySelector('.typing-indicator');
-                if (!typingIndicator) {
-                    typingIndicator = document.createElement('div');
-                    typingIndicator.className = 'typing-indicator';
-                    typingIndicator.innerHTML = '<div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
-                    chatBox.appendChild(typingIndicator);
+    function checkAuthStatus() {
+        fetch("/check-auth")
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+                return response.json();
+            })
+            .then(data => {
+                if (data.is_authenticated) {
+                    currentAgent = data.agent;
+                    document.getElementById("loginPage").style.display = "none";
+                    document.getElementById("dashboard").style.display = "flex";
+                    fetchConversations();
+                    fetchSettings();
+                } else {
+                    document.getElementById("loginPage").style.display = "flex";
+                    document.getElementById("dashboard").style.display = "none";
                 }
-                typingIndicator.style.display = 'block';
-                setTimeout(() => {
-                    typingIndicator.style.display = 'none';
-                }, 3000);
+            })
+            .catch(error => {
+                console.error("Error checking auth status:", error);
+                showToast("Error checking authentication status", "error");
+            });
+    }
+
+    function login() {
+        const username = document.getElementById("username").value;
+        const password = document.getElementById("password").value;
+
+        fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+        })
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+                return response.json();
+            })
+            .then(data => {
+                if (data.message === "Login successful") {
+                    currentAgent = data.agent;
+                    document.getElementById("loginPage").style.display = "none";
+                    document.getElementById("dashboard").style.display = "flex";
+                    fetchConversations();
+                    fetchSettings();
+                    showToast("Login successful", "success");
+                } else {
+                    showToast("Login failed: " + data.message, "error");
+                }
+            })
+            .catch(error => {
+                console.error("Error during login:", error);
+                showToast("Error during login", "error");
+            });
+    }
+
+    async function fetchConversations() {
+        const convoLoadingSpinner = document.getElementById("convo-loading-spinner");
+        convoLoadingSpinner.style.display = "block";
+        try {
+            const response = await fetch("/all-whatsapp-messages");
+            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+            const data = await response.json();
+            const conversationList = document.getElementById("conversation-list");
+            conversationList.innerHTML = "";
+            if (data.conversations) {
+                data.conversations.forEach(convo => {
+                    const convoItem = document.createElement("div");
+                    convoItem.classList.add("conversation-item");
+                    if (currentConversationId === convo.convo_id) {
+                        convoItem.classList.add("active");
+                    }
+                    convoItem.innerHTML = `
+                        <div class="avatar"></div>
+                        <div class="info">
+                            <div class="name">${convo.username}</div>
+                            <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}</div>
+                        </div>
+                    `;
+                    convoItem.addEventListener("click", () => selectConversation(convo.convo_id, convo.username));
+                    conversationList.appendChild(convoItem);
+                });
             }
-        });
+            const chatHeader = document.getElementById("chat-header");
+            chatHeader.style.display = "flex";
+            document.getElementById("chat-title").textContent = "All Live Messages";
+        } catch (error) {
+            console.error("Error fetching conversations:", error);
+            showToast("Error fetching conversations", "error");
+        } finally {
+            convoLoadingSpinner.style.display = "none";
+        }
+    }
 
-        socket.on('error', (data) => {
-            showToast(data.message, 'error');
-        });
+    async function fetchSettings() {
+        try {
+            const response = await fetch("/settings");
+            if (!response.ok) throw new Error(`Failed to fetch settings: ${response.status}`);
+            const settings = await response.json();
+            const aiToggle = document.getElementById("ai-toggle");
+            aiToggle.checked = settings.ai_enabled === "1";
+        } catch (error) {
+            console.error("Error fetching settings:", error);
+            showToast("Error fetching settings", "error");
+        }
+    }
 
-        socket.on('refresh_conversations', (data) => {
-            fetchConversations();
-        });
+    function selectConversation(convoId, username) {
+        if (currentConversationId) {
+            socket.emit("leave_conversation", { conversation_id: currentConversationId });
+        }
+        currentConversationId = convoId;
+        socket.emit("join_conversation", { conversation_id: convoId });
 
-        socket.on('settings_updated', (settings) => {
-            if ('ai_enabled' in settings) {
-                const aiToggle = document.getElementById('ai-toggle');
-                aiToggle.checked = settings.ai_enabled === '1';
-                showToast(`AI has been ${settings.ai_enabled === '1' ? 'enabled' : 'disabled'}`, 'success');
+        const conversationList = document.getElementById("conversation-list");
+        const items = conversationList.getElementsByClassName("conversation-item");
+        for (let item of items) {
+            item.classList.remove("active");
+            if (item.textContent.includes(username)) {
+                item.classList.add("active");
             }
-        });
+        }
 
-        socket.on("reconnect", (attempt) => {
-            fetchConversations();
-            fetchSettings();
-            if (currentConversationId) {
-                socket.emit('join_conversation', { conversation_id: currentConversationId });
-            }
-            showToast('Reconnected to server', 'success');
-        });
+        const inputContainer = document.getElementById("input-container");
+        inputContainer.style.display = "flex";
+        document.getElementById("send-button").disabled = !document.getElementById("message-input").value.trim();
+    }
 
-        socket.on("reconnect_error", (error) => {
-            showToast('Failed to reconnect to server', 'error');
+    function sendMessage() {
+        if (!currentConversationId) {
+            showToast("Please select a conversation to reply to", "error");
+            return;
+        }
+
+        const messageInput = document.getElementById("message-input");
+        const sendButton = document.getElementById("send-button");
+        const message = messageInput.value.trim();
+        if (!message) {
+            showToast("Please enter a message to send", "error");
+            return;
+        }
+
+        const tempMessage = {
+            message: message,
+            timestamp: new Date().toISOString(),
+            sender: "agent",
+        };
+        appendMessage(tempMessage, "agent", currentAgent);
+        messageInput.value = "";
+        sendButton.disabled = true;
+
+        socket.emit("agent_message", {
+            convo_id: currentConversationId,
+            message: message,
+            channel: "whatsapp",
         });
-    </script>
+    }
+
+    document.getElementById("ai-toggle").addEventListener("change", async (e) => {
+        const aiEnabled = e.target.checked ? "1" : "0";
+        try {
+            const response = await fetch("/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "ai_enabled", value: aiEnabled }),
+            });
+            if (!response.ok) throw new Error(`Failed to update AI settings: ${response.status}`);
+            const data = await response.json();
+            if (data.status !== "success") throw new Error(data.error || "Unknown error");
+            showToast(`AI has been ${aiEnabled === "1" ? "enabled" : "disabled"}`, "success");
+        } catch (error) {
+            console.error("Error updating AI settings:", error);
+            e.target.checked = !e.target.checked;
+            showToast(`Error updating AI settings: ${error.message}`, "error");
+        }
+    });
+
+    socket.on("connect", () => {
+        isConnected = true;
+        showToast("Connected to server", "success");
+    });
+
+    socket.on("disconnect", () => {
+        isConnected = false;
+        showToast("Disconnected from server", "error");
+    });
+
+    socket.on("live_message", (data) => {
+        // Show all messages regardless of currentConversationId
+        appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender, data.username);
+        const conversationList = document.getElementById("conversation-list");
+        const convoItem = Array.from(conversationList.children).find(item =>
+            item.textContent.includes(data.username)
+        );
+        if (convoItem) {
+            convoItem.querySelector(".last-message").textContent = data.message;
+        }
+    });
+
+    socket.on("error", (data) => {
+        showToast(data.message, "error");
+    });
+
+    socket.on("refresh_conversations", (data) => {
+        fetchConversations();
+    });
+
+    socket.on("settings_updated", (settings) => {
+        if ("ai_enabled" in settings) {
+            const aiToggle = document.getElementById("ai-toggle");
+            aiToggle.checked = settings.ai_enabled === "1";
+            showToast(`AI has been ${settings.ai_enabled === "1" ? "enabled" : "disabled"}`, "success");
+        }
+    });
+
+    socket.on("reconnect", (attempt) => {
+        fetchConversations();
+        fetchSettings();
+        if (currentConversationId) {
+            socket.emit("join_conversation", { conversation_id: currentConversationId });
+        }
+        showToast("Reconnected to server", "success");
+    });
+
+    socket.on("reconnect_error", (error) => {
+        showToast("Failed to reconnect to server", "error");
+    });
+</script>
 </body>
 </html>
