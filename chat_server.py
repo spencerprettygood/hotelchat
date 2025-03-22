@@ -526,26 +526,44 @@ def check_visibility():
         logger.error(f"❌ Error in /check-visibility: {e}")
         return jsonify({"error": "Failed to check visibility"}), 500
 
-@app.route("/all-messages", methods=["GET"])
-def get_all_messages():
+@app.route("/all-whatsapp-messages", methods=["GET"])
+def get_all_whatsapp_messages():
+    logger.info("Fetching WhatsApp conversations from /all-whatsapp-messages")
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Fetch all WhatsApp conversations
             c.execute(
-                "SELECT m.sender, m.message, m.timestamp "
-                "FROM messages m "
-                "JOIN conversations c ON m.convo_id = c.id "
-                "WHERE c.channel = 'whatsapp' "
-                "ORDER BY m.timestamp ASC"
+                "SELECT id, chat_id, username, last_updated "
+                "FROM conversations "
+                "WHERE channel = 'whatsapp' "
+                "ORDER BY last_updated DESC"
             )
-            messages = [
-                {"sender": row[0], "message": row[1], "timestamp": row[2]}
+            conversations = [
+                {"convo_id": row[0], "chat_id": row[1], "username": row[2], "last_updated": row[3]}
                 for row in c.fetchall()
             ]
-            return jsonify({"messages": messages})
+
+            # Fetch messages for each conversation
+            for convo in conversations:
+                c.execute(
+                    "SELECT message, sender, timestamp "
+                    "FROM messages "
+                    "WHERE convo_id = %s "
+                    "ORDER BY timestamp ASC",
+                    (convo["convo_id"],)
+                )
+                messages = [
+                    {"message": row[0], "sender": row[1], "timestamp": row[2]}
+                    for row in c.fetchall()
+                ]
+                convo["messages"] = messages
+
+            logger.info(f"Retrieved {len(conversations)} conversations")
+            return jsonify({"conversations": conversations})
     except Exception as e:
-        logger.error(f"❌ Error in /all-messages: {str(e)}")
-        return jsonify({"error": "Failed to fetch messages"}), 500
+        logger.error(f"❌ Error in /all-whatsapp-messages: {str(e)}")
+        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
 
 # Messaging Helper Functions
 def send_telegram_message(chat_id, text):
