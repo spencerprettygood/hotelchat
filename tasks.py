@@ -4,8 +4,8 @@ import os
 # Configure Celery with Redis
 celery_app = Celery(
     'tasks',
-    broker=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
-    backend=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
+    broker=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+    backend=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 )
 
 celery_app.conf.update(
@@ -14,22 +14,37 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
-    broker_connection_retry_on_startup=True  # Add this to suppress the warning
+    broker_connection_retry_on_startup=True  # Added to suppress deprecation warning
 )
 
 @celery_app.task
 def send_whatsapp_message_task(to_number, message):
-    from chat_server import client, logger
+    from chat_server import logger
+    from twilio.rest import Client
+    from twilio.base.exceptions import TwilioRestException
     try:
+        client = Client(
+            os.getenv("TWILIO_ACCOUNT_SID"),
+            os.getenv("TWILIO_AUTH_TOKEN")
+        )
+        if not to_number.startswith("whatsapp:"):
+            to_number = f"whatsapp:{to_number}"
+        twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
+        if not twilio_number.startswith("whatsapp:"):
+            logger.error(f"❌ TWILIO_WHATSAPP_NUMBER must start with 'whatsapp:': {twilio_number}")
+            return False
         message = client.messages.create(
             body=message,
-            from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
-            to=f"whatsapp:{to_number}"
+            from_=twilio_number,
+            to=to_number
         )
         logger.info(f"Sent WhatsApp message to {to_number}: {message.sid}")
         return True
-    except Exception as e:
+    except TwilioRestException as e:
         logger.error(f"Failed to send WhatsApp message to {to_number}: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Error sending WhatsApp message to {to_number}: {str(e)}")
         return False
 
 @celery_app.task
