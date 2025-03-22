@@ -1,6 +1,5 @@
 from celery import Celery
 import os
-from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled
 
 # Configure Celery with Redis
 celery_app = Celery(
@@ -19,6 +18,10 @@ celery_app.conf.update(
 
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
+    # Move imports inside the function to avoid circular imports
+    from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled
+    from datetime import datetime, timezone
+
     try:
         # Get or create conversation
         with get_db_connection() as conn:
@@ -71,7 +74,6 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
         # Check AI settings and toggle timestamp using cache
         global_ai_enabled, ai_toggle_timestamp = get_ai_enabled()
 
-        from datetime import datetime, timezone
         message_time = datetime.fromisoformat(user_timestamp.replace("Z", "+00:00"))
         toggle_time = datetime.fromisoformat(ai_toggle_timestamp.replace("Z", "+00:00"))
 
