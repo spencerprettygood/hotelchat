@@ -521,14 +521,14 @@
     </style>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
-   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
-<script>
+   <script>
     const socket = io({
         transports: ["websocket", "polling"],
         reconnection: true,
         reconnectionAttempts: Infinity,
-        reconnectionDelay: 1000
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        randomizationFactor: 0.5
     });
 
     let currentConversationId = null;
@@ -575,7 +575,7 @@
         chatBox.appendChild(separator);
     }
 
-    function appendMessage(msg, sender, username) {
+    function appendMessage(msg, sender) {
         const chatBox = document.getElementById("chat-box");
         const messageDate = new Date(msg.timestamp);
         const dateStr = formatDateForSeparator(msg.timestamp);
@@ -593,7 +593,7 @@
 
         const bubble = document.createElement("div");
         bubble.className = "message-bubble";
-        bubble.textContent = `${username}: ${msg.message}`; // Prepend username for clarity
+        bubble.textContent = msg.message; // No username/number prefix
         div.appendChild(bubble);
 
         const meta = document.createElement("div");
@@ -733,11 +733,11 @@
                     convoItem.innerHTML = `
                         <div class="avatar"></div>
                         <div class="info">
-                            <div class="name">${convo.username}</div>
+                            <div class="name">${convo.chat_id}</div>
                             <div class="last-message">${convo.messages.length > 0 ? convo.messages[convo.messages.length - 1].message : "No messages"}</div>
                         </div>
                     `;
-                    convoItem.addEventListener("click", () => selectConversation(convo.convo_id, convo.username));
+                    convoItem.addEventListener("click", () => selectConversation(convo.convo_id, convo.chat_id));
                     conversationList.appendChild(convoItem);
                 });
             }
@@ -765,7 +765,7 @@
         }
     }
 
-    function selectConversation(convoId, username) {
+    function selectConversation(convoId, chatId) {
         if (currentConversationId) {
             socket.emit("leave_conversation", { conversation_id: currentConversationId });
         }
@@ -776,7 +776,7 @@
         const items = conversationList.getElementsByClassName("conversation-item");
         for (let item of items) {
             item.classList.remove("active");
-            if (item.textContent.includes(username)) {
+            if (item.textContent.includes(chatId)) {
                 item.classList.add("active");
             }
         }
@@ -805,7 +805,7 @@
             timestamp: new Date().toISOString(),
             sender: "agent",
         };
-        appendMessage(tempMessage, "agent", currentAgent);
+        appendMessage(tempMessage, "agent");
         messageInput.value = "";
         sendButton.disabled = true;
 
@@ -837,17 +837,19 @@
 
     socket.on("connect", () => {
         isConnected = true;
+        console.log("Socket.IO connected with ID:", socket.id);
         showToast("Connected to server", "success");
     });
 
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason) => {
         isConnected = false;
-        showToast("Disconnected from server", "error");
+        console.log("Socket.IO disconnected. Reason:", reason);
+        showToast("Disconnected from server: " + reason, "error");
     });
 
     socket.on("live_message", (data) => {
-        // Show all messages regardless of currentConversationId
-        appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender, data.username);
+        console.log("Received live_message:", data);
+        appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
         const conversationList = document.getElementById("conversation-list");
         const convoItem = Array.from(conversationList.children).find(item =>
             item.textContent.includes(data.username)
@@ -874,6 +876,7 @@
     });
 
     socket.on("reconnect", (attempt) => {
+        console.log("Socket.IO reconnected after", attempt, "attempts");
         fetchConversations();
         fetchSettings();
         if (currentConversationId) {
@@ -883,7 +886,18 @@
     });
 
     socket.on("reconnect_error", (error) => {
+        console.error("Socket.IO reconnect error:", error);
         showToast("Failed to reconnect to server", "error");
+    });
+
+    setInterval(() => {
+        if (isConnected) {
+            socket.emit("ping", { timestamp: new Date().toISOString() });
+        }
+    }, 30000);
+
+    socket.on("pong", (data) => {
+        console.log("Received pong:", data);
     });
 </script>
 </body>
