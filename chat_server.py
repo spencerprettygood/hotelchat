@@ -304,27 +304,19 @@ add_test_conversations()
 
 def log_message(convo_id, username, message, sender):
     try:
+        timestamp = datetime.now().isoformat()
+        logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                (convo_id, username, message, sender, datetime.now().isoformat())
+                "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (convo_id, username, message, sender, timestamp)
             )
-            c.execute(
-                "UPDATE conversations SET last_updated = %s WHERE id = %s",
-                (datetime.now().isoformat(), convo_id)
-            )
-            if sender == "agent":
-                c.execute(
-                    "UPDATE conversations SET ai_enabled = %s WHERE id = %s",
-                    (0, convo_id)
-                )
-                logger.info(f"✅ Disabled AI for convo_id {convo_id} because agent responded")
             conn.commit()
             logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
-    except psycopg2.Error as e:
-        logger.error(f"❌ Database error in log_message: {str(e)}")
-        conn.rollback()
+    except Exception as e:
+        logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
         raise
 
 class Agent(UserMixin):
