@@ -53,7 +53,7 @@ app.config["SECRET_KEY"] = SECRET_KEY
 CORS(app)
 socketio = SocketIO(
     app,
-    cors_allowed_origins=["http://localhost:5000", "https://your-production-domain.onrender.com"],  # Restrict in production
+    cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],  # Restrict in production
     async_mode="gevent",
     ping_timeout=120,
     ping_interval=30,
