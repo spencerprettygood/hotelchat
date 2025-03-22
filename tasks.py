@@ -1,9 +1,5 @@
 from celery import Celery
 import os
-
-# These imports should work if chat_server.py is in the same directory
-from chat_server import logger  # For send_whatsapp_message_task
-from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled  # For process_whatsapp_message
 from datetime import datetime, timezone
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
@@ -26,6 +22,8 @@ celery_app.conf.update(
 
 @celery_app.task
 def send_whatsapp_message_task(to_number, message):
+    # Move the import inside the function to avoid circular import
+    from chat_server import logger
     try:
         client = Client(
             os.getenv("TWILIO_ACCOUNT_SID"),
@@ -56,6 +54,9 @@ def send_whatsapp_message_task(to_number, message):
 
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
+    # Move the imports inside the function to avoid circular import
+    from chat_server import app, get_db_connection, release_db_connection, ai_respond, send_whatsapp_message, log_message, socketio, logger, get_ai_enabled
+
     try:
         # Get or create conversation
         with get_db_connection() as conn:
