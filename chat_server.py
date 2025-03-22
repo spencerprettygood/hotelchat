@@ -1019,7 +1019,8 @@ def get_all_messages():
     except Exception as e:
         logger.error(f"❌ Error in /all-messages: {str(e)}")
         return jsonify({"error": "Failed to fetch messages"}), 500
-        
+
+@app.route("/whatsapp", methods=["GET", "POST"])        
 def whatsapp():
     if request.method == "GET":
         return Response("Method not allowed", status=405)
