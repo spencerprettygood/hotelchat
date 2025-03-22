@@ -575,35 +575,28 @@
         }
 
         async function loadMessagesForConversation(convoId) {
-            const chatLoadingSpinner = document.getElementById("chat-loading-spinner");
-            chatLoadingSpinner.style.display = "block";
+            const chatBox = document.getElementById("chat-box");
+            const conversationHeader = document.getElementById("conversation-header");
             try {
-                console.log(`Fetching messages for convo_id ${convoId}`);
                 const response = await fetch(`/messages/${convoId}`);
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
                 }
                 const data = await response.json();
-                console.log("Received messages for convo_id", convoId, ":", data);
-
-                const chatBox = document.getElementById("chat-box");
-                chatBox.innerHTML = "";
-                lastMessageDate = null;
+                chatBox.innerHTML = ""; // Clear existing messages
+                conversationHeader.textContent = `Chat with ${data.username || "Unknown User"}`;
+        
                 if (data.messages && data.messages.length > 0) {
-                    console.log("Loaded messages for convo_id", convoId, ":", data.messages);
-                    data.messages.forEach(msg => appendMessage(msg, msg.sender));
+                    data.messages.forEach(msg => {
+                        appendMessage(msg, msg.sender);
+                    });
                 } else {
-                    console.log("No messages found for convo_id", convoId);
-                    chatBox.innerHTML = "<p>No messages yet.</p>";
+                    chatBox.innerHTML = "<p>No messages found for this conversation.</p>";
                 }
             } catch (error) {
-                console.error("Error loading messages for convo_id", convoId, ":", error);
-                showToast(`Error loading messages: ${error.message}`, "error");
-                const chatBox = document.getElementById("chat-box");
-                chatBox.innerHTML = "<p>Failed to load messages.</p>";
-            } finally {
-                chatLoadingSpinner.style.display = "none";
+                console.error("Error loading messages:", error);
+                chatBox.innerHTML = "<p>Failed to load messages. Please try again later.</p>";
             }
         }
 
