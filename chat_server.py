@@ -192,56 +192,99 @@ def release_db_connection(conn):
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
-        # Drop existing tables to reset schema
-        c.execute("DROP TABLE IF EXISTS messages")
-        c.execute("DROP TABLE IF EXISTS conversations")
-        c.execute("DROP TABLE IF EXISTS agents")
-        c.execute("DROP TABLE IF EXISTS settings")
 
-        # Create tables
-        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
-            id SERIAL PRIMARY KEY,
-            username TEXT NOT NULL,
-            chat_id TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            assigned_agent TEXT,
-            ai_enabled INTEGER DEFAULT 1,
-            booking_intent INTEGER DEFAULT 0,
-            handoff_notified INTEGER DEFAULT 0,
-            visible_in_conversations INTEGER DEFAULT 1,
-            last_updated TEXT DEFAULT CURRENT_TIMESTAMP
-        )''')
+        # Check if tables exist before creating them
+        c.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'conversations'
+            )
+        """)
+        conversations_table_exists = c.fetchone()[0]
 
-        c.execute('''CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            convo_id INTEGER NOT NULL,
-            username TEXT NOT NULL,
-            message TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (convo_id) REFERENCES conversations (id)
-        )''')
+        c.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'messages'
+            )
+        """)
+        messages_table_exists = c.fetchone()[0]
 
-        c.execute('''CREATE TABLE IF NOT EXISTS agents (
-            id SERIAL PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL
-        )''')
+        c.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'agents'
+            )
+        """)
+        agents_table_exists = c.fetchone()[0]
 
-        c.execute('''CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )''')
+        c.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'settings'
+            )
+        """)
+        settings_table_exists = c.fetchone()[0]
 
-        # Seed initial data
-        c.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
-                  ('ai_enabled', '1'))
-        c.execute("INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
-                  ('admin', 'password123'))
+        # Create tables only if they don't exist
+        if not conversations_table_exists:
+            c.execute('''CREATE TABLE conversations (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                assigned_agent TEXT,
+                ai_enabled INTEGER DEFAULT 1,
+                booking_intent INTEGER DEFAULT 0,
+                handoff_notified INTEGER DEFAULT 0,
+                visible_in_conversations INTEGER DEFAULT 1,
+                last_updated TEXT DEFAULT CURRENT_TIMESTAMP
+            )''')
+            logger.info("Created conversations table")
 
-        # Add test conversations with ISO timestamps
+        if not messages_table_exists:
+            c.execute('''CREATE TABLE messages (
+                id SERIAL PRIMARY KEY,
+                convo_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                message TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (convo_id) REFERENCES conversations (id)
+            )''')
+            logger.info("Created messages table")
+
+        if not agents_table_exists:
+            c.execute('''CREATE TABLE agents (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password TEXT NOT NULL
+            )''')
+            logger.info("Created agents table")
+
+        if not settings_table_exists:
+            c.execute('''CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )''')
+            logger.info("Created settings table")
+
+        # Seed initial data (only if tables were just created or are empty)
+        c.execute("SELECT COUNT(*) FROM settings")
+        if c.fetchone()[0] == 0:
+            c.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+                      ('ai_enabled', '1'))
+            logger.info("Inserted default settings")
+
+        c.execute("SELECT COUNT(*) FROM agents")
+        if c.fetchone()[0] == 0:
+            c.execute("INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
+                      ('admin', 'password123'))
+            logger.info("Inserted default admin user")
+
+        # Only insert test conversations if there are no existing conversations
         c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
-        if c.fetchone()['count'] == 0:
+        if c.fetchone()[0] == 0:
             logger.info("ℹ️ Inserting test conversations")
             test_timestamp1 = "2025-03-22T00:00:00Z"
             c.execute(
@@ -265,12 +308,10 @@ def init_db():
                 "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
                 (convo_id2, 'TestUser2', 'Can I book a room?', 'user', test_timestamp2)
             )
-        else:
-            logger.info("ℹ️ Test conversations already exist, skipping insertion")
+            logger.info("Inserted test conversations")
 
         conn.commit()
         logger.info("✅ Database initialized")
-
 # Add test conversations (for development purposes)
 def add_test_conversations():
     try:
