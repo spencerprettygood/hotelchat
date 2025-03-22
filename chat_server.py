@@ -302,7 +302,7 @@ add_test_conversations()
 
 def log_message(convo_id, username, message, sender):
     try:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(timezone.utc).isoformat()  # Use ISO format with UTC
         logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -313,6 +313,7 @@ def log_message(convo_id, username, message, sender):
             )
             conn.commit()
             logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
+        return timestamp  # Return the timestamp for use in emissions
     except Exception as e:
         logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
         raise
@@ -851,7 +852,7 @@ def whatsapp():
                 (chat_id, "whatsapp")
             )
             result = c.fetchone()
-            current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current_timestamp = datetime.now(timezone.utc).isoformat()  # Use UTC and ISO format
             if result:
                 convo_id, username, ai_enabled = result
                 c.execute(
@@ -859,8 +860,8 @@ def whatsapp():
                     (current_timestamp, convo_id)
                 )
             else:
-                username = chat_id  # Use chat_id as username if new conversation
-                ai_enabled = 1  # Default to AI enabled for new conversations
+                username = chat_id
+                ai_enabled = 1
                 c.execute(
                     "INSERT INTO conversations (chat_id, channel, username, ai_enabled, last_updated) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                     (chat_id, "whatsapp", username, ai_enabled, current_timestamp)
@@ -870,13 +871,13 @@ def whatsapp():
             conn.commit()
 
         # Log user message
-        log_message(convo_id, username, message_body, "user")
+        user_timestamp = log_message(convo_id, username, message_body, "user")
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": message_body,
             "sender": "user",
             "channel": "whatsapp",
-            "timestamp": current_timestamp
+            "timestamp": user_timestamp
         }, room=str(convo_id))
         socketio.emit("live_message", {
             "convo_id": convo_id,
@@ -884,7 +885,7 @@ def whatsapp():
             "sender": "user",
             "chat_id": chat_id,
             "username": username,
-            "timestamp": current_timestamp
+            "timestamp": user_timestamp
         })
         logger.info(f"Emitted live_message for user message: {message_body}")
 
@@ -897,7 +898,7 @@ def whatsapp():
             c = conn.cursor()
             c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
             result = c.fetchone()
-            global_ai_enabled = result[0] if result else "1"  # Default to enabled
+            global_ai_enabled = result[0] if result else "1"
 
         # Generate AI response if enabled and no help keyword
         if ai_enabled and global_ai_enabled == "1" and not help_triggered:
@@ -908,7 +909,6 @@ def whatsapp():
                 if language == "en"
                 else "Lo siento, no pude procesar eso. Te conectaré con un miembro del equipo para que te ayude."
             )
-            # Disable AI for this conversation
             with get_db_connection() as conn:
                 c = conn.cursor()
                 c.execute(
@@ -923,13 +923,12 @@ def whatsapp():
 
         # Send and log AI response
         if send_whatsapp_message(from_number, response):
-            log_message(convo_id, username, response, "ai")
-            # Update last_updated again for AI response
+            ai_timestamp = log_message(convo_id, username, response, "ai")
             with get_db_connection() as conn:
                 c = conn.cursor()
                 c.execute(
                     "UPDATE conversations SET last_updated = %s WHERE id = %s",
-                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), convo_id)
+                    (ai_timestamp, convo_id)
                 )
                 conn.commit()
             socketio.emit("new_message", {
@@ -937,7 +936,7 @@ def whatsapp():
                 "message": response,
                 "sender": "ai",
                 "channel": "whatsapp",
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "timestamp": ai_timestamp
             }, room=str(convo_id))
             socketio.emit("live_message", {
                 "convo_id": convo_id,
@@ -945,7 +944,7 @@ def whatsapp():
                 "sender": "ai",
                 "chat_id": chat_id,
                 "username": username,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "timestamp": ai_timestamp
             })
             logger.info(f"Emitted live_message for AI response: {response}")
         else:
@@ -1015,7 +1014,7 @@ def handle_agent_message(data):
             username, chat_id, convo_channel = result
 
         # Log the agent's message
-        log_message(convo_id, username, message, "agent")
+        agent_timestamp = log_message(convo_id, username, message, "agent")
 
         # Emit to the UI
         emit("new_message", {
@@ -1023,7 +1022,7 @@ def handle_agent_message(data):
             "message": message,
             "sender": "agent",
             "channel": convo_channel,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": agent_timestamp,
         }, room=str(convo_id))
         emit("live_message", {
             "convo_id": convo_id,
@@ -1031,7 +1030,7 @@ def handle_agent_message(data):
             "sender": "agent",
             "chat_id": chat_id,
             "username": username,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": agent_timestamp,
         })
 
         # Send to WhatsApp
@@ -1050,7 +1049,7 @@ def handle_agent_message(data):
             c = conn.cursor()
             c.execute(
                 "UPDATE conversations SET last_updated = %s WHERE id = %s",
-                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), convo_id)
+                (agent_timestamp, convo_id)
             )
             conn.commit()
     except Exception as e:
