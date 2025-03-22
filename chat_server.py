@@ -304,7 +304,7 @@ add_test_conversations()
 
 def log_message(convo_id, username, message, sender):
     try:
-        timestamp = datetime.now().isoformat()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
         with get_db_connection() as conn:
             c = conn.cursor()
