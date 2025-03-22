@@ -789,9 +789,7 @@ def detect_language(message, convo_id):
     
     return "en"
 
-# Chat and Messaging Endpoints
 @app.route("/messages", methods=["GET"])
-@login_required
 def get_messages():
     try:
         convo_id = request.args.get("conversation_id")
