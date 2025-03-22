@@ -526,33 +526,26 @@ def check_visibility():
         logger.error(f"❌ Error in /check-visibility: {e}")
         return jsonify({"error": "Failed to check visibility"}), 500
 
-@app.route("/all-whatsapp-messages")
-@login_required
-def all_whatsapp_messages():
+@app.route("/all-messages", methods=["GET"])
+def get_all_messages():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT id, username, chat_id, channel FROM conversations WHERE channel = %s",
-                ('whatsapp',)
+                "SELECT m.sender, m.message, m.timestamp "
+                "FROM messages m "
+                "JOIN conversations c ON m.convo_id = c.id "
+                "WHERE c.channel = 'whatsapp' "
+                "ORDER BY m.timestamp ASC"
             )
-            conversations = [
-                {"convo_id": row["id"], "username": row["username"], "chat_id": row["chat_id"], "channel": row["channel"]}
+            messages = [
+                {"sender": row[0], "message": row[1], "timestamp": row[2]}
                 for row in c.fetchall()
             ]
-            for convo in conversations:
-                c.execute(
-                    "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp",
-                    (convo["convo_id"],)
-                )
-                convo["messages"] = [
-                    {"message": row["message"], "sender": row["sender"], "timestamp": row["timestamp"]}
-                    for row in c.fetchall()
-                ]
-        return jsonify({"conversations": conversations})
+            return jsonify({"messages": messages})
     except Exception as e:
-        logger.error(f"❌ Error fetching WhatsApp messages: {e}")
-        return jsonify({"error": "Failed to fetch WhatsApp messages"}), 500
+        logger.error(f"❌ Error in /all-messages: {str(e)}")
+        return jsonify({"error": "Failed to fetch messages"}), 500
 
 # Messaging Helper Functions
 def send_telegram_message(chat_id, text):
