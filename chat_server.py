@@ -239,29 +239,31 @@ def init_db():
         c.execute("INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
                   ('admin', 'password123'))
 
-        # Add test conversations
+        # Add test conversations with ISO timestamps
         c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
         if c.fetchone()['count'] == 0:
             logger.info("ℹ️ Inserting test conversations")
+            test_timestamp1 = "2025-03-22T00:00:00Z"
             c.execute(
                 "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                ('TestUser1', '123456789', 'whatsapp', None, 1, 0, '2025-03-22 00:00:00')
+                ('TestUser1', '123456789', 'whatsapp', None, 1, 0, test_timestamp1)
             )
             convo_id1 = c.fetchone()['id']
             c.execute(
                 "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', '2025-03-22 00:00:00')
+                (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', test_timestamp1)
             )
+            test_timestamp2 = "2025-03-22T00:00:01Z"
             c.execute(
                 "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                ('TestUser2', '987654321', 'whatsapp', None, 1, 0, '2025-03-22 00:00:01')
+                ('TestUser2', '987654321', 'whatsapp', None, 1, 0, test_timestamp2)
             )
             convo_id2 = c.fetchone()['id']
             c.execute(
                 "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                (convo_id2, 'TestUser2', 'Can I book a room?', 'user', '2025-03-22 00:00:01')
+                (convo_id2, 'TestUser2', 'Can I book a room?', 'user', test_timestamp2)
             )
         else:
             logger.info("ℹ️ Test conversations already exist, skipping insertion")
