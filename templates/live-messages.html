@@ -895,19 +895,40 @@
     });
 
     socket.on("live_message", (data) => {
-        console.log("Received live_message:", data);
-        // Only append the message if it belongs to the currently selected conversation
-        if (data.convo_id === currentConversationId) {
-            appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
-        }
-        const conversationList = document.getElementById("conversation-list");
-        const convoItem = Array.from(conversationList.children).find(item =>
-            item.textContent.includes(data.chat_id)
-        );
-        if (convoItem) {
-            convoItem.querySelector(".last-message").textContent = data.message;
-        }
-    });
+    console.log("Received live_message:", data);
+
+    // Check if the conversation exists in the sidebar
+    const conversationList = document.getElementById("conversation-list");
+    let convoItem = Array.from(conversationList.children).find(item =>
+        item.textContent.includes(data.chat_id)
+    );
+
+    // If the conversation doesn't exist, add it to the sidebar
+    if (!convoItem) {
+        convoItem = document.createElement("div");
+        convoItem.classList.add("conversation-item");
+        convoItem.innerHTML = `
+            <div class="avatar"></div>
+            <div class="info">
+                <div class="name">${data.chat_id}</div>
+                <div class="last-message">${data.message}</div>
+            </div>
+        `;
+        convoItem.addEventListener("click", () => selectConversation(data.convo_id, data.chat_id));
+        conversationList.appendChild(convoItem);
+
+        // Auto-select this new conversation
+        selectConversation(data.convo_id, data.chat_id);
+    } else {
+        // Update the last message in the sidebar
+        convoItem.querySelector(".last-message").textContent = data.message;
+    }
+
+    // Append the message to the chat area if it belongs to the currently selected conversation
+    if (data.convo_id === currentConversationId) {
+        appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
+    }
+});
 
     socket.on("error", (data) => {
         showToast(data.message, "error");
