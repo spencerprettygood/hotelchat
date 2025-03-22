@@ -197,7 +197,7 @@ def init_db():
         c.execute("DROP TABLE IF EXISTS agents")
         c.execute("DROP TABLE IF EXISTS settings")
 
-        # Create conversations table
+        # Create tables...
         c.execute('''CREATE TABLE IF NOT EXISTS conversations (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL,
@@ -211,7 +211,6 @@ def init_db():
             last_updated TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
 
-        # Create messages table
         c.execute('''CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
             convo_id INTEGER NOT NULL,
@@ -222,14 +221,12 @@ def init_db():
             FOREIGN KEY (convo_id) REFERENCES conversations (id)
         )''')
 
-        # Create agents table
         c.execute('''CREATE TABLE IF NOT EXISTS agents (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             password TEXT NOT NULL
         )''')
 
-        # Create settings table
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -246,9 +243,9 @@ def init_db():
         if c.fetchone()['count'] == 0:
             logger.info("ℹ️ Inserting test conversations")
             c.execute(
-                "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                ('TestUser1', '123456789', 'whatsapp', None, 1, 0)
+                "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                ('TestUser1', '123456789', 'whatsapp', None, 1, 0, '2025-03-22 00:00:00')
             )
             convo_id1 = c.fetchone()['id']
             c.execute(
@@ -256,9 +253,9 @@ def init_db():
                 (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', '2025-03-22 00:00:00')
             )
             c.execute(
-                "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                ('TestUser2', '987654321', 'whatsapp', None, 1, 0)
+                "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                ('TestUser2', '987654321', 'whatsapp', None, 1, 0, '2025-03-22 00:00:01')
             )
             convo_id2 = c.fetchone()['id']
             c.execute(
