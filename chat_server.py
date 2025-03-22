@@ -533,17 +533,20 @@ def get_all_whatsapp_messages():
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Fetch all WhatsApp conversations
+            # Fetch all WhatsApp conversations where visible_in_conversations = 1
             c.execute(
                 "SELECT id, chat_id, username, last_updated "
                 "FROM conversations "
-                "WHERE channel = 'whatsapp' "
+                "WHERE channel = 'whatsapp' AND visible_in_conversations = 1 "
                 "ORDER BY last_updated DESC"
             )
             conversations = [
                 {"convo_id": row[0], "chat_id": row[1], "username": row[2], "last_updated": row[3]}
                 for row in c.fetchall()
             ]
+
+            # Log the fetched conversations
+            logger.info(f"Fetched conversations: {[convo['chat_id'] for convo in conversations]}")
 
             # Fetch messages for each conversation
             for convo in conversations:
@@ -559,6 +562,7 @@ def get_all_whatsapp_messages():
                     for row in c.fetchall()
                 ]
                 convo["messages"] = messages
+                logger.info(f"Messages for convo_id {convo['convo_id']}: {len(messages)} messages")
 
             logger.info(f"Retrieved {len(conversations)} conversations")
             return jsonify({"conversations": conversations})
