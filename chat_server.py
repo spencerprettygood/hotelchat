@@ -1,7 +1,13 @@
-import gevent
-from gevent import monkey
-monkey.patch_all()
+# chat_server.py
 
+# Move gevent monkey-patching to the top and wrap it in a conditional
+# This ensures it only runs for the web service, not the Celery worker
+if __name__ == "__main__":
+    import gevent
+    from gevent import monkey
+    monkey.patch_all()
+
+# Now proceed with other imports
 from flask import Flask, render_template, request, jsonify, session, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
