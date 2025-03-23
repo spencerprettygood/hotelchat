@@ -758,40 +758,74 @@ def get_all_whatsapp_messages():
 
 @app.route("/messages/<convo_id>", methods=["GET"])
 @login_required
-def get_messages(convo_id):
-    since = request.args.get("since")
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        # Fetch conversation details
-        c.execute("SELECT username FROM conversations WHERE id = %s", (convo_id,))
-        convo = c.fetchone()
-        if not convo:
-            return jsonify({"error": "Conversation not found"}), 404
-        username = convo[0]
+def get_messages_for_conversation(convo_id):
+    start_time = time.time()
+    logger.info(f"Starting /messages/{convo_id} endpoint")
+    try:
+        # Convert convo_id to integer if needed, handle potential string input
+        try:
+            convo_id = int(convo_id)
+        except ValueError:
+            logger.error(f"❌ Invalid convo_id format: {convo_id}")
+            return jsonify({"error": "Invalid conversation ID format"}), 400
 
-        # Fetch messages
-        if since:
-            query = """
-                SELECT message, sender, timestamp
-                FROM messages
-                WHERE convo_id = %s AND timestamp > %s
-                ORDER BY timestamp ASC
-            """
-            c.execute(query, (convo_id, since))
-        else:
-            query = """
-                SELECT message, sender, timestamp
-                FROM messages
-                WHERE convo_id = %s
-                ORDER BY timestamp ASC
-            """
-            c.execute(query, (convo_id,))
-        messages = [
-            {"message": row[0], "sender": row[1], "timestamp": row[2].isoformat()}
-            for row in c.fetchall()
-        ]
-        release_db_connection(conn)
-        return jsonify({"messages": messages, "username": username})
+        # Get the 'since' query parameter for filtering messages
+        since = request.args.get("since")
+
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            # Fetch conversation details
+            c.execute(
+                "SELECT username FROM conversations WHERE id = %s",
+                (convo_id,)
+            )
+            convo = c.fetchone()
+            if not convo:
+                logger.error(f"❌ Conversation not found: {convo_id}")
+                release_db_connection(conn)
+                return jsonify({"error": "Conversation not found"}), 404
+            username = convo["username"]
+
+            # Fetch messages based on the 'since' parameter
+            if since:
+                query = """
+                    SELECT message, sender, timestamp
+                    FROM messages
+                    WHERE convo_id = %s AND timestamp > %s
+                    ORDER BY timestamp ASC
+                """
+                c.execute(query, (convo_id, since))
+                logger.info(f"Fetching messages for convo_id {convo_id} since {since}")
+            else:
+                query = """
+                    SELECT message, sender, timestamp
+                    FROM messages
+                    WHERE convo_id = %s
+                    ORDER BY timestamp ASC
+                    LIMIT 50
+                """
+                c.execute(query, (convo_id,))
+                logger.info(f"Fetching up to 50 messages for convo_id {convo_id}")
+
+            messages = [
+                {
+                    "message": msg["message"],
+                    "sender": msg["sender"],
+                    "timestamp": msg["timestamp"] if isinstance(msg["timestamp"], str) else msg["timestamp"].isoformat()
+                }
+                for msg in c.fetchall()
+            ]
+            logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
+            release_db_connection(conn)
+
+            logger.info(f"Finished /messages/{convo_id} in {time.time() - start_time:.2f} seconds")
+            return jsonify({
+                "username": username,
+                "messages": messages
+            })
+    except Exception as e:
+        logger.error(f"❌ Error in /messages/{convo_id}: {str(e)}", exc_info=True)
+        return jsonify({"error": "Failed to fetch messages"}), 500
 
 # Messaging Helper Functions
 def send_telegram_message(chat_id, text):
