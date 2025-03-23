@@ -448,13 +448,15 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
     <script>
-        const socket = io({
+        // Explicitly specify the Socket.IO server URL
+        const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
             transports: ["websocket", "polling"],
             reconnection: true,
             reconnectionAttempts: Infinity,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            randomizationFactor: 0.5
+            randomizationFactor: 0.5,
+            withCredentials: true
         });
 
         let currentConversationId = null;
@@ -676,18 +678,34 @@
         }
 
         function selectConversation(convoId, chatId) {
+            // Ensure convoId is a string
+            convoId = String(convoId);
+            console.log("selectConversation called with convoId:", convoId, "chatId:", chatId);
+
             if (currentConversationId) {
+                console.log("Leaving previous conversation room:", currentConversationId);
                 socket.emit("leave_conversation", { conversation_id: currentConversationId });
             }
             currentConversationId = convoId;
             currentChatId = chatId;
-            socket.emit("join_conversation", { conversation_id: convoId });
+
+            // Ensure the client is connected before emitting join_conversation
+            if (socket.connected) {
+                console.log("Emitting join_conversation for convoId:", convoId);
+                socket.emit("join_conversation", { conversation_id: convoId });
+            } else {
+                console.warn("Socket not connected, waiting for connection to join conversation:", convoId);
+                socket.on("connect", () => {
+                    console.log("Socket connected, now joining conversation:", convoId);
+                    socket.emit("join_conversation", { conversation_id: convoId });
+                });
+            }
 
             const conversationList = document.getElementById("conversation-list");
             const items = conversationList.getElementsByClassName("conversation-item");
             for (let item of items) {
                 item.classList.remove("active");
-                if (item.dataset.convoId == convoId) {
+                if (item.dataset.convoId === convoId) {
                     item.classList.add("active");
                 }
             }
@@ -874,6 +892,11 @@
             isConnected = true;
             console.log("Socket.IO connected with ID:", socket.id);
             showToast("Connected to server", "success");
+            // Rejoin the current conversation if it exists
+            if (currentConversationId) {
+                console.log("Rejoining conversation on connect:", currentConversationId);
+                socket.emit("join_conversation", { conversation_id: currentConversationId });
+            }
         });
 
         socket.on("disconnect", (reason) => {
@@ -882,8 +905,19 @@
             showToast("Disconnected from server: " + reason, "error");
         });
 
+        socket.on("status", (data) => {
+            console.log("Received status event:", data);
+            showToast(data.message, "info");
+        });
+
+        socket.on("error", (data) => {
+            console.error("Received error event:", data);
+            showToast("Error: " + data.message, "error");
+        });
+
         socket.on("new_message", (data) => {
             console.log("Received new_message:", data);
+            console.log("Current conversation ID:", currentConversationId);
 
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
@@ -894,7 +928,8 @@
                 return;
             }
 
-            if (data.convo_id === currentConversationId) {
+            if (String(data.convo_id) === String(currentConversationId)) {
+                console.log("Appending message for convo_id:", data.convo_id);
                 appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
                 // Update the cached messages
                 if (lastFetchedMessages[currentConversationId]) {
