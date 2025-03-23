@@ -918,6 +918,7 @@
         socket.on("new_message", (data) => {
             console.log("Received new_message:", data);
             console.log("Current conversation ID:", currentConversationId);
+            console.log("Socket connected status:", socket.connected);
 
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
@@ -946,6 +947,7 @@
 
         socket.on("live_message", (data) => {
             console.log("Received live_message:", data);
+            console.log("Socket connected status:", socket.connected);
 
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
@@ -984,11 +986,13 @@
             showToast("Failed to reconnect to server", "error");
         });
 
+        // Add periodic logging to check connection status
         setInterval(() => {
+            console.log("Socket connection status:", socket.connected, "Current conversation ID:", currentConversationId);
             if (isConnected) {
                 socket.emit("ping", { timestamp: new Date().toISOString() });
             }
-        }, 30000);
+        }, 10000); // Log every 10 seconds
 
         socket.on("pong", (data) => {
             console.log("Received pong:", data);
