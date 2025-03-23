@@ -963,16 +963,16 @@
             console.log("Received new_message:", data);
             console.log("Current conversation ID:", currentConversationId);
             console.log("Socket connected status:", socket.connected);
-
+    
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
-
+    
             if (data.sender === "agent" && sentMessages.has(messageKey)) {
                 console.log("Skipping duplicate agent message:", messageKey);
                 sentMessages.delete(messageKey);
                 return;
             }
-
+    
             if (String(data.convo_id) === String(currentConversationId)) {
                 console.log("Appending message for convo_id:", data.convo_id);
                 appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
