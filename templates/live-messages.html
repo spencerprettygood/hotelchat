@@ -448,11 +448,12 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
     <script>
-        // Explicitly specify the Socket.IO server URL
+        // Explicitly specify the Socket.IO server URL with improved connection settings
         const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
+            path: "/socket.io",
             transports: ["websocket", "polling"],
             reconnection: true,
-            reconnectionAttempts: Infinity,
+            reconnectionAttempts: 5,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
             randomizationFactor: 0.5,
@@ -468,6 +469,40 @@
         let lastFetchedConversations = null; // Cache for conversation list
         let lastFetchedMessages = {}; // Cache for messages per conversation
         let lastMessageTimestamp = null; // Track the timestamp of the last message
+
+        // Debug Socket.IO connection status
+        socket.on("connect", () => {
+            isConnected = true;
+            console.log("Socket.IO connected successfully with ID:", socket.id);
+            showToast("Connected to server", "success");
+            // Rejoin the current conversation if it exists
+            if (currentConversationId) {
+                console.log("Rejoining conversation on connect:", currentConversationId);
+                socket.emit("join_conversation", { conversation_id: currentConversationId }, (response) => {
+                    console.log("Join conversation response on connect:", response);
+                });
+            }
+            // Log connection status periodically
+            setInterval(() => {
+                console.log("Socket connection status:", socket.connected, "Current conversation ID:", currentConversationId);
+                if (isConnected) {
+                    socket.emit("ping", { timestamp: new Date().toISOString() });
+                }
+            }, 5000); // Log every 5 seconds
+        });
+
+        socket.on("connect_error", (error) => {
+            console.error("Socket.IO connection error:", error);
+            showToast("Failed to connect to server: " + error.message, "error");
+        });
+
+        socket.on("disconnect", (reason) => {
+            isConnected = false;
+            console.warn("Socket.IO disconnected. Reason:", reason);
+            showToast("Disconnected from server: " + reason, "error");
+            // Start polling as a fallback
+            startPollingForMessages();
+        });
 
         function showToast(message, type = "info") {
             const toastContainer = document.getElementById("toast-container");
@@ -664,6 +699,10 @@
                         });
                         conversationList.appendChild(convoElement);
                     });
+                    // Auto-select the first conversation if none is selected
+                    if (!currentConversationId && data.conversations.length > 0) {
+                        selectConversation(data.conversations[0].convo_id, data.conversations[0].chat_id);
+                    }
                 } else {
                     conversationList.innerHTML = "<p>No WhatsApp conversations found.</p>";
                 }
@@ -701,7 +740,9 @@
 
             if (currentConversationId) {
                 console.log("Leaving previous conversation room:", currentConversationId);
-                socket.emit("leave_conversation", { conversation_id: currentConversationId });
+                socket.emit("leave_conversation", { conversation_id: currentConversationId }, () => {
+                    console.log(`Left conversation ${currentConversationId}`);
+                });
             }
             currentConversationId = convoId;
             currentChatId = chatId;
@@ -709,12 +750,16 @@
             // Ensure the client is connected before emitting join_conversation
             if (socket.connected) {
                 console.log("Emitting join_conversation for convoId:", convoId);
-                socket.emit("join_conversation", { conversation_id: convoId });
+                socket.emit("join_conversation", { conversation_id: convoId }, (response) => {
+                    console.log("Join conversation response:", response);
+                });
             } else {
                 console.warn("Socket not connected, waiting for connection to join conversation:", convoId);
                 socket.on("connect", () => {
                     console.log("Socket connected, now joining conversation:", convoId);
-                    socket.emit("join_conversation", { conversation_id: convoId });
+                    socket.emit("join_conversation", { conversation_id: convoId }, (response) => {
+                        console.log("Join conversation response after reconnect:", response);
+                    });
                 });
             }
 
@@ -840,9 +885,9 @@
                     console.log("Polling for new messages since:", lastMessageTimestamp);
                     loadMessagesForConversation(currentConversationId, lastMessageTimestamp);
                 }
-            }, 30000); // Poll every 30 seconds (increased from 10 seconds)
+            }, 30000); // Poll every 30 seconds
         }
-    
+
         function stopPollingForMessages() {
             if (pollingInterval) {
                 clearInterval(pollingInterval);
@@ -875,6 +920,7 @@
                 messageInput.addEventListener("input", () => {
                     sendButton.disabled = !messageInput.value.trim() || !currentConversationId;
                 });
+                sendButton.addEventListener("click", sendMessage);
             }
 
             const emojiIcon = document.getElementById("emoji-icon");
@@ -930,25 +976,6 @@
             }
         });
 
-        socket.on("connect", () => {
-            isConnected = true;
-            console.log("Socket.IO connected with ID:", socket.id);
-            showToast("Connected to server", "success");
-            // Rejoin the current conversation if it exists
-            if (currentConversationId) {
-                console.log("Rejoining conversation on connect:", currentConversationId);
-                socket.emit("join_conversation", { conversation_id: currentConversationId });
-            }
-        });
-
-        socket.on("disconnect", (reason) => {
-            isConnected = false;
-            console.log("Socket.IO disconnected. Reason:", reason);
-            showToast("Disconnected from server: " + reason, "error");
-            // Start polling as a fallback
-            startPollingForMessages();
-        });
-
         socket.on("status", (data) => {
             console.log("Received status event:", data);
             showToast(data.message, "info");
@@ -963,16 +990,16 @@
             console.log("Received new_message:", data);
             console.log("Current conversation ID:", currentConversationId);
             console.log("Socket connected status:", socket.connected);
-    
+
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
-    
+
             if (data.sender === "agent" && sentMessages.has(messageKey)) {
                 console.log("Skipping duplicate agent message:", messageKey);
                 sentMessages.delete(messageKey);
                 return;
             }
-    
+
             if (String(data.convo_id) === String(currentConversationId)) {
                 console.log("Appending message for convo_id:", data.convo_id);
                 appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
@@ -983,6 +1010,7 @@
                         sender: data.sender,
                         timestamp: data.timestamp
                     });
+                    lastMessageTimestamp = data.timestamp;
                 }
                 // Stop polling since we received a real-time update
                 stopPollingForMessages();
@@ -1022,7 +1050,9 @@
             fetchSettings();
             if (currentConversationId) {
                 loadMessagesForConversation(currentConversationId);
-                socket.emit("join_conversation", { conversation_id: currentConversationId });
+                socket.emit("join_conversation", { conversation_id: currentConversationId }, (response) => {
+                    console.log("Join conversation response after reconnect:", response);
+                });
             }
             showToast("Reconnected to server", "success");
             // Stop polling since we reconnected
@@ -1035,14 +1065,6 @@
             // Start polling as a fallback
             startPollingForMessages();
         });
-
-        // Add periodic logging to check connection status
-        setInterval(() => {
-            console.log("Socket connection status:", socket.connected, "Current conversation ID:", currentConversationId);
-            if (isConnected) {
-                socket.emit("ping", { timestamp: new Date().toISOString() });
-            }
-        }, 10000); // Log every 10 seconds
 
         socket.on("pong", (data) => {
             console.log("Received pong:", data);
