@@ -1,5 +1,3 @@
-# tasks.py
-
 import os
 import sys
 import logging
@@ -81,14 +79,16 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
                 conn.commit()
                 release_db_connection(conn)
             socketio.emit("new_message", {
-                "convo_id": convo_id,
+                "convo_id": str(convo_id),  # Ensure convo_id is a string for Socket.IO
                 "message": message,
                 "sender": "ai",
                 "channel": "whatsapp",
-                "timestamp": ai_timestamp
+                "timestamp": ai_timestamp,
+                "chat_id": chat_id,
+                "username": username
             }, room=str(convo_id))
             socketio.emit("live_message", {
-                "convo_id": convo_id,
+                "convo_id": str(convo_id),
                 "message": message,
                 "sender": "ai",
                 "chat_id": chat_id,
@@ -147,22 +147,25 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             conn.commit()
             release_db_connection(conn)
 
+        # Emit new_message event for the user's message immediately
         socketio.emit("new_message", {
-            "convo_id": convo_id,
+            "convo_id": str(convo_id),  # Ensure convo_id is a string for Socket.IO
             "message": message_body,
             "sender": "user",
             "channel": "whatsapp",
-            "timestamp": user_timestamp
+            "timestamp": user_timestamp,
+            "chat_id": chat_id,
+            "username": username
         }, room=str(convo_id))
         socketio.emit("live_message", {
-            "convo_id": convo_id,
+            "convo_id": str(convo_id),
             "message": message_body,
             "sender": "user",
             "chat_id": chat_id,
             "username": username,
             "timestamp": user_timestamp
         })
-        logger.info(f"Emitted live_message for user message: {message_body}")
+        logger.info(f"Emitted new_message and live_message for user message in convo_id {convo_id}: {message_body}")
 
         # Determine language and check for help keywords
         language = "en" if message_body.strip().upper().startswith("EN ") else "es"
