@@ -1,5 +1,8 @@
+# tasks.py
+
 import os
 import sys
+import logging
 from pathlib import Path
 from celery import Celery, chain
 from datetime import datetime, timezone
@@ -10,6 +13,15 @@ from twilio.base.exceptions import TwilioRestException
 project_root = str(Path(__file__).parent.absolute())
 if project_root not in sys.path:
     sys.path.append(project_root)
+
+# Configure logging for Celery to preserve application log levels
+logger = logging.getLogger("chat_server")  # Match the logger name used in chat_server.py
+celery_logger = logging.getLogger("celery")
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+celery_logger.handlers = [handler]  # Replace default handlers
+celery_logger.setLevel(logging.INFO)  # Set Celery logger to INFO level
+celery_logger.propagate = False  # Prevent Celery logs from being handled by the root logger
 
 # Configure Celery with Redis
 REDIS_URL = os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
