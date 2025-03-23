@@ -467,6 +467,7 @@
         let sentMessages = new Set();
         let lastFetchedConversations = null; // Cache for conversation list
         let lastFetchedMessages = {}; // Cache for messages per conversation
+        let lastMessageTimestamp = null; // Track the timestamp of the last message
 
         function showToast(message, type = "info") {
             const toastContainer = document.getElementById("toast-container");
@@ -531,6 +532,11 @@
             chatBox.appendChild(div);
             console.log("Message appended to chatBox:", div);
             chatBox.scrollTop = chatBox.scrollHeight;
+
+            // Update the last message timestamp
+            if (!lastMessageTimestamp || new Date(msg.timestamp) > new Date(lastMessageTimestamp)) {
+                lastMessageTimestamp = msg.timestamp;
+            }
         }
 
         function formatTimestamp(timestamp) {
@@ -555,14 +561,20 @@
             return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
         }
 
-        async function loadMessagesForConversation(convoId) {
+        async function loadMessagesForConversation(convoId, sinceTimestamp = null) {
             const chatBox = document.getElementById("chat-box");
             const chatHeader = document.getElementById("chat-header");
             const chatTitle = document.getElementById("chat-title");
             try {
-                console.log("Fetching messages for convoId:", convoId);
-                // Check if messages are cached
-                if (lastFetchedMessages[convoId]) {
+                console.log("Fetching messages for convoId:", convoId, "sinceTimestamp:", sinceTimestamp);
+                // If sinceTimestamp is provided, fetch only new messages
+                let url = `/messages/${convoId}`;
+                if (sinceTimestamp) {
+                    url += `?since=${encodeURIComponent(sinceTimestamp)}`;
+                }
+
+                // Check if messages are cached and no sinceTimestamp is provided
+                if (!sinceTimestamp && lastFetchedMessages[convoId]) {
                     console.log("Using cached messages for convoId:", convoId);
                     const data = lastFetchedMessages[convoId];
                     chatBox.innerHTML = "";
@@ -580,7 +592,7 @@
                     return;
                 }
 
-                const response = await fetch(`/messages/${convoId}`);
+                const response = await fetch(url);
                 if (!response.ok) {
                     const errorText = await response.text();
                     if (response.status === 503 || response.status === 429) {
@@ -590,23 +602,28 @@
                 }
                 const data = await response.json();
                 console.log("Messages fetched:", data);
-                // Cache the messages
-                lastFetchedMessages[convoId] = data;
-                chatBox.innerHTML = "";
-                lastMessageDate = null;
-                chatHeader.style.display = "flex";
-                chatTitle.textContent = data.username || "Unknown User";
+
+                if (!sinceTimestamp) {
+                    // Cache the messages only for full fetches
+                    lastFetchedMessages[convoId] = data;
+                    chatBox.innerHTML = "";
+                    lastMessageDate = null;
+                    chatHeader.style.display = "flex";
+                    chatTitle.textContent = data.username || "Unknown User";
+                }
 
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
                         appendMessage(msg, msg.sender);
                     });
-                } else {
+                } else if (!sinceTimestamp) {
                     chatBox.innerHTML = "<p>No messages found for this conversation.</p>";
                 }
             } catch (error) {
                 console.error("Error loading messages:", error);
-                chatBox.innerHTML = "<p>Failed to load messages. Please try again later.</p>";
+                if (!sinceTimestamp) {
+                    chatBox.innerHTML = "<p>Failed to load messages. Please try again later.</p>";
+                }
                 showToast("Failed to load messages: " + error.message, "error");
             }
         }
@@ -710,6 +727,7 @@
                 }
             }
 
+            lastMessageTimestamp = null; // Reset the last message timestamp
             loadMessagesForConversation(convoId);
 
             const inputContainer = document.getElementById("input-container");
@@ -717,6 +735,9 @@
             const messageInput = document.getElementById("message-input");
             const sendButton = document.getElementById("send-button");
             sendButton.disabled = !messageInput.value.trim();
+
+            // Start polling for new messages as a fallback
+            startPollingForMessages();
         }
 
         function sendMessage() {
@@ -805,6 +826,27 @@
                         message_preview: data.message
                     });
                 }
+            }
+        }
+
+        // Fallback polling mechanism for new messages
+        let pollingInterval = null;
+        function startPollingForMessages() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
+            pollingInterval = setInterval(() => {
+                if (currentConversationId && lastMessageTimestamp) {
+                    console.log("Polling for new messages since:", lastMessageTimestamp);
+                    loadMessagesForConversation(currentConversationId, lastMessageTimestamp);
+                }
+            }, 10000); // Poll every 10 seconds
+        }
+
+        function stopPollingForMessages() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
             }
         }
 
@@ -903,6 +945,8 @@
             isConnected = false;
             console.log("Socket.IO disconnected. Reason:", reason);
             showToast("Disconnected from server: " + reason, "error");
+            // Start polling as a fallback
+            startPollingForMessages();
         });
 
         socket.on("status", (data) => {
@@ -940,6 +984,8 @@
                         timestamp: data.timestamp
                     });
                 }
+                // Stop polling since we received a real-time update
+                stopPollingForMessages();
             } else {
                 console.log(`Message not appended: convo_id ${data.convo_id} does not match currentConversationId ${currentConversationId}`);
             }
@@ -979,11 +1025,15 @@
                 socket.emit("join_conversation", { conversation_id: currentConversationId });
             }
             showToast("Reconnected to server", "success");
+            // Stop polling since we reconnected
+            stopPollingForMessages();
         });
 
         socket.on("reconnect_error", (error) => {
             console.error("Socket.IO reconnect error:", error);
             showToast("Failed to reconnect to server", "error");
+            // Start polling as a fallback
+            startPollingForMessages();
         });
 
         // Add periodic logging to check connection status
