@@ -16,14 +16,6 @@ REDIS_URL = os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
 if not REDIS_URL:
     raise ValueError("REDIS_URL environment variable is not set")
 
-logger = logging.getLogger("chat_server")
-celery_logger = logging.getLogger("celery")
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-celery_logger.handlers = [handler]
-celery_logger.setLevel(logging.INFO)
-celery_logger.propagate = False
-
 celery_app = Celery(
     'tasks',
     broker=REDIS_URL,
