@@ -716,14 +716,6 @@
             }
 
             const timestamp = new Date().toISOString();
-            const tempMessage = {
-                message: message,
-                timestamp: timestamp,
-                sender: "agent",
-            };
-
-            appendMessage(tempMessage, "agent");
-
             const messageKey = `agent:${message}:${timestamp}`;
             sentMessages.add(messageKey);
             console.log("Added to sentMessages:", messageKey);
@@ -828,6 +820,31 @@
             isConnected = false;
             console.log("Socket.IO disconnected. Reason:", reason);
             showToast("Disconnected from server: " + reason, "error");
+        });
+
+        socket.on("new_message", (data) => {
+            console.log("Received new_message:", data);
+
+            const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
+            console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
+
+            if (data.sender === "agent" && sentMessages.has(messageKey)) {
+                console.log("Skipping duplicate agent message:", messageKey);
+                sentMessages.delete(messageKey);
+                return;
+            }
+
+            if (data.convo_id === currentConversationId) {
+                appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
+                // Update the cached messages
+                if (lastFetchedMessages[currentConversationId]) {
+                    lastFetchedMessages[currentConversationId].messages.push({
+                        message: data.message,
+                        sender: data.sender,
+                        timestamp: data.timestamp
+                    });
+                }
+            }
         });
 
         socket.on("live_message", (data) => {
