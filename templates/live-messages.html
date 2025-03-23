@@ -730,6 +730,66 @@
             sendButton.disabled = true;
         }
 
+        // Function to dynamically update the conversation list
+        function updateConversationList(data) {
+            console.log("Updating conversation list with data:", data);
+            const conversationList = document.getElementById("conversation-list");
+            let convoItem = Array.from(conversationList.children).find(item =>
+                item.dataset.chatId === data.chat_id
+            );
+
+            // Create or update the conversation item
+            const isActive = convoItem && convoItem.classList.contains("active");
+            if (!convoItem) {
+                // Create a new conversation item if it doesn't exist
+                convoItem = document.createElement("div");
+                convoItem.className = "conversation-item";
+                convoItem.dataset.convoId = data.convo_id;
+                convoItem.dataset.chatId = data.chat_id;
+            }
+
+            // Update the conversation item
+            convoItem.innerHTML = `
+                <div class="profile-pic"></div>
+                <div class="conversation-info">
+                    <div class="conversation-header">
+                        <span class="username">${data.username || "Unknown User"}</span>
+                        <span class="timestamp">${formatDateForSeparator(data.timestamp)}</span>
+                    </div>
+                    <div class="message-preview">${data.message}</div>
+                </div>
+            `;
+            if (isActive) {
+                convoItem.classList.add("active");
+            }
+
+            // Move the conversation to the top of the list
+            conversationList.prepend(convoItem);
+
+            // Reattach the click event listener
+            convoItem.addEventListener("click", () => {
+                console.log("Selecting conversation from updated list:", data.convo_id, data.chat_id);
+                selectConversation(data.convo_id, data.chat_id);
+            });
+
+            // Update the cached conversations
+            if (lastFetchedConversations) {
+                const convoIndex = lastFetchedConversations.findIndex(c => c.chat_id === data.chat_id);
+                if (convoIndex !== -1) {
+                    lastFetchedConversations[convoIndex].last_updated = data.timestamp;
+                    lastFetchedConversations[convoIndex].message_preview = data.message;
+                } else {
+                    lastFetchedConversations.unshift({
+                        convo_id: data.convo_id,
+                        chat_id: data.chat_id,
+                        username: data.username,
+                        last_updated: data.timestamp,
+                        message_preview: data.message
+                    });
+                }
+            }
+        }
+
         document.addEventListener("DOMContentLoaded", () => {
             const dashboardSection = document.getElementById("dashboard");
             if (!dashboardSection) {
@@ -844,6 +904,8 @@
                         timestamp: data.timestamp
                     });
                 }
+            } else {
+                console.log(`Message not appended: convo_id ${data.convo_id} does not match currentConversationId ${currentConversationId}`);
             }
         });
 
@@ -859,57 +921,8 @@
                 return;
             }
 
-            // Update the conversation list efficiently
-            fetchConversations().then(() => {
-                const conversationList = document.getElementById("conversation-list");
-                const convoItem = Array.from(conversationList.children).find(item =>
-                    item.dataset.chatId === data.chat_id
-                );
-                if (convoItem) {
-                    console.log(`Ensuring conversation is updated for chat_id=${data.chat_id}`);
-                    const isActive = convoItem.classList.contains("active");
-                    convoItem.innerHTML = `
-                        <div class="profile-pic"></div>
-                        <div class="conversation-info">
-                            <div class="conversation-header">
-                                <span class="username">${data.username || "Unknown User"}</span>
-                                <span class="timestamp">${formatDateForSeparator(data.timestamp)}</span>
-                            </div>
-                            <div class="message-preview">${data.message}</div>
-                        </div>
-                    `;
-                    if (isActive) {
-                        convoItem.classList.add("active");
-                    }
-                    convoItem.replaceWith(convoItem.cloneNode(true));
-                    const updatedConvoItem = Array.from(conversationList.children).find(item =>
-                        item.dataset.chatId === data.chat_id
-                    );
-                    updatedConvoItem.addEventListener("click", () => selectConversation(data.convo_id, data.chat_id));
-                }
-
-                // Update the cached conversations
-                if (lastFetchedConversations) {
-                    const convoIndex = lastFetchedConversations.findIndex(c => c.chat_id === data.chat_id);
-                    if (convoIndex !== -1) {
-                        lastFetchedConversations[convoIndex].last_updated = data.timestamp;
-                        lastFetchedConversations[convoIndex].message_preview = data.message;
-                    }
-                }
-
-                // Append the message to the chat area if it belongs to the currently selected conversation
-                if (data.convo_id === currentConversationId) {
-                    appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
-                    // Update the cached messages
-                    if (lastFetchedMessages[currentConversationId]) {
-                        lastFetchedMessages[currentConversationId].messages.push({
-                            message: data.message,
-                            sender: data.sender,
-                            timestamp: data.timestamp
-                        });
-                    }
-                }
-            });
+            // Update the conversation list dynamically
+            updateConversationList(data);
         });
 
         socket.on("settings_updated", (settings) => {
