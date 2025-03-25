@@ -509,11 +509,11 @@ def login():
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT id, username, password_hash FROM agents WHERE username = %s",
+                "SELECT id, username, password FROM agents WHERE username = %s",
                 (username,)
             )
             agent = c.fetchone()
-            if agent and check_password_hash(agent['password_hash'], password):
+            if agent and agent['password'] == password:
                 agent_obj = Agent(agent['id'], agent['username'])
                 login_user(agent_obj)
                 logger.info(f"✅ Login successful for agent: {agent['username']}")
