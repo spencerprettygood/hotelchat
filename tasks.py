@@ -132,7 +132,6 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
 
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
-    # Move the imports inside the function to avoid circular import
     from chat_server import get_db_connection, release_db_connection, ai_respond, logger, get_ai_enabled
 
     try:
@@ -223,7 +222,8 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
         response = None
         if should_respond:
             try:
-                response = ai_respond(message_body, convo_id)
+                # Run the async ai_respond function
+                response = asyncio.run(ai_respond(message_body, convo_id))
                 logger.info(f"AI response generated: {response}")
             except Exception as e:
                 logger.error(f"❌ AI response failed for convo_id {convo_id}: {str(e)}")
