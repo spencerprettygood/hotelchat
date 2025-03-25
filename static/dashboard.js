@@ -1,3 +1,4 @@
+// dashboard.js
 const socket = io({
     transports: ["websocket", "polling"],
 });
@@ -260,7 +261,7 @@ function fetchConversations() {
 
             console.log('Current Filter:', currentFilter, 'Current Channel:', currentChannel, 'Current Agent:', currentAgent);
             let filteredConversations = conversations.filter(convo => {
-                // Only show conversations that need agent intervention
+                // Backend already filters by needs_agent = 1, but we keep this check for safety
                 if (!convo.needs_agent) {
                     return false;
                 }
@@ -292,7 +293,9 @@ function fetchConversations() {
                 convoContainer.style.alignItems = 'center';
 
                 const convoInfo = document.createElement('span');
-                convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'}`;
+                // Display AI enabled status in the UI
+                const aiStatus = convo.ai_enabled ? '(AI Enabled)' : '(AI Disabled)';
+                convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'} ${aiStatus}`;
                 convoInfo.onclick = () => loadConversation(convo.id);
                 convoInfo.style.cursor = 'pointer';
                 convoContainer.appendChild(convoInfo);
@@ -322,6 +325,17 @@ function fetchConversations() {
                 li.appendChild(convoContainer);
                 conversationList.appendChild(li);
             });
+
+            // If the currently selected conversation is no longer visible, clear the chat box
+            if (currentConversationId && !filteredConversations.some(convo => convo.id === currentConversationId)) {
+                currentConversationId = null;
+                const chatBox = document.getElementById('chatBox');
+                const clientName = document.getElementById('clientName');
+                if (chatBox && clientName) {
+                    chatBox.innerHTML = '';
+                    clientName.textContent = 'Select a conversation';
+                }
+            }
         })
         .catch(error => {
             console.error('Error fetching conversations:', error);
@@ -340,10 +354,11 @@ function updateCounts(conversations) {
     const allCount = document.getElementById('allCount');
 
     if (unassignedCount && yourCount && teamCount && allCount) {
-        unassignedCount.textContent = conversations.filter(c => !c.assigned_agent).length;
-        yourCount.textContent = conversations.filter(c => c.assigned_agent === currentAgent).length;
-        teamCount.textContent = conversations.filter(c => c.assigned_agent && c.assigned_agent !== currentAgent).length;
-        allCount.textContent = conversations.length;
+        const visibleConversations = conversations.filter(c => c.needs_agent); // Only count visible conversations
+        unassignedCount.textContent = visibleConversations.filter(c => !c.assigned_agent).length;
+        yourCount.textContent = visibleConversations.filter(c => c.assigned_agent === currentAgent).length;
+        teamCount.textContent = visibleConversations.filter(c => c.assigned_agent && c.assigned_agent !== currentAgent).length;
+        allCount.textContent = visibleConversations.length;
     }
 }
 
@@ -401,7 +416,10 @@ function loadConversation(convoId) {
         return;
     }
 
-    fetch(`/messages?conversation_id=${convoId}`)
+    // Join the Socket.IO room for this conversation
+    socket.emit('join_conversation', { conversation_id: convoId });
+
+    fetch(`/messages/${convoId}`) // Updated endpoint as per chat_server.py
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
@@ -457,38 +475,14 @@ function sendMessage() {
         return;
     }
 
-    fetch('/chat', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            convo_id: currentConversationId,
-            message: message,
-            channel: 'whatsapp'
-        }),
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.status === 'success') {
-                messageInput.value = '';
-                loadConversation(currentConversationId); // Refresh the chat box
-            } else if (data.reply) {
-                console.log('AI response will be handled via Socket.IO:', data.reply);
-            } else {
-                console.error('Error sending message:', data.error);
-                alert('Failed to send message: ' + (data.error || 'Unknown error'));
-            }
-        })
-        .catch(error => {
-            console.error('Error sending message:', error);
-            alert('Error sending message: ' + error.message);
-        });
+    // Use Socket.IO to send the message instead of the /chat endpoint
+    socket.emit('agent_message', {
+        convo_id: currentConversationId,
+        message: message,
+        channel: 'whatsapp',
+    });
+
+    messageInput.value = ''; // Clear input immediately after sending
 }
 
 // Hand back to AI
@@ -515,6 +509,8 @@ function handBackToAI(convoId) {
                 alert(data.message);
                 socket.emit('refresh_conversations', { conversation_id: convoId });
                 if (currentConversationId === convoId) {
+                    // Leave the Socket.IO room for this conversation
+                    socket.emit('leave_conversation', { conversation_id: convoId });
                     currentConversationId = null;
                     const chatBox = document.getElementById('chatBox');
                     const clientName = document.getElementById('clientName');
