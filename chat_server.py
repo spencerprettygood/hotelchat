@@ -12,7 +12,6 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask import Response
-import openai
 import psycopg2
 from psycopg2.extras import DictCursor
 import os
@@ -60,8 +59,6 @@ if not SECRET_KEY:
 # Redis client for caching
 redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), decode_responses=True)
 
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
 CORS(app)
@@ -93,11 +90,17 @@ settings_cache = TTLCache(maxsize=1, ttl=5)
 # Import tasks after app and logger are initialized to avoid circular imports
 from tasks import process_whatsapp_message, send_whatsapp_message_task
 
-# Initialize OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
+# Validate OpenAI API key
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
     logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
     raise ValueError("OPENAI_API_KEY not set")
+
+# Initialize OpenAI client
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Redis client for caching
+redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), decode_responses=True)
 
 # Google Calendar setup with Service Account
 GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
@@ -991,6 +994,9 @@ async def ai_respond(message, convo_id):
     start_time = time.time()
     logger.info(f"Starting ai_respond for convo_id {convo_id}: {message}")
     try:
+        # Detect language at the top so it's available throughout
+        is_spanish = any(spanish_word in message.lower() for spanish_word in ["reservar", "habitación", "disponibilidad"])
+
         # Check cache for common messages
         cache_key = f"ai_response:{message}:{convo_id}"
         cached_response = await redis_client.get(cache_key)
@@ -1026,7 +1032,7 @@ async def ai_respond(message, convo_id):
                 check_in_str = f"{month1_en} {day1_es}"
                 check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
             else:
-                result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if "sorry" in message.lower() else \
+                result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if not is_spanish else \
                        "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
                 await redis_client.setex(cache_key, 3600, result)  # Cache for 1 hour
                 logger.info(f"Finished ai_respond (date error) in {time.time() - start_time:.2f} seconds")
@@ -1047,7 +1053,7 @@ async def ai_respond(message, convo_id):
                 check_out = check_out.replace(year=check_out.year + 1)
 
             if check_out <= check_in:
-                result = "The check-out date must be after the check-in date. Please provide a valid range." if "sorry" in message.lower() else \
+                result = "The check-out date must be after the check-in date. Please provide a valid range." if not is_spanish else \
                        "La fecha de salida debe ser posterior a la fecha de entrada. Por favor, proporciona un rango válido."
                 await redis_client.setex(cache_key, 3600, result)
                 logger.info(f"Finished ai_respond (invalid date range) in {time.time() - start_time:.2f} seconds")
@@ -1066,16 +1072,15 @@ async def ai_respond(message, convo_id):
                         conn.commit()
                     finally:
                         release_db_connection(conn)
-                response = f"{availability}. Would you like to book?" if "sorry" in message.lower() else \
+                response = f"{availability}. Would you like to book?" if not is_spanish else \
                            f"{availability.replace('are available', 'están disponibles')}. ¿Te gustaría reservar?"
             else:
-                response = availability if "sorry" in message.lower() else \
+                response = availability if not is_spanish else \
                            availability.replace("are not available", "no están disponibles").replace("fully booked", "completamente reservado")
             await redis_client.setex(cache_key, 3600, response)
             logger.info(f"Finished ai_respond (availability check) in {time.time() - start_time:.2f} seconds")
             return response
 
-        is_spanish = any(spanish_word in message.lower() for spanish_word in ["reservar", "habitación", "disponibilidad"])
         if "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
             with get_db_connection() as conn:
                 try:
@@ -1103,6 +1108,191 @@ async def ai_respond(message, convo_id):
             await redis_client.setex(cache_key, 3600, result)
             logger.info(f"Finished ai_respond (booking intent, needs agent) in {time.time() - start_time:.2f} seconds")
             return result
+
+        # Fetch conversation history
+        with get_db_connection() as conn:
+            try:
+                c = conn.cursor()
+                c.execute(
+                    "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 10",
+                    (convo_id,)
+                )
+                messages = c.fetchall()
+            finally:
+                release_db_connection(conn)
+
+        # Build conversation history
+        conversation_history = [
+            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. Detect the user's language (English or Spanish) based on their input and respond in the same language. If you don’t know the answer or the query is complex, respond with the appropriate escalation message in the user's language. Do not mention room types or pricing unless specifically asked."}
+        ]
+        for msg in messages:
+            message_text, sender, timestamp = msg['message'], msg['sender'], msg['timestamp']
+            role = "user" if sender == "user" else "assistant"
+            conversation_history.append({"role": role, "content": message_text})
+        conversation_history.append({"role": "user", "content": message})
+
+        # Call OpenAI API asynchronously with rate limiting
+        async with openai_semaphore:
+            retry_attempts = 2
+            for attempt in range(retry_attempts):
+                try:
+                    response = await openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=conversation_history,
+                        max_tokens=150
+                    )
+                    ai_reply = response.choices[0].message.content.strip()
+                    logger.info(f"✅ AI reply: {ai_reply}")
+                    if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
+                        with get_db_connection() as conn:
+                            try:
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                                )
+                                conn.commit()
+                            finally:
+                                release_db_connection(conn)
+                        # Notify the server to refresh conversations
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    f"{SERVER_URL}/refresh_conversations",
+                                    json={"conversation_id": str(convo_id)},
+                                    timeout=5
+                                ) as response:
+                                    response.raise_for_status()
+                        except aiohttp.ClientError as e:
+                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                        await redis_client.setex(cache_key, 3600, ai_reply)
+                        logger.info(f"Finished ai_respond (AI sorry, needs agent) in {time.time() - start_time:.2f} seconds")
+                        return ai_reply
+                    await redis_client.setex(cache_key, 3600, ai_reply)
+                    logger.info(f"Finished ai_respond (AI success) in {time.time() - start_time:.2f} seconds")
+                    return ai_reply
+                except openai.RateLimitError as e:
+                    logger.error(f"❌ OpenAI RateLimitError (Attempt {attempt + 1}): {str(e)}")
+                    if attempt == retry_attempts - 1:
+                        with get_db_connection() as conn:
+                            try:
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                                )
+                                conn.commit()
+                            finally:
+                                release_db_connection(conn)
+                        # Notify the server to refresh conversations
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    f"{SERVER_URL}/refresh_conversations",
+                                    json={"conversation_id": str(convo_id)},
+                                    timeout=5
+                                ) as response:
+                                    response.raise_for_status()
+                        except aiohttp.ClientError as e:
+                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                        result = "I’m sorry, I’m having trouble processing your request right now due to rate limits. I’ll connect you with a team member to assist you." if not is_spanish else \
+                               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo debido a límites de tasa. Te conectaré con un miembro del equipo para que te ayude."
+                        await redis_client.setex(cache_key, 3600, result)
+                        logger.info(f"Finished ai_respond (RateLimitError, needs agent) in {time.time() - start_time:.2f} seconds")
+                        return result
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                except openai.APIError as e:
+                    logger.error(f"❌ OpenAI APIError (Attempt {attempt + 1}): {str(e)}")
+                    if attempt == retry_attempts - 1:
+                        with get_db_connection() as conn:
+                            try:
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                                )
+                                conn.commit()
+                            finally:
+                                release_db_connection(conn)
+                        # Notify the server to refresh conversations
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    f"{SERVER_URL}/refresh_conversations",
+                                    json={"conversation_id": str(convo_id)},
+                                    timeout=5
+                                ) as response:
+                                    response.raise_for_status()
+                        except aiohttp.ClientError as e:
+                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                        result = "I’m sorry, I’m having trouble processing your request right now due to an API error. I’ll connect you with a team member to assist you." if not is_spanish else \
+                               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo debido a un error de API. Te conectaré con un miembro del equipo para que te ayude."
+                        await redis_client.setex(cache_key, 3600, result)
+                        logger.info(f"Finished ai_respond (APIError, needs agent) in {time.time() - start_time:.2f} seconds")
+                        return result
+                    await asyncio.sleep(1)
+                    continue
+                except Exception as e:
+                    logger.error(f"❌ Unexpected OpenAI error (Attempt {attempt + 1}): {str(e)}")
+                    if attempt == retry_attempts - 1:
+                        with get_db_connection() as conn:
+                            try:
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                                )
+                                conn.commit()
+                            finally:
+                                release_db_connection(conn)
+                        # Notify the server to refresh conversations
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    f"{SERVER_URL}/refresh_conversations",
+                                    json={"conversation_id": str(convo_id)},
+                                    timeout=5
+                                ) as response:
+                                    response.raise_for_status()
+                        except aiohttp.ClientError as e:
+                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
+                               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
+                        await redis_client.setex(cache_key, 3600, result)
+                        logger.info(f"Finished ai_respond (Unexpected error, needs agent) in {time.time() - start_time:.2f} seconds")
+                        return result
+                    await asyncio.sleep(1)
+                    continue
+
+    except Exception as e:
+        logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
+        with get_db_connection() as conn:
+            try:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                )
+                conn.commit()
+            finally:
+                release_db_connection(conn)
+        # Notify the server to refresh conversations
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{SERVER_URL}/refresh_conversations",
+                    json={"conversation_id": str(convo_id)},
+                    timeout=5
+                ) as response:
+                    response.raise_for_status()
+        except aiohttp.ClientError as e:
+            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
+               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
+        await redis_client.setex(cache_key, 3600, result)
+        logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
+        return result
 
         # Fetch conversation history
         with get_db_connection() as conn:
