@@ -1327,6 +1327,71 @@ def handle_agent_message(data):
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
 
+# Add to chat_server.py, just before if __name__ == "__main__":
+
+@app.route("/emit_new_message", methods=["POST"])
+def emit_new_message():
+    start_time = time.time()
+    logger.info("Starting /emit_new_message endpoint")
+    try:
+        data = request.get_json()
+        convo_id = data.get("convo_id")
+        message = data.get("message")
+        sender = data.get("sender")
+        channel = data.get("channel")
+        timestamp = data.get("timestamp")
+        chat_id = data.get("chat_id")
+        username = data.get("username")
+
+        if not all([convo_id, message, sender, channel, timestamp, chat_id, username]):
+            logger.error("❌ Missing required fields in /emit_new_message request")
+            return jsonify({"error": "Missing required fields"}), 400
+
+        # Emit new_message event to the conversation room
+        socketio.emit("new_message", {
+            "convo_id": convo_id,
+            "message": message,
+            "sender": sender,
+            "channel": channel,
+            "timestamp": timestamp,
+            "chat_id": chat_id,
+            "username": username
+        }, room=convo_id)
+
+        # Emit live_message event to all clients (for live-messages page)
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "message": message,
+            "sender": sender,
+            "chat_id": chat_id,
+            "username": username,
+            "timestamp": timestamp
+        })
+
+        logger.info(f"Finished /emit_new_message in {time.time() - start_time:.2f} seconds")
+        return jsonify({"status": "success"})
+    except Exception as e:
+        logger.error(f"❌ Error in /emit_new_message: {str(e)}")
+        return jsonify({"error": "Failed to emit new message"}), 500
+
+@app.route("/refresh_conversations", methods=["POST"])
+def refresh_conversations_endpoint():
+    start_time = time.time()
+    logger.info("Starting /refresh_conversations endpoint")
+    try:
+        data = request.get_json()
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            logger.error("❌ Missing conversation_id in /refresh_conversations request")
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        socketio.emit("refresh_conversations", {"conversation_id": conversation_id})
+        logger.info(f"Finished /refresh_conversations in {time.time() - start_time:.2f} seconds")
+        return jsonify({"status": "success"})
+    except Exception as e:
+        logger.error(f"❌ Error in /refresh_conversations: {str(e)}")
+        return jsonify({"error": "Failed to refresh conversations"}), 500
+
 if __name__ == "__main__":
     try:
         logger.info("✅ Starting Flask-SocketIO server")
