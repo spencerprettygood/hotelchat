@@ -133,6 +133,7 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
     from chat_server import get_db_connection, release_db_connection, ai_respond, logger, get_ai_enabled
+    from openai import RateLimitError, APIError
 
     try:
         # Get or create conversation
@@ -225,8 +226,62 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                 # Run the async ai_respond function
                 response = asyncio.run(ai_respond(message_body, convo_id))
                 logger.info(f"AI response generated: {response}")
+            except RateLimitError as e:
+                logger.error(f"❌ OpenAI RateLimitError in ai_respond for convo_id {convo_id}: {str(e)}")
+                response = (
+                    "I’m sorry, I’m having trouble processing your request right now due to rate limits. I’ll connect you with a team member to assist you."
+                    if language == "en"
+                    else "Lo siento, tengo problemas para procesar tu solicitud ahora mismo debido a límites de tasa. Te conectaré con un miembro del equipo para que te ayude."
+                )
+                # Set needs_agent to 1 since AI failed
+                with get_db_connection() as conn:
+                    try:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                            (datetime.now(timezone.utc).isoformat(), convo_id)
+                        )
+                        conn.commit()
+                    finally:
+                        release_db_connection(conn)
+                # Notify the server to refresh conversations
+                try:
+                    requests.post(
+                        f"{SERVER_URL}/refresh_conversations",
+                        json={"conversation_id": str(convo_id)},
+                        timeout=5
+                    )
+                except requests.RequestException as e:
+                    logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+            except APIError as e:
+                logger.error(f"❌ OpenAI APIError in ai_respond for convo_id {convo_id}: {str(e)}")
+                response = (
+                    "I’m sorry, I’m having trouble processing your request right now due to an API error. I’ll connect you with a team member to assist you."
+                    if language == "en"
+                    else "Lo siento, tengo problemas para procesar tu solicitud ahora mismo debido a un error de API. Te conectaré con un miembro del equipo para que te ayude."
+                )
+                # Set needs_agent to 1 since AI failed
+                with get_db_connection() as conn:
+                    try:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                            (datetime.now(timezone.utc).isoformat(), convo_id)
+                        )
+                        conn.commit()
+                    finally:
+                        release_db_connection(conn)
+                # Notify the server to refresh conversations
+                try:
+                    requests.post(
+                        f"{SERVER_URL}/refresh_conversations",
+                        json={"conversation_id": str(convo_id)},
+                        timeout=5
+                    )
+                except requests.RequestException as e:
+                    logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
             except Exception as e:
-                logger.error(f"❌ AI response failed for convo_id {convo_id}: {str(e)}")
+                logger.error(f"❌ Unexpected error in ai_respond for convo_id {convo_id}: {str(e)}")
                 response = (
                     "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
                     if language == "en"
