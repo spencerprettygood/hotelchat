@@ -1,5 +1,3 @@
-# chat_server.py
-
 # Move gevent monkey-patching to the top and wrap it in a conditional
 if __name__ == "__main__":
     import gevent
@@ -17,8 +15,6 @@ from psycopg2.extras import DictCursor
 import os
 import requests
 import json
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioRestException
 from datetime import datetime, timezone, timedelta
 import time
 import logging
@@ -34,6 +30,7 @@ import asyncio
 from functools import lru_cache
 from openai import AsyncOpenAI
 import redis.asyncio as redis
+from concurrent_log_handler import ConcurrentRotatingFileHandler
 
 # Set up logging with both stream and file handlers
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +38,7 @@ logger = logging.getLogger("chat_server")
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(stream_handler)
-file_handler = logging.FileHandler("chat_server.log")
+file_handler = ConcurrentRotatingFileHandler("chat_server.log", maxBytes=10*1024*1024, backupCount=5)
 file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(file_handler)
 
@@ -56,8 +53,14 @@ if not SECRET_KEY:
     logger.error("⚠️ SECRET_KEY not set in environment variables")
     raise ValueError("SECRET_KEY not set")
 
+SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com")
+
 # Redis client for caching
-redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), decode_responses=True)
+redis_client = redis.Redis.from_url(
+    os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
+    decode_responses=True,
+    max_connections=20
+)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
@@ -79,8 +82,8 @@ login_manager.login_view = 'login'
 # Initialize connection pool
 database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 db_pool = SimpleConnectionPool(
-    minconn=1,
-    maxconn=10,
+    minconn=5,
+    maxconn=30,
     dsn=database_url
 )
 
@@ -98,9 +101,6 @@ if not OPENAI_API_KEY:
 
 # Initialize OpenAI client
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-# Redis client for caching
-redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), decode_responses=True)
 
 # Google Calendar setup with Service Account
 GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
@@ -121,18 +121,6 @@ credentials = service_account.Credentials.from_service_account_info(
 service = build('calendar', 'v3', credentials=credentials)
 
 # Messaging API tokens
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TELEGRAM_BOT_TOKEN:
-    logger.error("⚠️ TELEGRAM_BOT_TOKEN not set in environment variables")
-    raise ValueError("TELEGRAM_BOT_TOKEN not set")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
-if not INSTAGRAM_ACCESS_TOKEN:
-    logger.error("⚠️ INSTAGRAM_ACCESS_TOKEN not set in environment variables")
-    raise ValueError("INSTAGRAM_ACCESS_TOKEN not set")
-INSTAGRAM_API_URL = "https://graph.instagram.com/v20.0"
-
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
@@ -380,6 +368,9 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo_id ON messages (convo_id);")
         logger.info("Created index idx_messages_convo_id")
 
+        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp);")
+        logger.info("Created index idx_messages_timestamp")
+
         c.execute("CREATE INDEX IF NOT EXISTS idx_settings_key ON settings (key);")
         logger.info("Created index idx_settings_key")
 
@@ -472,16 +463,22 @@ def log_message(convo_id, username, message, sender):
         timestamp = datetime.now(timezone.utc).isoformat()
         logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
         with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (convo_id, username, message, sender, timestamp)
-            )
-            conn.commit()
-            logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
-            release_db_connection(conn)
-        return timestamp
+            try:
+                c = conn.cursor()
+                c.execute("BEGIN")
+                c.execute(
+                    "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (convo_id, username, message, sender, timestamp)
+                )
+                c.execute("COMMIT")
+                logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
+                release_db_connection(conn)
+                return timestamp
+            except Exception as e:
+                c.execute("ROLLBACK")
+                logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
+                raise
     except Exception as e:
         logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
         raise
@@ -609,12 +606,13 @@ def settings():
             current_timestamp = datetime.now(timezone.utc).isoformat()
             with get_db_connection() as conn:
                 c = conn.cursor()
+                c.execute("BEGIN")
                 c.execute(
                     "INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) "
                     "ON CONFLICT (key) DO UPDATE SET value = %s, last_updated = %s",
                     (key, value, current_timestamp, value, current_timestamp)
                 )
-                conn.commit()
+                c.execute("COMMIT")
                 if key == "ai_enabled":
                     settings_cache.pop("ai_enabled", None)
                     logger.info("✅ Invalidated ai_enabled cache after update")
@@ -696,13 +694,22 @@ def handoff():
         if not convo_id:
             logger.error("Missing conversation_id in /handoff")
             return jsonify({"error": "Missing conversation_id"}), 400
+        try:
+            convo_id = int(convo_id)
+            if convo_id <= 0:
+                raise ValueError("Conversation ID must be a positive integer")
+        except ValueError:
+            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
+            return jsonify({"error": "Invalid conversation ID format"}), 400
+
         with get_db_connection() as conn:
             c = conn.cursor()
+            c.execute("BEGIN")
             c.execute(
                 "UPDATE conversations SET assigned_agent = %s, ai_enabled = %s, last_updated = %s WHERE id = %s",
                 (current_user.username, 0 if disable_ai else 1, datetime.now(timezone.utc).isoformat(), convo_id)
             )
-            conn.commit()
+            c.execute("COMMIT")
             release_db_connection(conn)
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         logger.info(f"Finished /handoff in {time.time() - start_time:.2f} seconds")
@@ -724,13 +731,22 @@ def handback_to_ai():
         if not convo_id:
             logger.error("Missing conversation_id in /handback-to-ai")
             return jsonify({"error": "Missing conversation_id"}), 400
+        try:
+            convo_id = int(convo_id)
+            if convo_id <= 0:
+                raise ValueError("Conversation ID must be a positive integer")
+        except ValueError:
+            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
+            return jsonify({"error": "Invalid conversation ID format"}), 400
+
         with get_db_connection() as conn:
             c = conn.cursor()
+            c.execute("BEGIN")
             c.execute(
                 "UPDATE conversations SET assigned_agent = NULL, ai_enabled = %s, needs_agent = %s, last_updated = %s WHERE id = %s",
                 (1 if enable_ai else 0, 0 if clear_needs_agent else 1, datetime.now(timezone.utc).isoformat(), convo_id)
             )
-            conn.commit()
+            c.execute("COMMIT")
             release_db_connection(conn)
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         logger.info(f"Finished /handback-to-ai in {time.time() - start_time:.2f} seconds")
@@ -749,6 +765,14 @@ def check_visibility():
         if not convo_id:
             logger.error("Missing conversation_id in /check-visibility")
             return jsonify({"error": "Missing conversation_id"}), 400
+        try:
+            convo_id = int(convo_id)
+            if convo_id <= 0:
+                raise ValueError("Conversation ID must be a positive integer")
+        except ValueError:
+            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
+            return jsonify({"error": "Invalid conversation ID format"}), 400
+
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
@@ -804,11 +828,19 @@ def get_messages_for_conversation(convo_id):
     try:
         try:
             convo_id = int(convo_id)
+            if convo_id <= 0:
+                raise ValueError("Conversation ID must be a positive integer")
         except ValueError:
             logger.error(f"❌ Invalid convo_id format: {convo_id}")
             return jsonify({"error": "Invalid conversation ID format"}), 400
 
         since = request.args.get("since")
+        if since:
+            try:
+                datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except ValueError:
+                logger.error(f"❌ Invalid 'since' timestamp format: {since}")
+                return jsonify({"error": "Invalid 'since' timestamp format"}), 400
 
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -864,84 +896,9 @@ def get_messages_for_conversation(convo_id):
         return jsonify({"error": "Failed to fetch messages"}), 500
 
 # Messaging Helper Functions
-def send_telegram_message(chat_id, text):
-    start_time = time.time()
-    logger.info(f"Starting send_telegram_message to {chat_id}")
-    url = f"{TELEGRAM_API_URL}/sendMessage"
-    if not chat_id or not isinstance(chat_id, str):
-        logger.error(f"❌ Invalid chat_id: {chat_id}")
-        return False
-    if not text or not isinstance(text, str):
-        logger.error(f"❌ Invalid text: {text}")
-        return False
-    if len(text) > 4096:
-        logger.error(f"❌ Text exceeds 4096 characters: {len(text)}")
-        text = text[:4093] + "..."
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    headers = {"Content-Type": "application/json"}
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            response.raise_for_status()
-            logger.info(f"✅ Sent Telegram message to {chat_id}: {text}")
-            time.sleep(0.5)
-            logger.info(f"Finished send_telegram_message in {time.time() - start_time:.2f} seconds")
-            return True
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"❌ Telegram API error (Attempt {attempt + 1}/{max_retries}): {str(e)}, Response: {e.response.text}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            return False
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Telegram request failed (Attempt {attempt + 1}/{max_retries}): {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            return False
-    logger.error(f"❌ Failed to send Telegram message after {max_retries} attempts")
-    return False
-
 def send_whatsapp_message(phone_number, text):
     logger.info(f"Offloading WhatsApp message to Celery task for {phone_number}")
     return send_whatsapp_message_task.delay(phone_number, text)
-
-def send_instagram_message(user_id, text):
-    start_time = time.time()
-    logger.info(f"Starting send_instagram_message to {user_id}")
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                f"{INSTAGRAM_API_URL}/me/messages?access_token={INSTAGRAM_ACCESS_TOKEN}",
-                json={"recipient": {"id": user_id}, "message": {"text": text}},
-                timeout=10
-            )
-            response.raise_for_status()
-            logger.info(f"✅ Sent Instagram message to {user_id}: {text}")
-            logger.info(f"Finished send_instagram_message in {time.time() - start_time:.2f} seconds")
-            return True
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"❌ Instagram API error (Attempt {attempt + 1}/{max_retries}): {str(e)}, Response: {e.response.text}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            return False
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Instagram request failed (Attempt {attempt + 1}/{max_retries}): {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            return False
-    logger.error(f"❌ Failed to send Instagram message after {max_retries} attempts")
-    return False
 
 def check_availability(check_in, check_out):
     start_time = time.time()
@@ -987,15 +944,16 @@ def check_availability(check_in, check_out):
     return result
 
 # Semaphore to limit concurrent OpenAI API requests
-OPENAI_CONCURRENT_LIMIT = 10  # Adjust based on your OpenAI rate limits
+OPENAI_CONCURRENT_LIMIT = 20  # Adjusted based on typical OpenAI rate limits
 openai_semaphore = asyncio.Semaphore(OPENAI_CONCURRENT_LIMIT)
 
 async def ai_respond(message, convo_id):
     start_time = time.time()
     logger.info(f"Starting ai_respond for convo_id {convo_id}: {message}")
     try:
-        # Detect language at the top so it's available throughout
-        is_spanish = any(spanish_word in message.lower() for spanish_word in ["reservar", "habitación", "disponibilidad"])
+        # Detect language using the dedicated function
+        language = detect_language(message, convo_id)
+        is_spanish = (language == "es")
 
         # Check cache for common messages
         cache_key = f"ai_response:{message}:{convo_id}"
@@ -1065,11 +1023,12 @@ async def ai_respond(message, convo_id):
                 with get_db_connection() as conn:
                     try:
                         c = conn.cursor()
+                        c.execute("BEGIN")
                         c.execute(
                             "UPDATE conversations SET booking_intent = %s WHERE id = %s",
                             (booking_intent, convo_id)
                         )
-                        conn.commit()
+                        c.execute("COMMIT")
                     finally:
                         release_db_connection(conn)
                 response = f"{availability}. Would you like to book?" if not is_spanish else \
@@ -1085,11 +1044,12 @@ async def ai_respond(message, convo_id):
             with get_db_connection() as conn:
                 try:
                     c = conn.cursor()
+                    c.execute("BEGIN")
                     c.execute(
                         "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
                         (datetime.now(timezone.utc).isoformat(), convo_id)
                     )
-                    conn.commit()
+                    c.execute("COMMIT")
                 finally:
                     release_db_connection(conn)
             # Notify the server to refresh conversations via HTTP
@@ -1109,17 +1069,25 @@ async def ai_respond(message, convo_id):
             logger.info(f"Finished ai_respond (booking intent, needs agent) in {time.time() - start_time:.2f} seconds")
             return result
 
-        # Fetch conversation history
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 10",
-                    (convo_id,)
-                )
-                messages = c.fetchall()
-            finally:
-                release_db_connection(conn)
+        # Fetch conversation history from cache or database
+        history_cache_key = f"conversation_history:{convo_id}"
+        cached_history = await redis_client.get(history_cache_key)
+        if cached_history:
+            messages = json.loads(cached_history)
+            logger.info(f"Retrieved conversation history from cache for convo_id {convo_id}")
+        else:
+            with get_db_connection() as conn:
+                try:
+                    c = conn.cursor()
+                    c.execute(
+                        "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 10",
+                        (convo_id,)
+                    )
+                    messages = c.fetchall()
+                    await redis_client.setex(history_cache_key, 300, json.dumps([dict(msg) for msg in messages]))  # Cache for 5 minutes
+                    logger.info(f"Cached conversation history for convo_id {convo_id}")
+                finally:
+                    release_db_connection(conn)
 
         # Build conversation history
         conversation_history = [
@@ -1133,7 +1101,7 @@ async def ai_respond(message, convo_id):
 
         # Call OpenAI API asynchronously with rate limiting
         async with openai_semaphore:
-            retry_attempts = 2
+            retry_attempts = 3
             for attempt in range(retry_attempts):
                 try:
                     response = await openai_client.chat.completions.create(
@@ -1147,11 +1115,12 @@ async def ai_respond(message, convo_id):
                         with get_db_connection() as conn:
                             try:
                                 c = conn.cursor()
+                                c.execute("BEGIN")
                                 c.execute(
                                     "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
                                     (datetime.now(timezone.utc).isoformat(), convo_id)
                                 )
-                                conn.commit()
+                                c.execute("COMMIT")
                             finally:
                                 release_db_connection(conn)
                         # Notify the server to refresh conversations
@@ -1177,11 +1146,12 @@ async def ai_respond(message, convo_id):
                         with get_db_connection() as conn:
                             try:
                                 c = conn.cursor()
+                                c.execute("BEGIN")
                                 c.execute(
                                     "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
                                     (datetime.now(timezone.utc).isoformat(), convo_id)
                                 )
-                                conn.commit()
+                                c.execute("COMMIT")
                             finally:
                                 release_db_connection(conn)
                         # Notify the server to refresh conversations
@@ -1208,11 +1178,12 @@ async def ai_respond(message, convo_id):
                         with get_db_connection() as conn:
                             try:
                                 c = conn.cursor()
+                                c.execute("BEGIN")
                                 c.execute(
                                     "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
                                     (datetime.now(timezone.utc).isoformat(), convo_id)
                                 )
-                                conn.commit()
+                                c.execute("COMMIT")
                             finally:
                                 release_db_connection(conn)
                         # Notify the server to refresh conversations
@@ -1233,17 +1204,28 @@ async def ai_respond(message, convo_id):
                         return result
                     await asyncio.sleep(1)
                     continue
+                except asyncio.TimeoutError:
+                    logger.error(f"❌ Semaphore acquisition timeout (Attempt {attempt + 1})")
+                    if attempt == retry_attempts - 1:
+                        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
+                               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
+                        await redis_client.setex(cache_key, 3600, result)
+                        logger.info(f"Finished ai_respond (Semaphore timeout, needs agent) in {time.time() - start_time:.2f} seconds")
+                        return result
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
                 except Exception as e:
                     logger.error(f"❌ Unexpected OpenAI error (Attempt {attempt + 1}): {str(e)}")
                     if attempt == retry_attempts - 1:
                         with get_db_connection() as conn:
                             try:
                                 c = conn.cursor()
+                                c.execute("BEGIN")
                                 c.execute(
                                     "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
                                     (datetime.now(timezone.utc).isoformat(), convo_id)
                                 )
-                                conn.commit()
+                                c.execute("COMMIT")
                             finally:
                                 release_db_connection(conn)
                         # Notify the server to refresh conversations
@@ -1270,11 +1252,12 @@ async def ai_respond(message, convo_id):
         with get_db_connection() as conn:
             try:
                 c = conn.cursor()
+                c.execute("BEGIN")
                 c.execute(
                     "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
                     (datetime.now(timezone.utc).isoformat(), convo_id)
                 )
-                conn.commit()
+                c.execute("COMMIT")
             finally:
                 release_db_connection(conn)
         # Notify the server to refresh conversations
@@ -1289,129 +1272,6 @@ async def ai_respond(message, convo_id):
         except aiohttp.ClientError as e:
             logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
         result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
-               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-        await redis_client.setex(cache_key, 3600, result)
-        logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
-        return result
-
-        # Fetch conversation history
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 10",
-                    (convo_id,)
-                )
-                messages = c.fetchall()
-            finally:
-                release_db_connection(conn)
-
-        # Build conversation history
-        conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. Detect the user's language (English or Spanish) based on their input and respond in the same language. If you don’t know the answer or the query is complex, respond with the appropriate escalation message in the user's language. Do not mention room types or pricing unless specifically asked."}
-        ]
-        for msg in messages:
-            message_text, sender, timestamp = msg['message'], msg['sender'], msg['timestamp']
-            role = "user" if sender == "user" else "assistant"
-            conversation_history.append({"role": role, "content": message_text})
-        conversation_history.append({"role": "user", "content": message})
-
-        # Call OpenAI API asynchronously with rate limiting
-        async with openai_semaphore:
-            retry_attempts = 2
-            for attempt in range(retry_attempts):
-                try:
-                    response = await openai_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=conversation_history,
-                        max_tokens=150
-                    )
-                    ai_reply = response.choices[0].message.content.strip()
-                    logger.info(f"✅ AI reply: {ai_reply}")
-                    if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
-                        with get_db_connection() as conn:
-                            try:
-                                c = conn.cursor()
-                                c.execute(
-                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                                )
-                                conn.commit()
-                            finally:
-                                release_db_connection(conn)
-                        # Notify the server to refresh conversations
-                        try:
-                            async with aiohttp.ClientSession() as session:
-                                async with session.post(
-                                    f"{SERVER_URL}/refresh_conversations",
-                                    json={"conversation_id": str(convo_id)},
-                                    timeout=5
-                                ) as response:
-                                    response.raise_for_status()
-                        except aiohttp.ClientError as e:
-                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
-                        await redis_client.setex(cache_key, 3600, ai_reply)
-                        logger.info(f"Finished ai_respond (AI sorry, needs agent) in {time.time() - start_time:.2f} seconds")
-                        return ai_reply
-                    await redis_client.setex(cache_key, 3600, ai_reply)
-                    logger.info(f"Finished ai_respond (AI success) in {time.time() - start_time:.2f} seconds")
-                    return ai_reply
-                except Exception as e:
-                    logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
-                    if attempt == retry_attempts - 1:
-                        with get_db_connection() as conn:
-                            try:
-                                c = conn.cursor()
-                                c.execute(
-                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                                )
-                                conn.commit()
-                            finally:
-                                release_db_connection(conn)
-                        # Notify the server to refresh conversations
-                        try:
-                            async with aiohttp.ClientSession() as session:
-                                async with session.post(
-                                    f"{SERVER_URL}/refresh_conversations",
-                                    json={"conversation_id": str(convo_id)},
-                                    timeout=5
-                                ) as response:
-                                    response.raise_for_status()
-                        except aiohttp.ClientError as e:
-                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
-                        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
-                               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-                        await redis_client.setex(cache_key, 3600, result)
-                        logger.info(f"Finished ai_respond (OpenAI error, needs agent) in {time.time() - start_time:.2f} seconds")
-                        return result
-                    await asyncio.sleep(1)
-                    continue
-
-    except Exception as e:
-        logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                )
-                conn.commit()
-            finally:
-                release_db_connection(conn)
-        # Notify the server to refresh conversations
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{SERVER_URL}/refresh_conversations",
-                    json={"conversation_id": str(convo_id)},
-                    timeout=5
-                ) as response:
-                    response.raise_for_status()
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
-        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
         await redis_client.setex(cache_key, 3600, result)
         logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
@@ -1569,7 +1429,7 @@ def handle_agent_message(data):
         if ai_enabled:
             global_ai_enabled, _ = get_ai_enabled()
             if global_ai_enabled == "1":
-                ai_reply = ai_respond(message, convo_id)
+                ai_reply = await ai_respond(message, convo_id)
                 if ai_reply:
                     ai_timestamp = log_message(convo_id, username, ai_reply, "ai")
                     emit("new_message", {
@@ -1593,19 +1453,18 @@ def handle_agent_message(data):
 
         with get_db_connection() as conn:
             c = conn.cursor()
+            c.execute("BEGIN")
             c.execute(
                 "UPDATE conversations SET last_updated = %s WHERE id = %s",
                 (agent_timestamp, convo_id)
             )
-            conn.commit()
+            c.execute("COMMIT")
             release_db_connection(conn)
         
         logger.info(f"Finished handle_agent_message in {time.time() - start_time:.2f} seconds")
     except Exception as e:
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
-
-# Add to chat_server.py, just before if __name__ == "__main__":
 
 @app.route("/emit_new_message", methods=["POST"])
 def emit_new_message():
