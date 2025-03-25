@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     checkAuthStatus();
-    fetchAISetting(); // Add this to fetch the AI setting on page load
+    fetchAISetting();
     fetchConversations();
     setInterval(fetchConversations, 10000);
 
@@ -32,6 +32,43 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         console.error('Message input not found for adding Enter key listener.');
     }
+
+    // Auto-logout after 1 hour of inactivity
+    const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour in milliseconds
+    let inactivityTimer;
+
+    function resetInactivityTimer() {
+        console.log("Resetting inactivity timer");
+        clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => {
+            console.log("Inactivity timeout reached, logging out");
+            fetch("/logout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+            })
+                .then((response) => response.json())
+                .then((data) => {
+                    if (data.message === "Logged out successfully") {
+                        alert("Logged out due to inactivity");
+                        window.location.href = "/login";
+                    } else {
+                        alert("Auto-logout failed: " + (data.message || "Unknown error"));
+                    }
+                })
+                .catch((error) => {
+                    console.error("Error during auto-logout:", error);
+                    alert("An error occurred during auto-logout: " + error.message);
+                });
+        }, INACTIVITY_TIMEOUT);
+    }
+
+    // Track user activity
+    ["mousemove", "mousedown", "keypress", "scroll", "touchstart"].forEach((event) => {
+        document.addEventListener(event, resetInactivityTimer, { passive: true });
+    });
+
+    // Start the timer on page load
+    resetInactivityTimer();
 });
 
 // Fetch AI setting on page load
@@ -48,12 +85,12 @@ function fetchAISetting() {
             const aiToggleError = document.getElementById('ai-toggle-error');
             if (aiToggle && aiToggleError) {
                 aiToggle.checked = data.ai_enabled === '1';
-                aiToggleError.style.display = 'none'; // Clear any previous error
+                aiToggleError.style.display = 'none';
                 aiToggle.addEventListener('change', () => {
                     toggleAI(aiToggle.checked);
                 });
             } else {
-                console.error('AI toggle or error element not found on live-messages page.');
+                console.error('AI toggle or error element not found on dashboard page.');
             }
         })
         .catch(error => {
@@ -66,7 +103,7 @@ function fetchAISetting() {
         });
 }
 
-// Toggle AI setting
+// Toggle global AI setting
 function toggleAI(enabled) {
     const aiToggleError = document.getElementById('ai-toggle-error');
     fetch('/settings', {
@@ -84,7 +121,7 @@ function toggleAI(enabled) {
         })
         .then(data => {
             if (data.status === 'success') {
-                console.log('AI setting updated successfully');
+                console.log('Global AI setting updated successfully');
                 if (aiToggleError) {
                     aiToggleError.style.display = 'none';
                 }
@@ -223,6 +260,10 @@ function fetchConversations() {
 
             console.log('Current Filter:', currentFilter, 'Current Channel:', currentChannel, 'Current Agent:', currentAgent);
             let filteredConversations = conversations.filter(convo => {
+                // Only show conversations that need agent intervention
+                if (!convo.needs_agent) {
+                    return false;
+                }
                 if (currentChannel && convo.channel !== currentChannel) {
                     return false;
                 }
@@ -327,6 +368,7 @@ function takeOverConversation(convoId) {
         },
         body: JSON.stringify({
             conversation_id: convoId,
+            disable_ai: true, // Indicate that AI should be disabled for this conversation
         }),
     })
         .then(response => {
@@ -435,13 +477,7 @@ function sendMessage() {
         .then(data => {
             if (data.status === 'success') {
                 messageInput.value = '';
-                const chatMessages = document.getElementById('chat-messages');
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message user-message';
-                messageDiv.textContent = message;
-                messageDiv.dataset.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                chatMessages.appendChild(messageDiv);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
+                loadConversation(currentConversationId); // Refresh the chat box
             } else if (data.reply) {
                 console.log('AI response will be handled via Socket.IO:', data.reply);
             } else {
@@ -462,7 +498,11 @@ function handBackToAI(convoId) {
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ conversation_id: convoId }),
+        body: JSON.stringify({ 
+            conversation_id: convoId,
+            enable_ai: true, // Indicate that AI should be re-enabled for this conversation
+            clear_needs_agent: true // Indicate that this conversation no longer needs agent intervention
+        }),
     })
         .then(response => {
             if (!response.ok) {
@@ -475,8 +515,15 @@ function handBackToAI(convoId) {
                 alert(data.message);
                 socket.emit('refresh_conversations', { conversation_id: convoId });
                 if (currentConversationId === convoId) {
-                    loadConversation(convoId);
+                    currentConversationId = null;
+                    const chatBox = document.getElementById('chatBox');
+                    const clientName = document.getElementById('clientName');
+                    if (chatBox && clientName) {
+                        chatBox.innerHTML = '';
+                        clientName.textContent = 'Select a conversation';
+                    }
                 }
+                fetchConversations();
             } else {
                 alert('Failed to hand back to AI: ' + data.error);
             }
@@ -488,27 +535,7 @@ function handBackToAI(convoId) {
 socket.on('new_message', (data) => {
     console.log('New message received:', data);
     if (data.convo_id === currentConversationId) {
-        const chatBox = document.getElementById('chatBox');
-        if (chatBox) {
-            const div = document.createElement('div');
-            const isUser = data.sender === 'user';
-            const isAgent = data.sender === 'agent';
-            div.className = 'message';
-            div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
-
-            const textSpan = document.createElement('span');
-            textSpan.textContent = data.message;
-            div.appendChild(textSpan);
-
-            const timestampSpan = document.createElement('span');
-            timestampSpan.className = 'message-timestamp';
-            const now = new Date();
-            timestampSpan.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-            div.appendChild(timestampSpan);
-
-            chatBox.appendChild(div);
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
+        loadConversation(currentConversationId); // Refresh the chat box
     }
     fetchConversations();
 });
@@ -536,7 +563,7 @@ socket.on('settings_updated', (data) => {
 
 socket.on("reconnect", (attempt) => {
     console.log(`Reconnected to Socket.IO after ${attempt} attempts`);
-    loadConversations();
+    fetchConversations();
 });
 
 socket.on("reconnect_error", (error) => {
