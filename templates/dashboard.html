@@ -9,6 +9,37 @@
         body {
             font-family: 'Arial', sans-serif;
         }
+        .chat-box {
+            max-height: 60vh;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 1rem;
+        }
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            max-width: 70%;
+        }
+        .user-message {
+            background-color: #d1e7dd;
+            margin-left: auto;
+            text-align: right;
+        }
+        .ai-message {
+            background-color: #f3f4f6;
+            margin-right: auto;
+        }
+        .agent-message {
+            background-color: #e0f2fe;
+            margin-right: auto;
+        }
+        .message-timestamp {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-left: 0.5rem;
+        }
         .conversation-item {
             cursor: pointer;
             padding: 0.5rem;
@@ -70,4 +101,40 @@
         <!-- Filter Tabs -->
         <div class="mb-4">
             <button onclick="loadConversations('unassigned')" class="px-4 py-2 bg-gray-200 rounded-l-lg">Unassigned (<span id="unassignedCount">0</span>)</button>
-            <button onclick="loadConversations('you')" class="px-4 py-2 bg-gray-200
+            <button onclick="loadConversations('you')" class="px-4 py-2 bg-gray-200">Your Chats (<span id="yourCount">0</span>)</button>
+            <button onclick="loadConversations('team')" class="px-4 py-2 bg-gray-200">Team Chats (<span id="teamCount">0</span>)</button>
+            <button onclick="loadConversations('all')" class="px-4 py-2 bg-gray-200 rounded-r-lg">All (<span id="allCount">0</span>)</button>
+        </div>
+
+        <!-- Channel Filter -->
+        <div class="mb-4">
+            <label for="channelFilter" class="mr-2">Filter by Channel:</label>
+            <select id="channelFilter" onchange="filterByChannel(this.value)">
+                <option value="">All Channels</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="instagram">Instagram</option>
+            </select>
+        </div>
+
+        <!-- Conversation List -->
+        <div class="mb-4">
+            <h2 class="text-lg font-semibold">Conversations</h2>
+            <span id="conversation-error" class="text-red-500 hidden"></span>
+            <ul id="conversationList" class="bg-white rounded-lg shadow p-4"></ul>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h2 class="text-lg font-semibold mb-2">Chat with <span id="clientName">Select a conversation</span></h2>
+            <div id="chatBox" class="chat-box"></div>
+            <div class="mt-4">
+                <textarea id="messageInput" class="w-full p-2 border rounded-lg" rows="3" placeholder="Type your message..."></textarea>
+                <button onclick="sendMessage()" class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>
