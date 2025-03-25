@@ -1,7 +1,6 @@
 # chat_server.py
 
 # Move gevent monkey-patching to the top and wrap it in a conditional
-# This ensures it only runs for the web service, not the Celery worker
 if __name__ == "__main__":
     import gevent
     from gevent import monkey
@@ -38,7 +37,6 @@ logger = logging.getLogger("chat_server")
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(stream_handler)
-# Add file handler for persistent logging on Render
 file_handler = logging.FileHandler("chat_server.log")
 file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(file_handler)
@@ -59,7 +57,7 @@ app.config["SECRET_KEY"] = SECRET_KEY
 CORS(app)
 socketio = SocketIO(
     app,
-    cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],  # Restrict in production
+    cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
     async_mode="gevent",
     ping_timeout=120,
     ping_interval=30,
@@ -75,7 +73,7 @@ login_manager.login_view = 'login'
 database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 db_pool = SimpleConnectionPool(
     minconn=1,
-    maxconn=10,  # Reduced to avoid exceeding Render's connection limits
+    maxconn=10,
     dsn=database_url
 )
 
@@ -302,12 +300,25 @@ def init_db():
                 channel TEXT NOT NULL,
                 assigned_agent TEXT,
                 ai_enabled INTEGER DEFAULT 1,
+                needs_agent INTEGER DEFAULT 0,  -- Added needs_agent column
                 booking_intent INTEGER DEFAULT 0,
                 handoff_notified INTEGER DEFAULT 0,
                 visible_in_conversations INTEGER DEFAULT 1,
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP
             )''')
             logger.info("Created conversations table")
+        else:
+            # Migration: Add needs_agent column if it doesn't exist
+            c.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns 
+                    WHERE table_name = 'conversations' AND column_name = 'needs_agent'
+                )
+            """)
+            needs_agent_exists = c.fetchone()[0]
+            if not needs_agent_exists:
+                c.execute("ALTER TABLE conversations ADD COLUMN needs_agent INTEGER DEFAULT 0")
+                logger.info("Added needs_agent column to conversations table")
 
         if not messages_table_exists:
             c.execute('''CREATE TABLE messages (
@@ -325,7 +336,7 @@ def init_db():
             c.execute('''CREATE TABLE agents (
                 id SERIAL PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL  -- Renamed to password_hash for clarity
+                password_hash TEXT NOT NULL
             )''')
             logger.info("Created agents table")
 
@@ -382,9 +393,9 @@ def init_db():
                 logger.info("ℹ️ Inserting test conversations")
                 test_timestamp1 = "2025-03-22T00:00:00Z"
                 c.execute(
-                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                    ('TestUser1', '123456789', 'whatsapp', None, 1, 0, test_timestamp1)
+                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    ('TestUser1', '123456789', 'whatsapp', None, 1, 0, 0, test_timestamp1)
                 )
                 convo_id1 = c.fetchone()['id']
                 c.execute(
@@ -393,9 +404,9 @@ def init_db():
                 )
                 test_timestamp2 = "2025-03-22T00:00:01Z"
                 c.execute(
-                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, booking_intent, last_updated) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                    ('TestUser2', '987654321', 'whatsapp', None, 1, 0, test_timestamp2)
+                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    ('TestUser2', '987654321', 'whatsapp', None, 1, 0, 0, test_timestamp2)
                 )
                 convo_id2 = c.fetchone()['id']
                 c.execute(
@@ -421,9 +432,9 @@ def add_test_conversations():
             if count == 0:
                 for i in range(1, 6):
                     c.execute(
-                        "INSERT INTO conversations (username, chat_id, channel, ai_enabled, visible_in_conversations, last_updated) "
-                        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                        (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, datetime.now(timezone.utc).isoformat())
+                        "INSERT INTO conversations (username, chat_id, channel, ai_enabled, needs_agent, visible_in_conversations, last_updated) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                        (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, 0, datetime.now(timezone.utc).isoformat())
                     )
                     convo_id = c.fetchone()['id']
                     c.execute(
@@ -637,9 +648,22 @@ def get_conversations():
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT id, username, channel, assigned_agent FROM conversations WHERE visible_in_conversations = 1 ORDER BY last_updated DESC"
+                "SELECT id, username, channel, assigned_agent, needs_agent, ai_enabled "
+                "FROM conversations "
+                "WHERE needs_agent = 1 "
+                "ORDER BY last_updated DESC"
             )
-            conversations = [{"id": row["id"], "username": row["username"], "channel": row["channel"], "assigned_agent": row["assigned_agent"]} for row in c.fetchall()]
+            conversations = [
+                {
+                    "id": row["id"],
+                    "username": row["username"],
+                    "channel": row["channel"],
+                    "assigned_agent": row["assigned_agent"],
+                    "needs_agent": row["needs_agent"],
+                    "ai_enabled": row["ai_enabled"]
+                }
+                for row in c.fetchall()
+            ]
             release_db_connection(conn)
             logger.info(f"Finished /conversations in {time.time() - start_time:.2f} seconds")
             return jsonify(conversations)
@@ -655,14 +679,15 @@ def handoff():
     try:
         data = request.get_json()
         convo_id = data.get("conversation_id")
+        disable_ai = data.get("disable_ai", True)
         if not convo_id:
             logger.error("Missing conversation_id in /handoff")
             return jsonify({"error": "Missing conversation_id"}), 400
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "UPDATE conversations SET assigned_agent = %s, ai_enabled = 0, last_updated = %s WHERE id = %s",
-                (current_user.username, datetime.now(timezone.utc).isoformat(), convo_id)
+                "UPDATE conversations SET assigned_agent = %s, ai_enabled = %s, last_updated = %s WHERE id = %s",
+                (current_user.username, 0 if disable_ai else 1, datetime.now(timezone.utc).isoformat(), convo_id)
             )
             conn.commit()
             release_db_connection(conn)
@@ -681,14 +706,16 @@ def handback_to_ai():
     try:
         data = request.get_json()
         convo_id = data.get("conversation_id")
+        enable_ai = data.get("enable_ai", True)
+        clear_needs_agent = data.get("clear_needs_agent", True)
         if not convo_id:
             logger.error("Missing conversation_id in /handback-to-ai")
             return jsonify({"error": "Missing conversation_id"}), 400
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "UPDATE conversations SET assigned_agent = NULL, ai_enabled = 1, last_updated = %s WHERE id = %s",
-                (datetime.now(timezone.utc).isoformat(), convo_id)
+                "UPDATE conversations SET assigned_agent = NULL, ai_enabled = %s, needs_agent = %s, last_updated = %s WHERE id = %s",
+                (1 if enable_ai else 0, 0 if clear_needs_agent else 1, datetime.now(timezone.utc).isoformat(), convo_id)
             )
             conn.commit()
             release_db_connection(conn)
@@ -712,13 +739,13 @@ def check_visibility():
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT visible_in_conversations FROM conversations WHERE id = %s",
+                "SELECT needs_agent FROM conversations WHERE id = %s",
                 (convo_id,)
             )
             result = c.fetchone()
             release_db_connection(conn)
             logger.info(f"Finished /check-visibility in {time.time() - start_time:.2f} seconds")
-            return jsonify({"visible": bool(result["visible_in_conversations"])})
+            return jsonify({"visible": bool(result["needs_agent"])})
     except Exception as e:
         logger.error(f"❌ Error in /check-visibility: {e}")
         return jsonify({"error": "Failed to check visibility"}), 500
@@ -762,19 +789,16 @@ def get_messages_for_conversation(convo_id):
     start_time = time.time()
     logger.info(f"Starting /messages/{convo_id} endpoint")
     try:
-        # Convert convo_id to integer if needed, handle potential string input
         try:
             convo_id = int(convo_id)
         except ValueError:
             logger.error(f"❌ Invalid convo_id format: {convo_id}")
             return jsonify({"error": "Invalid conversation ID format"}), 400
 
-        # Get the 'since' query parameter for filtering messages
         since = request.args.get("since")
 
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Fetch conversation details
             c.execute(
                 "SELECT username FROM conversations WHERE id = %s",
                 (convo_id,)
@@ -786,7 +810,6 @@ def get_messages_for_conversation(convo_id):
                 return jsonify({"error": "Conversation not found"}), 404
             username = convo["username"]
 
-            # Fetch messages based on the 'since' parameter
             if since:
                 query = """
                     SELECT message, sender, timestamp
@@ -931,7 +954,7 @@ def check_availability(check_in, check_out):
                     result = f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
                     logger.info(f"Finished check_availability (not available) in {time.time() - start_time:.2f} seconds")
                     return result
-                break  # Success, move to next date
+                break
             except HttpError as e:
                 logger.error(f"❌ Google Calendar API error (Attempt {attempt + 1}/{max_retries}): {str(e)}")
                 if attempt < max_retries - 1:
@@ -1027,9 +1050,18 @@ def ai_respond(message, convo_id):
 
         is_spanish = any(spanish_word in message.lower() for spanish_word in ["reservar", "habitación", "disponibilidad"])
         if "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                )
+                conn.commit()
+                release_db_connection(conn)
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
             result = "I’ll connect you with a team member to assist with your booking." if not is_spanish else \
                    "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
-            logger.info(f"Finished ai_respond (booking intent) in {time.time() - start_time:.2f} seconds")
+            logger.info(f"Finished ai_respond (booking intent, needs agent) in {time.time() - start_time:.2f} seconds")
             return result
 
         with get_db_connection() as conn:
@@ -1060,24 +1092,51 @@ def ai_respond(message, convo_id):
                 ai_reply = response.choices[0].message.content.strip()
                 logger.info(f"✅ AI reply: {ai_reply}")
                 if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
-                    logger.info(f"Finished ai_respond (AI sorry) in {time.time() - start_time:.2f} seconds")
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                            (datetime.now(timezone.utc).isoformat(), convo_id)
+                        )
+                        conn.commit()
+                        release_db_connection(conn)
+                    socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+                    logger.info(f"Finished ai_respond (AI sorry, needs agent) in {time.time() - start_time:.2f} seconds")
                     return ai_reply
                 logger.info(f"Finished ai_respond (AI success) in {time.time() - start_time:.2f} seconds")
                 return ai_reply
             except Exception as e:
                 logger.error(f"❌ OpenAI error (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retry_attempts - 1:
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                            (datetime.now(timezone.utc).isoformat(), convo_id)
+                        )
+                        conn.commit()
+                        release_db_connection(conn)
+                    socketio.emit("refresh_conversations", {"conversation_id": convo_id})
                     result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
                            "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-                    logger.info(f"Finished ai_respond (OpenAI error) in {time.time() - start_time:.2f} seconds")
+                    logger.info(f"Finished ai_respond (OpenAI error, needs agent) in {time.time() - start_time:.2f} seconds")
                     return result
                 time.sleep(1)
                 continue
     except Exception as e:
         logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                (datetime.now(timezone.utc).isoformat(), convo_id)
+            )
+            conn.commit()
+            release_db_connection(conn)
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if "sorry" in message.lower() else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-        logger.info(f"Finished ai_respond (general error) in {time.time() - start_time:.2f} seconds")
+        logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
         return result
 
 def detect_language(message, convo_id):
@@ -1191,7 +1250,7 @@ def handle_agent_message(data):
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "SELECT username, chat_id, channel FROM conversations WHERE id = %s",
+                "SELECT username, chat_id, channel, ai_enabled FROM conversations WHERE id = %s",
                 (convo_id,)
             )
             result = c.fetchone()
@@ -1200,7 +1259,7 @@ def handle_agent_message(data):
                 emit("error", {"message": "Conversation not found"})
                 release_db_connection(conn)
                 return
-            username, chat_id, convo_channel = result
+            username, chat_id, convo_channel, ai_enabled = result
             release_db_connection(conn)
 
         agent_timestamp = log_message(convo_id, username, message, "agent")
@@ -1228,6 +1287,32 @@ def handle_agent_message(data):
             task = send_whatsapp_message(chat_id, message)
             logger.info(f"Offloaded WhatsApp message for convo_id {convo_id} to Celery task")
 
+        # Only process AI response if AI is enabled for this conversation
+        if ai_enabled:
+            global_ai_enabled, _ = get_ai_enabled()
+            if global_ai_enabled == "1":
+                ai_reply = ai_respond(message, convo_id)
+                if ai_reply:
+                    ai_timestamp = log_message(convo_id, username, ai_reply, "ai")
+                    emit("new_message", {
+                        "convo_id": convo_id,
+                        "message": ai_reply,
+                        "sender": "ai",
+                        "channel": convo_channel,
+                        "timestamp": ai_timestamp,
+                    }, room=str(convo_id))
+                    emit("live_message", {
+                        "convo_id": convo_id,
+                        "message": ai_reply,
+                        "sender": "ai",
+                        "chat_id": chat_id,
+                        "username": username,
+                        "timestamp": ai_timestamp,
+                    })
+                    if convo_channel == "whatsapp":
+                        task = send_whatsapp_message(chat_id, ai_reply)
+                        logger.info(f"Offloaded WhatsApp AI reply for convo_id {convo_id} to Celery task")
+
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
@@ -1245,7 +1330,7 @@ def handle_agent_message(data):
 if __name__ == "__main__":
     try:
         logger.info("✅ Starting Flask-SocketIO server")
-        socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)  # Debug disabled for production
+        socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
     except Exception as e:
         logger.error(f"❌ Failed to start server: {str(e)}")
         raise
