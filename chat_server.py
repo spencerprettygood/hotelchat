@@ -1372,6 +1372,52 @@ def refresh_conversations():
         logger.error(f"❌ Error in /refresh_conversations: {str(e)}")
         return jsonify({"error": "Failed to trigger refresh"}), 500
 
+@app.route("/emit_new_message", methods=["POST"])
+def emit_new_message():
+    start_time = time.time()
+    logger.info("Starting /emit_new_message endpoint")
+    try:
+        data = request.get_json()
+        required_fields = ["convo_id", "message", "sender", "channel", "timestamp", "chat_id", "username"]
+        for field in required_fields:
+            if field not in data:
+                logger.error(f"Missing {field} in /emit_new_message request")
+                return jsonify({"error": f"Missing {field}"}), 400
+
+        convo_id = data["convo_id"]
+        message = data["message"]
+        sender = data["sender"]
+        channel = data["channel"]
+        timestamp = data["timestamp"]
+        chat_id = data["chat_id"]
+        username = data["username"]
+
+        # Emit new_message to the conversation room
+        socketio.emit("new_message", {
+            "convo_id": convo_id,
+            "message": message,
+            "sender": sender,
+            "channel": channel,
+            "timestamp": timestamp,
+        }, room=str(convo_id))
+
+        # Emit live_message to update the conversation list
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "message": message,
+            "sender": sender,
+            "chat_id": chat_id,
+            "username": username,
+            "timestamp": timestamp,
+        })
+
+        logger.info(f"Finished /emit_new_message in {time.time() - start_time:.2f} seconds")
+        return jsonify({"message": "New message event emitted"})
+    except Exception as e:
+        logger.error(f"❌ Error in /emit_new_message: {str(e)}")
+        return jsonify({"error": "Failed to emit new message event"}), 500
+        
+
 # Socket.IO Event Handlers
 @socketio.on("connect")
 def handle_connect():
@@ -1387,14 +1433,14 @@ def handle_join_conversation(data):
     start_time = time.time()
     logger.info(f"Starting handle_join_conversation: {data}")
     try:
-        convo_id = data.get("convo_id")
-        if not convo_id:
-            logger.error("❌ Missing convo_id in join_conversation event")
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            logger.error("❌ Missing conversation_id in join_conversation event")
             emit("error", {"message": "Missing conversation ID"})
             return
-        join_room(str(convo_id))
-        logger.info(f"✅ Client joined room: {convo_id}")
-        emit("status", {"message": f"Joined conversation {convo_id}"}, room=str(convo_id))
+        join_room(str(conversation_id))
+        logger.info(f"✅ Client joined room: {conversation_id}")
+        emit("status", {"message": f"Joined conversation {conversation_id}"}, room=str(conversation_id))
         logger.info(f"Finished handle_join_conversation in {time.time() - start_time:.2f} seconds")
     except Exception as e:
         logger.error(f"❌ Error in join_conversation event: {str(e)}")
@@ -1405,14 +1451,14 @@ def handle_leave_conversation(data):
     start_time = time.time()
     logger.info(f"Starting handle_leave_conversation: {data}")
     try:
-        convo_id = data.get("convo_id")
-        if not convo_id:
-            logger.error("❌ Missing convo_id in leave_conversation event")
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            logger.error("❌ Missing conversation_id in leave_conversation event")
             emit("error", {"message": "Missing conversation ID"})
             return
-        leave_room(str(convo_id))
-        logger.info(f"✅ Client left room: {convo_id}")
-        emit("status", {"message": f"Left conversation {convo_id}"}, room=str(convo_id))
+        leave_room(str(conversation_id))
+        logger.info(f"✅ Client left room: {conversation_id}")
+        emit("status", {"message": f"Left conversation {conversation_id}"}, room=str(conversation_id))
         logger.info(f"Finished handle_leave_conversation in {time.time() - start_time:.2f} seconds")
     except Exception as e:
         logger.error(f"❌ Error in leave_conversation event: {str(e)}")
@@ -1475,27 +1521,40 @@ async def handle_agent_message(data):
         if ai_enabled:
             global_ai_enabled, _ = get_ai_enabled()
             if global_ai_enabled == "1":
-                ai_reply = await ai_respond(message, convo_id)
-                if ai_reply:
-                    ai_timestamp = log_message(convo_id, username, ai_reply, "ai")
+                try:
+                    ai_reply = await ai_respond(message, convo_id)
+                    if ai_reply:
+                        ai_timestamp = log_message(convo_id, username, ai_reply, "ai")
+                        emit("new_message", {
+                            "convo_id": convo_id,
+                            "message": ai_reply,
+                            "sender": "ai",
+                            "channel": convo_channel,
+                            "timestamp": ai_timestamp,
+                        }, room=str(convo_id))
+                        emit("live_message", {
+                            "convo_id": convo_id,
+                            "message": ai_reply,
+                            "sender": "ai",
+                            "chat_id": chat_id,
+                            "username": username,
+                            "timestamp": ai_timestamp,
+                        })
+                        if convo_channel == "whatsapp":
+                            task = send_whatsapp_message(chat_id, ai_reply)
+                            logger.info(f"Offloaded WhatsApp AI reply for convo_id {convo_id} to Celery task")
+                except Exception as e:
+                    logger.error(f"❌ Failed to generate AI response for convo_id {convo_id}: {str(e)}")
+                    # Log a message to inform the agent that AI failed
+                    error_message = "AI response failed. Please continue assisting the user manually."
+                    error_timestamp = log_message(convo_id, username, error_message, "system")
                     emit("new_message", {
                         "convo_id": convo_id,
-                        "message": ai_reply,
-                        "sender": "ai",
+                        "message": error_message,
+                        "sender": "system",
                         "channel": convo_channel,
-                        "timestamp": ai_timestamp,
+                        "timestamp": error_timestamp,
                     }, room=str(convo_id))
-                    emit("live_message", {
-                        "convo_id": convo_id,
-                        "message": ai_reply,
-                        "sender": "ai",
-                        "chat_id": chat_id,
-                        "username": username,
-                        "timestamp": ai_timestamp,
-                    })
-                    if convo_channel == "whatsapp":
-                        task = send_whatsapp_message(chat_id, ai_reply)
-                        logger.info(f"Offloaded WhatsApp AI reply for convo_id {convo_id} to Celery task")
 
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -1511,24 +1570,7 @@ async def handle_agent_message(data):
     except Exception as e:
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
-
-@socketio.on("typing")
-def handle_typing(data):
-    start_time = time.time()
-    logger.info(f"Starting handle_typing: {data}")
-    try:
-        convo_id = data.get("convo_id")
-        sender = data.get("sender", "agent")
-        if not convo_id:
-            logger.error("❌ Missing convo_id in typing event")
-            emit("error", {"message": "Missing conversation ID"})
-            return
-        emit("typing", {"convo_id": convo_id, "sender": sender}, room=str(convo_id))
-        logger.info(f"Finished handle_typing in {time.time() - start_time:.2f} seconds")
-    except Exception as e:
-        logger.error(f"❌ Error in typing event: {str(e)}")
-        emit("error", {"message": "Failed to broadcast typing event"})
-
+        
 # Main execution block
 if __name__ == "__main__":
     try:
@@ -1544,9 +1586,13 @@ if __name__ == "__main__":
         logger.error(f"❌ Failed to start server: {str(e)}")
         raise
     finally:
-        # Cleanup resources on shutdown
-        logger.info("Shutting down application")
-        db_pool.closeall()
-        logger.info("✅ Closed database connection pool")
-        redis_client.close()
-        logger.info("✅ Closed Redis client")
+    # Cleanup resources on shutdown
+    logger.info("Shutting down application")
+    db_pool.closeall()
+    logger.info("✅ Closed database connection pool")
+    # Properly close the async Redis client
+    import asyncio
+    async def close_redis():
+        await redis_client.aclose()
+    asyncio.run(close_redis())
+    logger.info("✅ Closed Redis client")
