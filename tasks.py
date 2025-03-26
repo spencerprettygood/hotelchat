@@ -60,7 +60,7 @@ if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_NUMBER
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # Server URL for emitting events (adjust based on your deployment)
-SERVER_URL = os.getenv("SERVER_URL", "http://localhost:5000")
+SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com/")
 
 @celery_app.task
 def send_whatsapp_message_task(to_number, message, convo_id=None, username=None, chat_id=None):
