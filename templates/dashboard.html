@@ -126,10 +126,9 @@
         <div class="bg-white rounded-lg shadow p-4">
             <h2 class="text-lg font-semibold mb-2">Chat with <span id="clientName">Select a conversation</span></h2>
             <div id="chatBox" class="chat-box"></div>
-            <div id="typingIndicator" class="text-gray-500 mb-2"></div>
             <div class="mt-4">
-                <textarea id="messageInput" class="w-full p-2 border rounded-lg" rows="3" placeholder="Type your message..."></textarea>
-                <button onclick="sendMessage()" class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Send</button>
+                <textarea id="messageInput" class="w-full p-2 border rounded-lg" rows="3" placeholder="Type your message..." disabled></textarea>
+                <button onclick="sendMessage()" class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700" disabled>Send</button>
             </div>
         </div>
     </div>
