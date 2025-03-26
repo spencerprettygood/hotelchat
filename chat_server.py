@@ -64,28 +64,29 @@ redis_client = redis.Redis.from_url(
     max_connections=20
 )
 
-# Synchronous wrappers for Redis operations
+# Use a single event loop for synchronous Redis operations
+_sync_loop = None
+
+def get_sync_loop():
+    global _sync_loop
+    if _sync_loop is None or _sync_loop.is_closed():
+        _sync_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_sync_loop)
+    return _sync_loop
+
 def redis_get_sync(key):
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(redis_client.get(key))
-            return result
-        finally:
-            loop.close()
+        loop = get_sync_loop()
+        result = loop.run_until_complete(redis_client.get(key))
+        return result
     except Exception as e:
         logger.error(f"❌ Error in redis_get_sync for key {key}: {str(e)}")
         return None
 
 def redis_setex_sync(key, ttl, value):
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(redis_client.setex(key, ttl, value))
-        finally:
-            loop.close()
+        loop = get_sync_loop()
+        loop.run_until_complete(redis_client.setex(key, ttl, value))
     except Exception as e:
         logger.error(f"❌ Error in redis_setex_sync for key {key}: {str(e)}")
 
@@ -247,10 +248,14 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Database connection with connection pooling
 def get_db_connection():
     try:
         conn = db_pool.getconn()
+        # Validate the connection
+        if conn.closed:
+            logger.warning("Retrieved a closed connection from pool, attempting to get a new one")
+            db_pool.putconn(conn, close=True)
+            conn = db_pool.getconn()
         conn.cursor_factory = DictCursor
         logger.info("✅ Database connection retrieved from pool")
         return conn
@@ -261,8 +266,11 @@ def get_db_connection():
 def release_db_connection(conn):
     if conn:
         try:
-            db_pool.putconn(conn)
-            logger.info("✅ Database connection returned to pool")
+            if conn.closed:
+                logger.warning("Attempted to release a closed connection")
+            else:
+                db_pool.putconn(conn)
+                logger.info("✅ Database connection returned to pool")
         except Exception as e:
             logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
 
@@ -536,21 +544,22 @@ class Agent(UserMixin):
 def load_user(agent_id):
     start_time = time.time()
     logger.info(f"Starting load_user for agent_id {agent_id}")
+    conn = None
     try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
-            agent = c.fetchone()
-            if agent:
-                release_db_connection(conn)
-                logger.info(f"Finished load_user for agent_id {agent_id} in {time.time() - start_time:.2f} seconds")
-                return Agent(agent['id'], agent['username'])
-            release_db_connection(conn)
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
+        agent = c.fetchone()
+        if agent:
+            logger.info(f"Finished load_user for agent_id {agent_id} in {time.time() - start_time:.2f} seconds")
+            return Agent(agent['id'], agent['username'])
         logger.info(f"Finished load_user for agent_id {agent_id} (not found) in {time.time() - start_time:.2f} seconds")
         return None
     except Exception as e:
         logger.error(f"❌ Error in load_user: {str(e)}")
         return None
+    finally:
+        release_db_connection(conn)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
