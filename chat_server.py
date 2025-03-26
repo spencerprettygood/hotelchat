@@ -1206,6 +1206,28 @@ async def ai_respond(message, convo_id):
                 except asyncio.TimeoutError:
                     logger.error(f"❌ Semaphore acquisition timeout (Attempt {attempt + 1})")
                     if attempt == retry_attempts - 1:
+                        with get_db_connection() as conn:
+                            try:
+                                c = conn.cursor()
+                                c.execute("BEGIN")
+                                c.execute(
+                                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                                )
+                                c.execute("COMMIT")
+                            finally:
+                                release_db_connection(conn)
+                        # Notify the server to refresh conversations
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    f"{SERVER_URL}/refresh_conversations",
+                                    json={"conversation_id": str(convo_id)},
+                                    timeout=5
+                                ) as response:
+                                    response.raise_for_status()
+                        except aiohttp.ClientError as e:
+                            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
                         result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
                                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
                         await redis_client.setex(cache_key, 3600, result)
