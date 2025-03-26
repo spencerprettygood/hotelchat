@@ -162,7 +162,7 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                 if result:
                     convo_id, username, ai_enabled, needs_agent, assigned_agent = result['id'], result['username'], result['ai_enabled'], result['needs_agent'], result['assigned_agent']
                     c.execute(
-                        "UPDATE conversations SET last_updated = %s WHERE id = %s",
+                        "UPDATE conversations SET last_updated = %s, visible_in_conversations = 1 WHERE id = %s",
                         (current_timestamp, convo_id)
                     )
                 else:
@@ -171,9 +171,9 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     needs_agent = 0
                     assigned_agent = None
                     c.execute(
-                        "INSERT INTO conversations (chat_id, channel, username, ai_enabled, needs_agent, last_updated) "
-                        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                        (chat_id, "whatsapp", username, ai_enabled, needs_agent, current_timestamp)
+                        "INSERT INTO conversations (chat_id, channel, username, ai_enabled, needs_agent, last_updated, visible_in_conversations) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                        (chat_id, "whatsapp", username, ai_enabled, needs_agent, current_timestamp, 1)
                     )
                     convo_id = c.fetchone()['id']
                 # Log user message
@@ -222,7 +222,7 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             assigned_agent is None and
             (global_ai_enabled != "1" or message_time > toggle_time)
         )
-        logger.info(f"Should respond with AI for convo_id {convo_id}: {should_respond}")
+        logger.info(f"Should respond with AI for convo_id {convo_id}: {should_respond}, ai_enabled={ai_enabled}, global_ai_enabled={global_ai_enabled}, help_triggered={help_triggered}, needs_agent={needs_agent}, assigned_agent={assigned_agent}")
 
         response = None
         ai_timestamp = None
@@ -341,7 +341,20 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     release_db_connection(conn)
             socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         else:
-            logger.info(f"AI response skipped for convo_id {convo_id}: ai_enabled={ai_enabled}, needs_agent={needs_agent}, assigned_agent={assigned_agent}")
+            logger.info(f"AI response skipped for convo_id {convo_id}: ai_enabled={ai_enabled}, global_ai_enabled={global_ai_enabled}, help_triggered={help_triggered}, needs_agent={needs_agent}, assigned_agent={assigned_agent}")
+            # Reset conversation state if AI is disabled but shouldn't be
+            if not ai_enabled or needs_agent or assigned_agent:
+                logger.info(f"Resetting conversation state for convo_id {convo_id} to allow AI response")
+                with get_db_connection() as conn:
+                    try:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE conversations SET ai_enabled = 1, needs_agent = 0, assigned_agent = NULL, last_updated = %s WHERE id = %s",
+                            (current_timestamp, convo_id)
+                        )
+                        conn.commit()
+                    finally:
+                        release_db_connection(conn)
             return
 
         # Send the AI response via WhatsApp
