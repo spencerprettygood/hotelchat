@@ -27,7 +27,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import aiohttp
 import asyncio
 from functools import lru_cache
-from openai import AsyncOpenAI, RateLimitError, APIError, AuthenticationError  # Added AuthenticationError
+from openai import AsyncOpenAI, RateLimitError, APIError, AuthenticationError
 import redis.asyncio as redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
@@ -64,6 +64,31 @@ redis_client = redis.Redis.from_url(
     max_connections=20
 )
 
+# Synchronous wrappers for Redis operations
+def redis_get_sync(key):
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(redis_client.get(key))
+            return result
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"❌ Error in redis_get_sync for key {key}: {str(e)}")
+        return None
+
+def redis_setex_sync(key, ttl, value):
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(redis_client.setex(key, ttl, value))
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"❌ Error in redis_setex_sync for key {key}: {str(e)}")
+
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
 CORS(app)
@@ -72,8 +97,8 @@ socketio = SocketIO(
     app,
     cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
     async_mode="gevent",
-    ping_timeout=60,  # Reduced from 120
-    ping_interval=15,  # Reduced from 30
+    ping_timeout=60,
+    ping_interval=15,
     logger=True,
     engineio_logger=True
 )
@@ -105,7 +130,7 @@ if not OPENAI_API_KEY:
 # Initialize OpenAI client with a timeout
 openai_client = AsyncOpenAI(
     api_key=OPENAI_API_KEY,
-    timeout=30.0  # Set a 30-second timeout for API requests
+    timeout=30.0
 )
 
 # Google Calendar setup with Service Account
@@ -311,7 +336,7 @@ def init_db():
                 booking_intent INTEGER DEFAULT 0,
                 handoff_notified INTEGER DEFAULT 0,
                 visible_in_conversations INTEGER DEFAULT 1,
-                language TEXT DEFAULT 'en',  -- New column for language
+                language TEXT DEFAULT 'en',
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP
             )''')
             logger.info("Created conversations table")
@@ -814,7 +839,7 @@ def get_all_whatsapp_messages():
     try:
         # Check Redis cache first
         cache_key = "all_whatsapp_conversations"
-        cached_conversations = await redis_client.get(cache_key)
+        cached_conversations = redis_get_sync(cache_key)
         if cached_conversations:
             logger.info("Returning cached WhatsApp conversations")
             return jsonify({"conversations": json.loads(cached_conversations)})
@@ -840,7 +865,7 @@ def get_all_whatsapp_messages():
                 for convo in conversations
             ]
             # Cache the result for 10 seconds
-            await redis_client.setex(cache_key, 10, json.dumps(result))
+            redis_setex_sync(cache_key, 10, json.dumps(result))
             release_db_connection(conn)
             logger.info(f"Finished /all-whatsapp-messages in {time.time() - start_time:.2f} seconds")
             return jsonify({"conversations": result})
@@ -872,7 +897,7 @@ def get_messages_for_conversation(convo_id):
 
         # Check Redis cache first
         cache_key = f"messages:{convo_id}:{since or 'full'}"
-        cached_messages = await redis_client.get(cache_key)
+        cached_messages = redis_get_sync(cache_key)
         if cached_messages:
             logger.info(f"Returning cached messages for convo_id {convo_id}")
             cached_data = json.loads(cached_messages)
@@ -926,7 +951,7 @@ def get_messages_for_conversation(convo_id):
 
             # Cache the result for 10 seconds
             cache_data = {"username": username, "messages": messages}
-            await redis_client.setex(cache_key, 10, json.dumps(cache_data))
+            redis_setex_sync(cache_key, 10, json.dumps(cache_data))
             release_db_connection(conn)
 
             logger.info(f"Finished /messages/{convo_id} in {time.time() - start_time:.2f} seconds")
@@ -987,7 +1012,7 @@ def check_availability(check_in, check_out):
     return result
 
 # Semaphore to limit concurrent OpenAI API requests
-OPENAI_CONCURRENT_LIMIT = 20  # Adjusted based on typical OpenAI rate limits
+OPENAI_CONCURRENT_LIMIT = 20
 openai_semaphore = asyncio.Semaphore(OPENAI_CONCURRENT_LIMIT)
 
 def detect_language(message, convo_id):
@@ -1051,7 +1076,7 @@ def detect_language(message, convo_id):
         return detected_lang
     except Exception as e:
         logger.error(f"Error in detect_language for convo_id {convo_id}: {str(e)}")
-        return 'en'  # Default to English on error
+        return 'en'
 
 # Update the ai_respond function
 async def ai_respond(message, convo_id):
@@ -1265,7 +1290,7 @@ async def ai_respond(message, convo_id):
                         (convo_id,)
                     )
                     messages = c.fetchall()
-                    await redis_client.setex(history_cache_key, 300, json.dumps([dict(msg) for msg in messages]))  # Cache for 5 minutes
+                    await redis_client.setex(history_cache_key, 300, json.dumps([dict(msg) for msg in messages]))
                     logger.info(f"Cached conversation history for convo_id {convo_id}")
                 finally:
                     release_db_connection(conn)
@@ -1286,9 +1311,9 @@ async def ai_respond(message, convo_id):
             for attempt in range(retry_attempts):
                 try:
                     response = await openai_client.chat.completions.create(
-                        model="gpt-4o",  # Upgraded to gpt-4o for better quality
+                        model="gpt-4o",
                         messages=conversation_history,
-                        max_tokens=300,  # Increased for more natural responses
+                        max_tokens=300,
                         temperature=0.7
                     )
                     ai_reply = response.choices[0].message.content.strip()
@@ -1352,7 +1377,7 @@ async def ai_respond(message, convo_id):
                         await redis_client.setex(cache_key, 3600, result)
                         logger.info(f"Finished ai_respond (RateLimitError, needs agent) in {time.time() - start_time:.2f} seconds")
                         return result
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    await asyncio.sleep(2 ** attempt)
                     continue
                 except APIError as e:
                     logger.error(f"❌ OpenAI APIError (Attempt {attempt + 1}): {str(e)}")
@@ -1448,7 +1473,7 @@ async def ai_respond(message, convo_id):
                         await redis_client.setex(cache_key, 3600, result)
                         logger.info(f"Finished ai_respond (TimeoutError, needs agent) in {time.time() - start_time:.2f} seconds")
                         return result
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    await asyncio.sleep(2 ** attempt)
                     continue
                 except Exception as e:
                     logger.error(f"❌ Unexpected OpenAI error (Attempt {attempt + 1}): {str(e)}")
@@ -1515,15 +1540,12 @@ async def ai_respond(message, convo_id):
 
 def ai_respond_sync(message, convo_id):
     try:
-        # Create a new event loop for this call
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            # Run the async ai_respond function
             result = loop.run_until_complete(ai_respond(message, convo_id))
             return result
         finally:
-            # Close the loop after use
             loop.close()
     except Exception as e:
         logger.error(f"❌ Error in ai_respond_sync for convo_id {convo_id}: {str(e)}")
@@ -1567,14 +1589,6 @@ def refresh_conversations():
         if not convo_id:
             logger.error("Missing conversation_id in /refresh_conversations")
             return jsonify({"error": "Missing conversation_id"}), 400
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
-            return jsonify({"error": "Invalid conversation ID format"}), 400
-
         socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         logger.info(f"Finished /refresh_conversations in {time.time() - start_time:.2f} seconds")
         return jsonify({"message": "Conversations refresh triggered"})
@@ -1582,111 +1596,56 @@ def refresh_conversations():
         logger.error(f"❌ Error in /refresh_conversations: {str(e)}")
         return jsonify({"error": "Failed to trigger refresh"}), 500
 
-@app.route("/emit_new_message", methods=["POST"])
-def emit_new_message():
-    start_time = time.time()
-    logger.info("Starting /emit_new_message endpoint")
-    try:
-        data = request.get_json()
-        required_fields = ["convo_id", "message", "sender", "channel", "timestamp", "chat_id", "username"]
-        for field in required_fields:
-            if field not in data:
-                logger.error(f"Missing {field} in /emit_new_message request")
-                return jsonify({"error": f"Missing {field}"}), 400
-
-        convo_id = data["convo_id"]
-        message = data["message"]
-        sender = data["sender"]
-        channel = data["channel"]
-        timestamp = data["timestamp"]
-        chat_id = data["chat_id"]
-        username = data["username"]
-
-        # Emit new_message to the conversation room
-        socketio.emit("new_message", {
-            "convo_id": convo_id,
-            "message": message,
-            "sender": sender,
-            "channel": channel,
-            "timestamp": timestamp,
-        }, room=str(convo_id))
-
-        # Emit live_message to update the conversation list
-        socketio.emit("live_message", {
-            "convo_id": convo_id,
-            "message": message,
-            "sender": sender,
-            "chat_id": chat_id,
-            "username": username,
-            "timestamp": timestamp,
-        })
-
-        logger.info(f"Finished /emit_new_message in {time.time() - start_time:.2f} seconds")
-        return jsonify({"message": "New message event emitted"})
-    except Exception as e:
-        logger.error(f"❌ Error in /emit_new_message: {str(e)}")
-        return jsonify({"error": "Failed to emit new message event"}), 500
-
-# Socket.IO Event Handlers
+# SocketIO Events
 @socketio.on("connect")
 def handle_connect():
-    logger.info("✅ Client connected to Socket.IO")
-    emit("status", {"message": "Connected to server"})
+    logger.info("✅ Client connected to SocketIO")
+    if current_user.is_authenticated:
+        emit("connection_status", {"status": "connected", "agent": current_user.username})
+    else:
+        emit("connection_status", {"status": "connected", "agent": None})
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    logger.info("ℹ️ Client disconnected from Socket.IO")
+    logger.info("ℹ️ Client disconnected from SocketIO")
 
 @socketio.on("join_conversation")
 def handle_join_conversation(data):
-    start_time = time.time()
-    logger.info(f"Starting handle_join_conversation: {data}")
-    try:
-        conversation_id = data.get("conversation_id")
-        if not conversation_id:
-            logger.warning("⚠️ Missing conversation_id in join_conversation event, ignoring request")
-            # Instead of emitting an error, silently return
-            return
-        join_room(str(conversation_id))
-        logger.info(f"✅ Client joined room: {conversation_id}")
-        emit("status", {"message": f"Joined conversation {conversation_id}"}, room=str(conversation_id))
-        logger.info(f"Finished handle_join_conversation in {time.time() - start_time:.2f} seconds")
-    except Exception as e:
-        logger.error(f"❌ Error in join_conversation event: {str(e)}")
-        emit("error", {"message": "Failed to join conversation"})
+    convo_id = data.get("conversation_id")
+    if not convo_id:
+        logger.error("Missing conversation_id in join_conversation")
+        emit("error", {"message": "Missing conversation_id"})
+        return
+    room = f"conversation_{convo_id}"
+    join_room(room)
+    logger.info(f"Agent joined room: {room}")
 
 @socketio.on("leave_conversation")
 def handle_leave_conversation(data):
+    convo_id = data.get("conversation_id")
+    if not convo_id:
+        logger.error("Missing conversation_id in leave_conversation")
+        emit("error", {"message": "Missing conversation_id"})
+        return
+    room = f"conversation_{convo_id}"
+    leave_room(room)
+    logger.info(f"Agent left room: {room}")
+
+@socketio.on("agent_message")
+def handle_agent_message(data):
     start_time = time.time()
-    logger.info(f"Starting handle_leave_conversation: {data}")
+    logger.info("Starting handle_agent_message")
     try:
-        conversation_id = data.get("conversation_id")
-        if not conversation_id:
-            logger.error("❌ Missing conversation_id in leave_conversation event")
-            emit("error", {"message": "Missing conversation ID"})
+        if not current_user.is_authenticated:
+            logger.error("Unauthorized agent message attempt")
+            emit("error", {"message": "Unauthorized"})
             return
-        leave_room(str(conversation_id))
-        logger.info(f"✅ Client left room: {conversation_id}")
-        emit("status", {"message": f"Left conversation {conversation_id}"}, room=str(conversation_id))
-        logger.info(f"Finished handle_leave_conversation in {time.time() - start_time:.2f} seconds")
-    except Exception as e:
-        logger.error(f"❌ Error in leave_conversation event: {str(e)}")
-        emit("error", {"message": "Failed to leave conversation"})
 
-@socketio.on("send_message")
-def handle_send_message(data):
-    start_time = time.time()
-    logger.info(f"Starting handle_send_message: {data}")
-    try:
-        convo_id = data.get("convo_id")
+        convo_id = data.get("conversation_id")
         message = data.get("message")
-        sender = data.get("sender", "agent")
-        channel = data.get("channel", "whatsapp")
         chat_id = data.get("chat_id")
-        username = data.get("username")
-
-        if not all([convo_id, message, chat_id, username]):
-            logger.error("❌ Missing required fields in send_message event")
+        if not convo_id or not message or not chat_id:
+            logger.error("Missing fields in agent_message")
             emit("error", {"message": "Missing required fields"})
             return
 
@@ -1699,65 +1658,58 @@ def handle_send_message(data):
             emit("error", {"message": "Invalid conversation ID format"})
             return
 
-        # Log the message to the database
-        timestamp = log_message(convo_id, username, message, sender)
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT username, channel, needs_agent, handoff_notified FROM conversations WHERE id = %s",
+                (convo_id,)
+            )
+            convo = c.fetchone()
+            if not convo:
+                logger.error(f"Conversation not found: {convo_id}")
+                emit("error", {"message": "Conversation not found"})
+                release_db_connection(conn)
+                return
+            username = convo["username"]
+            channel = convo["channel"]
+            needs_agent = convo["needs_agent"]
+            handoff_notified = convo["handoff_notified"]
 
-        # Emit the message to the conversation room
+            # Log the agent's message
+            timestamp = log_message(convo_id, username, message, "agent")
+
+            # Update last_updated timestamp
+            c.execute(
+                "UPDATE conversations SET last_updated = %s WHERE id = %s",
+                (timestamp, convo_id)
+            )
+
+            # If this is the first agent message after handoff, notify the user
+            if needs_agent and not handoff_notified and channel == "whatsapp":
+                handoff_message = f"Hi {username}, an agent has joined the conversation to assist you."
+                send_whatsapp_message(f"whatsapp:{chat_id}", handoff_message)
+                c.execute(
+                    "UPDATE conversations SET handoff_notified = 1 WHERE id = %s",
+                    (convo_id,)
+                )
+
+            conn.commit()
+            release_db_connection(conn)
+
+        # Broadcast the message to the conversation room
+        room = f"conversation_{convo_id}"
         socketio.emit("new_message", {
             "convo_id": convo_id,
             "message": message,
-            "sender": sender,
-            "channel": channel,
-            "timestamp": timestamp,
-        }, room=str(convo_id))
-
-        # Emit live_message to update the conversation list
-        socketio.emit("live_message", {
-            "convo_id": convo_id,
-            "message": message,
-            "sender": sender,
-            "chat_id": chat_id,
-            "username": username,
-            "timestamp": timestamp,
-        })
-
-        # Update the conversation's last_updated timestamp
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("BEGIN")
-            c.execute(
-                "UPDATE conversations SET last_updated = %s WHERE id = %s",
-                (datetime.now(timezone.utc).isoformat(), convo_id)
-            )
-            c.execute("COMMIT")
-            release_db_connection(conn)
-
-        # If the sender is an agent, send the message to the user via WhatsApp
-        if sender == "agent":
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT chat_id FROM conversations WHERE id = %s",
-                    (convo_id,)
-                )
-                result = c.fetchone()
-                if result:
-                    phone_number = result["chat_id"]
-                    send_whatsapp_message(phone_number, message)
-                release_db_connection(conn)
-
-        logger.info(f"Finished handle_send_message in {time.time() - start_time:.2f} seconds")
+            "sender": "agent",
+            "timestamp": timestamp
+        }, room=room)
+        logger.info(f"Finished handle_agent_message in {time.time() - start_time:.2f} seconds")
     except Exception as e:
-        logger.error(f"❌ Error in send_message event: {str(e)}")
+        logger.error(f"❌ Error in handle_agent_message: {str(e)}")
         emit("error", {"message": "Failed to send message"})
 
-# Run the application
+# Run the app with SocketIO
 if __name__ == "__main__":
     logger.info("Starting Flask-SocketIO server")
-    socketio.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 5000)),
-        debug=os.getenv("FLASK_ENV", "development") == "development",
-        use_reloader=False
-    )
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
