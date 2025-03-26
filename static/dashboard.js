@@ -17,17 +17,32 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    checkAuthStatus();
-    fetchAISetting();
-    fetchConversations();
-    setInterval(fetchConversations, 10000);
+    // Check authentication status before fetching data
+    checkAuthStatus().then(isAuthenticated => {
+        if (isAuthenticated) {
+            fetchAISetting();
+            fetchConversations();
+            setInterval(fetchConversations, 10000);
+        }
+    });
 
     const messageInput = document.getElementById('messageInput');
     if (messageInput) {
+        // Add keypress listener for sending messages
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' || e.keyCode === 13) {
                 e.preventDefault();
                 sendMessage();
+            }
+        });
+
+        // Add input listener for typing events
+        messageInput.addEventListener('input', () => {
+            if (currentConversationId) {
+                socket.emit('typing', {
+                    convo_id: currentConversationId,
+                    sender: 'agent'
+                });
             }
         });
     } else {
@@ -46,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fetch("/logout", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                credentials: 'include'
             })
                 .then((response) => response.json())
                 .then((data) => {
@@ -70,38 +86,101 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Start the timer on page load
     resetInactivityTimer();
+
+    // Add channel filter UI (e.g., a dropdown)
+    const channelFilter = document.createElement('select');
+    channelFilter.id = 'channelFilter';
+    channelFilter.innerHTML = `
+        <option value="">All Channels</option>
+        <option value="whatsapp">WhatsApp</option>
+        <option value="test">Test</option>
+    `;
+    channelFilter.addEventListener('change', (e) => {
+        filterByChannel(e.target.value);
+    });
+    const filterSection = document.getElementById('filter-section');
+    if (filterSection) {
+        filterSection.appendChild(channelFilter);
+    } else {
+        console.error('Filter section not found for adding channel filter.');
+    }
 });
 
-// Fetch AI setting on page load
-function fetchAISetting() {
-    fetch('/settings')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            const aiToggle = document.getElementById('ai-toggle');
-            const aiToggleError = document.getElementById('ai-toggle-error');
-            if (aiToggle && aiToggleError) {
-                aiToggle.checked = data.ai_enabled === '1';
-                aiToggleError.style.display = 'none';
-                aiToggle.addEventListener('change', () => {
-                    toggleAI(aiToggle.checked);
-                });
-            } else {
-                console.error('AI toggle or error element not found on dashboard page.');
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching AI setting:', error);
-            const aiToggleError = document.getElementById('ai-toggle-error');
-            if (aiToggleError) {
-                aiToggleError.textContent = 'Failed to load AI setting: ' + error.message;
-                aiToggleError.style.display = 'inline';
-            }
+// Check if user is authenticated
+async function checkAuthStatus() {
+    try {
+        const response = await fetch('/check-auth', {
+            method: 'GET',
+            credentials: 'include'
         });
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+        }
+        const data = await response.json();
+        const loginPage = document.getElementById('loginPage');
+        const dashboardSection = document.getElementById('dashboard');
+        if (data.is_authenticated) {
+            currentAgent = data.agent;
+            console.log("Current Agent:", currentAgent);
+            loginPage.style.display = 'none';
+            dashboardSection.style.display = 'block';
+            return true;
+        } else {
+            loginPage.style.display = 'flex';
+            dashboardSection.style.display = 'none';
+            return false;
+        }
+    } catch (error) {
+        console.error('Error checking auth status:', error);
+        const loginPage = document.getElementById('loginPage');
+        const dashboardSection = document.getElementById('dashboard');
+        loginPage.style.display = 'flex';
+        dashboardSection.style.display = 'none';
+        return false;
+    }
+}
+
+// Fetch AI setting on page load
+async function fetchAISetting() {
+    const isAuthenticated = await checkAuthStatus();
+    if (!isAuthenticated) {
+        console.log('User not authenticated, skipping fetchAISetting');
+        return;
+    }
+
+    try {
+        const response = await fetch('/settings', {
+            method: 'GET',
+            credentials: 'include'
+        });
+        if (!response.ok) {
+            if (response.status === 401) {
+                console.log('Unauthorized, redirecting to login');
+                window.location.href = '/login';
+                return;
+            }
+            throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+        }
+        const data = await response.json();
+        const aiToggle = document.getElementById('ai-toggle');
+        const aiToggleError = document.getElementById('ai-toggle-error');
+        if (aiToggle && aiToggleError) {
+            aiToggle.checked = data.ai_enabled === '1';
+            aiToggleError.style.display = 'none';
+            aiToggle.addEventListener('change', () => {
+                toggleAI(aiToggle.checked);
+            });
+        } else {
+            console.error('AI toggle or error element not found on dashboard page.');
+        }
+    } catch (error) {
+        console.error('Error fetching AI setting:', error);
+        const aiToggleError = document.getElementById('ai-toggle-error');
+        if (aiToggleError) {
+            aiToggleError.textContent = 'Failed to load AI setting: ' + error.message;
+            aiToggleError.style.display = 'inline';
+        }
+    }
 }
 
 // Toggle global AI setting
@@ -113,6 +192,7 @@ function toggleAI(enabled) {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({ key: 'ai_enabled', value: enabled ? '1' : '0' }),
+        credentials: 'include'
     })
         .then(response => {
             if (!response.ok) {
@@ -143,32 +223,6 @@ function toggleAI(enabled) {
         });
 }
 
-// Check if user is authenticated
-function checkAuthStatus() {
-    fetch('/check-auth')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            const loginPage = document.getElementById('loginPage');
-            const dashboardSection = document.getElementById('dashboard');
-            if (data.is_authenticated) {
-                currentAgent = data.agent;
-                console.log("Current Agent:", currentAgent);
-                loginPage.style.display = 'none';
-                dashboardSection.style.display = 'block';
-                fetchConversations();
-            } else {
-                loginPage.style.display = 'flex';
-                dashboardSection.style.display = 'none';
-            }
-        })
-        .catch(error => console.error('Error checking auth status:', error));
-}
-
 // Login function for the button
 function login() {
     const usernameInput = document.getElementById('username');
@@ -187,6 +241,7 @@ function login() {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({ username, password }),
+        credentials: 'include'
     })
         .then(response => {
             if (!response.ok) {
@@ -205,7 +260,10 @@ function login() {
                 alert('Login failed: ' + data.message);
             }
         })
-        .catch(error => console.error('Error during login:', error));
+        .catch(error => {
+            console.error('Error during login:', error);
+            alert('Error during login: ' + error.message);
+        });
 }
 
 // Logout button
@@ -214,6 +272,7 @@ if (logoutButton) {
     logoutButton.addEventListener('click', () => {
         fetch('/logout', {
             method: 'POST',
+            credentials: 'include'
         })
             .then(response => {
                 if (!response.ok) {
@@ -234,7 +293,13 @@ if (logoutButton) {
     console.error('Logout button not found.');
 }
 
-function fetchConversations() {
+async function fetchConversations() {
+    const isAuthenticated = await checkAuthStatus();
+    if (!isAuthenticated) {
+        console.log('User not authenticated, skipping fetchConversations');
+        return;
+    }
+
     const conversationList = document.getElementById('conversationList');
     const conversationError = document.getElementById('conversation-error');
     if (!conversationList) {
@@ -245,105 +310,110 @@ function fetchConversations() {
         console.error('Conversation error element (conversation-error) is missing.');
     }
 
-    fetch('/conversations')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(conversations => {
-            console.log('Fetched Conversations:', conversations);
-            conversationList.innerHTML = '';
-            if (conversationError) {
-                conversationError.style.display = 'none';
-            }
-
-            console.log('Current Filter:', currentFilter, 'Current Channel:', currentChannel, 'Current Agent:', currentAgent);
-            let filteredConversations = conversations.filter(convo => {
-                // Backend already filters by needs_agent = 1, but we keep this check for safety
-                if (!convo.needs_agent) {
-                    return false;
-                }
-                if (currentChannel && convo.channel !== currentChannel) {
-                    return false;
-                }
-                if (currentFilter === 'unassigned') {
-                    return !convo.assigned_agent;
-                } else if (currentFilter === 'you') {
-                    return convo.assigned_agent === currentAgent;
-                } else if (currentFilter === 'team') {
-                    return convo.assigned_agent && convo.assigned_agent !== currentAgent;
-                }
-                return true;
-            });
-
-            console.log('Filtered Conversations:', filteredConversations);
-
-            updateCounts(conversations);
-
-            filteredConversations.forEach(convo => {
-                console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent);
-                const li = document.createElement('li');
-                li.className = 'conversation-item';
-
-                const convoContainer = document.createElement('div');
-                convoContainer.style.display = 'flex';
-                convoContainer.style.justifyContent = 'space-between';
-                convoContainer.style.alignItems = 'center';
-
-                const convoInfo = document.createElement('span');
-                // Display AI enabled status in the UI
-                const aiStatus = convo.ai_enabled ? '(AI Enabled)' : '(AI Disabled)';
-                convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'} ${aiStatus}`;
-                convoInfo.onclick = () => loadConversation(convo.id);
-                convoInfo.style.cursor = 'pointer';
-                convoContainer.appendChild(convoInfo);
-
-                if (currentFilter === 'unassigned' && !convo.assigned_agent) {
-                    const takeOverButton = document.createElement('button');
-                    takeOverButton.textContent = 'Take Over';
-                    takeOverButton.onclick = (e) => {
-                        e.stopPropagation();
-                        takeOverConversation(convo.id);
-                    };
-                    takeOverButton.className = 'take-over-btn';
-                    convoContainer.appendChild(takeOverButton);
-                }
-
-                if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
-                    const handBackButton = document.createElement('button');
-                    handBackButton.textContent = 'Hand Back to AI';
-                    handBackButton.onclick = (e) => {
-                        e.stopPropagation();
-                        handBackToAI(convo.id);
-                    };
-                    handBackButton.className = 'handback-button';
-                    convoContainer.appendChild(handBackButton);
-                }
-
-                li.appendChild(convoContainer);
-                conversationList.appendChild(li);
-            });
-
-            // If the currently selected conversation is no longer visible, clear the chat box
-            if (currentConversationId && !filteredConversations.some(convo => convo.id === currentConversationId)) {
-                currentConversationId = null;
-                const chatBox = document.getElementById('chatBox');
-                const clientName = document.getElementById('clientName');
-                if (chatBox && clientName) {
-                    chatBox.innerHTML = '';
-                    clientName.textContent = 'Select a conversation';
-                }
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching conversations:', error);
-            if (conversationError) {
-                conversationError.textContent = 'Failed to load conversations: ' + error.message;
-                conversationError.style.display = 'inline';
-            }
+    try {
+        const response = await fetch('/conversations', {
+            method: 'GET',
+            credentials: 'include'
         });
+        if (!response.ok) {
+            if (response.status === 401) {
+                console.log('Unauthorized, redirecting to login');
+                window.location.href = '/login';
+                return;
+            }
+            throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
+        }
+        const conversations = await response.json();
+        console.log('Fetched Conversations:', conversations);
+        conversationList.innerHTML = '';
+        if (conversationError) {
+            conversationError.style.display = 'none';
+        }
+
+        console.log('Current Filter:', currentFilter, 'Current Channel:', currentChannel, 'Current Agent:', currentAgent);
+        let filteredConversations = conversations.filter(convo => {
+            // Backend already filters by needs_agent = 1, but we keep this check for safety
+            if (!convo.needs_agent) {
+                return false;
+            }
+            if (currentChannel && convo.channel !== currentChannel) {
+                return false;
+            }
+            if (currentFilter === 'unassigned') {
+                return !convo.assigned_agent;
+            } else if (currentFilter === 'you') {
+                return convo.assigned_agent === currentAgent;
+            } else if (currentFilter === 'team') {
+                return convo.assigned_agent && convo.assigned_agent !== currentAgent;
+            }
+            return true;
+        });
+
+        console.log('Filtered Conversations:', filteredConversations);
+
+        updateCounts(conversations);
+
+        filteredConversations.forEach(convo => {
+            console.log("Filter Check:", currentFilter, convo.username, convo.assigned_agent, currentAgent);
+            const li = document.createElement('li');
+            li.className = 'conversation-item';
+
+            const convoContainer = document.createElement('div');
+            convoContainer.style.display = 'flex';
+            convoContainer.style.justifyContent = 'space-between';
+            convoContainer.style.alignItems = 'center';
+
+            const convoInfo = document.createElement('span');
+            // Display AI enabled status in the UI
+            const aiStatus = convo.ai_enabled ? '(AI Enabled)' : '(AI Disabled)';
+            convoInfo.textContent = `${convo.username} (${convo.channel}): Assigned to ${convo.assigned_agent || 'unassigned'} ${aiStatus}`;
+            convoInfo.onclick = () => loadConversation(convo.id);
+            convoInfo.style.cursor = 'pointer';
+            convoContainer.appendChild(convoInfo);
+
+            if (currentFilter === 'unassigned' && !convo.assigned_agent) {
+                const takeOverButton = document.createElement('button');
+                takeOverButton.textContent = 'Take Over';
+                takeOverButton.onclick = (e) => {
+                    e.stopPropagation();
+                    takeOverConversation(convo.id);
+                };
+                takeOverButton.className = 'take-over-btn';
+                convoContainer.appendChild(takeOverButton);
+            }
+
+            if (currentFilter === 'you' && convo.assigned_agent === currentAgent) {
+                const handBackButton = document.createElement('button');
+                handBackButton.textContent = 'Hand Back to AI';
+                handBackButton.onclick = (e) => {
+                    e.stopPropagation();
+                    handBackToAI(convo.id);
+                };
+                handBackButton.className = 'handback-button';
+                convoContainer.appendChild(handBackButton);
+            }
+
+            li.appendChild(convoContainer);
+            conversationList.appendChild(li);
+        });
+
+        // If the currently selected conversation is no longer visible, clear the chat box
+        if (currentConversationId && !filteredConversations.some(convo => convo.id === currentConversationId)) {
+            currentConversationId = null;
+            const chatBox = document.getElementById('chatBox');
+            const clientName = document.getElementById('clientName');
+            if (chatBox && clientName) {
+                chatBox.innerHTML = '';
+                clientName.textContent = 'Select a conversation';
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching conversations:', error);
+        if (conversationError) {
+            conversationError.textContent = 'Failed to load conversations: ' + error.message;
+            conversationError.style.display = 'inline';
+        }
+    }
 }
 
 // Update conversation counts
@@ -385,6 +455,7 @@ function takeOverConversation(convoId) {
             conversation_id: convoId,
             disable_ai: true, // Indicate that AI should be disabled for this conversation
         }),
+        credentials: 'include'
     })
         .then(response => {
             if (!response.ok) {
@@ -417,9 +488,11 @@ function loadConversation(convoId) {
     }
 
     // Join the Socket.IO room for this conversation
-    socket.emit('join_conversation', { conversation_id: convoId });
+    socket.emit('join_conversation', { convo_id: convoId });
 
-    fetch(`/messages/${convoId}`) // Updated endpoint as per chat_server.py
+    fetch(`/messages/${convoId}`, {
+        credentials: 'include'
+    })
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
@@ -432,28 +505,37 @@ function loadConversation(convoId) {
             chatBox.innerHTML = '';
 
             messages.forEach(msg => {
-                const div = document.createElement('div');
-                const isUser = msg.sender === 'user';
-                const isAgent = msg.sender === 'agent';
-                div.className = 'message';
-                div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
-                const textSpan = document.createElement('span');
-                textSpan.textContent = msg.message;
-                div.appendChild(textSpan);
-
-                const timestampSpan = document.createElement('span');
-                timestampSpan.className = 'message-timestamp';
-                const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
-                timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
-                div.appendChild(timestampSpan);
-
-                chatBox.appendChild(div);
+                appendMessage(msg);
             });
 
             chatBox.scrollTop = chatBox.scrollHeight;
             clientName.textContent = username;
         })
         .catch(error => console.error('Error loading messages:', error));
+}
+
+// Helper function to append a message to the chat box
+function appendMessage(msg) {
+    const chatBox = document.getElementById('chatBox');
+    if (!chatBox) return;
+
+    const div = document.createElement('div');
+    const isUser = msg.sender === 'user';
+    const isAgent = msg.sender === 'agent';
+    div.className = 'message';
+    div.classList.add(isUser ? 'user-message' : isAgent ? 'agent-message' : 'ai-message');
+    const textSpan = document.createElement('span');
+    textSpan.textContent = msg.message;
+    div.appendChild(textSpan);
+
+    const timestampSpan = document.createElement('span');
+    timestampSpan.className = 'message-timestamp';
+    const timeMatch = msg.timestamp.match(/\d{2}:\d{2}/);
+    timestampSpan.textContent = timeMatch ? timeMatch[0] : msg.timestamp;
+    div.appendChild(timestampSpan);
+
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
 }
 
 function sendMessage() {
@@ -475,14 +557,29 @@ function sendMessage() {
         return;
     }
 
-    // Use Socket.IO to send the message instead of the /chat endpoint
+    // Optimistically add the message to the UI
+    const optimisticMessage = {
+        message: message,
+        sender: 'agent',
+        timestamp: new Date().toISOString()
+    };
+    appendMessage(optimisticMessage);
+
+    // Use Socket.IO to send the message
     socket.emit('agent_message', {
         convo_id: currentConversationId,
         message: message,
         channel: 'whatsapp',
+    }, (response) => {
+        if (response && response.error) {
+            console.error('Error sending message:', response.error);
+            alert('Failed to send message: ' + response.error);
+            // Remove the optimistic message if the send fails
+            loadConversation(currentConversationId);
+        }
     });
 
-    messageInput.value = ''; // Clear input immediately after sending
+    messageInput.value = ''; // Clear input after sending
 }
 
 // Hand back to AI
@@ -497,6 +594,7 @@ function handBackToAI(convoId) {
             enable_ai: true, // Indicate that AI should be re-enabled for this conversation
             clear_needs_agent: true // Indicate that this conversation no longer needs agent intervention
         }),
+        credentials: 'include'
     })
         .then(response => {
             if (!response.ok) {
@@ -510,7 +608,7 @@ function handBackToAI(convoId) {
                 socket.emit('refresh_conversations', { conversation_id: convoId });
                 if (currentConversationId === convoId) {
                     // Leave the Socket.IO room for this conversation
-                    socket.emit('leave_conversation', { conversation_id: convoId });
+                    socket.emit('leave_conversation', { convo_id: convoId });
                     currentConversationId = null;
                     const chatBox = document.getElementById('chatBox');
                     const clientName = document.getElementById('clientName');
@@ -531,9 +629,25 @@ function handBackToAI(convoId) {
 socket.on('new_message', (data) => {
     console.log('New message received:', data);
     if (data.convo_id === currentConversationId) {
-        loadConversation(currentConversationId); // Refresh the chat box
+        appendMessage({
+            message: data.message,
+            sender: data.sender,
+            timestamp: data.timestamp
+        });
     }
     fetchConversations();
+});
+
+socket.on('typing', (data) => {
+    if (data.convo_id === currentConversationId) {
+        const typingIndicator = document.getElementById('typingIndicator');
+        if (typingIndicator) {
+            typingIndicator.textContent = `${data.sender} is typing...`;
+            setTimeout(() => {
+                typingIndicator.textContent = '';
+            }, 3000);
+        }
+    }
 });
 
 socket.on('error', (data) => {
@@ -568,7 +682,9 @@ socket.on("reconnect_error", (error) => {
 
 // Poll visibility of a conversation
 function pollVisibility(conversationId) {
-    fetch(`/check-visibility?conversation_id=${conversationId}`)
+    fetch(`/check-visibility?conversation_id=${conversationId}`, {
+        credentials: 'include'
+    })
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}, StatusText: ${response.statusText}`);
