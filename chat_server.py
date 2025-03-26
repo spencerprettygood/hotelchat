@@ -917,8 +917,9 @@ def get_messages_for_conversation(convo_id):
 
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Check if the conversation exists and is visible
             c.execute(
-                "SELECT username FROM conversations WHERE id = %s",
+                "SELECT username, visible_in_conversations FROM conversations WHERE id = %s",
                 (convo_id,)
             )
             convo = c.fetchone()
@@ -926,6 +927,12 @@ def get_messages_for_conversation(convo_id):
                 logger.error(f"❌ Conversation not found: {convo_id}")
                 release_db_connection(conn)
                 return jsonify({"error": "Conversation not found"}), 404
+
+            if not convo["visible_in_conversations"]:
+                logger.info(f"Conversation {convo_id} is not visible")
+                release_db_connection(conn)
+                return jsonify({"username": convo["username"], "messages": []})
+
             username = convo["username"]
 
             if since:
@@ -958,9 +965,9 @@ def get_messages_for_conversation(convo_id):
             ]
             logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
 
-            # Cache the result for 10 seconds
+            # Cache the result for 300 seconds (5 minutes)
             cache_data = {"username": username, "messages": messages}
-            redis_setex_sync(cache_key, 10, json.dumps(cache_data))
+            redis_setex_sync(cache_key, 300, json.dumps(cache_data))
             release_db_connection(conn)
 
             logger.info(f"Finished /messages/{convo_id} in {time.time() - start_time:.2f} seconds")
