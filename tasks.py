@@ -45,7 +45,7 @@ celery_app.conf.update(
     task_ignore_result=True,  # Don't store task results to save memory
     worker_prefetch_multiplier=1,  # Reduce task prefetching to minimize memory usage
     task_acks_late=True,  # Acknowledge tasks after completion to prevent memory buildup
-    worker_concurrency=2,  # Limit the number of concurrent tasks per worker
+    worker_concurrency=int(os.getenv("CELERY_CONCURRENCY", 2)),  # Adjust based on CPU count; default to 2 for small instances
 )
 
 # Initialize Twilio client once at the module level to avoid creating new instances per task
@@ -65,7 +65,7 @@ SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com/")
 @celery_app.task
 def send_whatsapp_message_task(to_number, message, convo_id=None, username=None, chat_id=None):
     # Move the import inside the function to avoid circular import
-    from chat_server import logger, get_db_connection, release_db_connection
+    from chat_server import get_db_connection, release_db_connection
 
     try:
         if not to_number.startswith("whatsapp:"):
@@ -129,11 +129,12 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
     except Exception as e:
         logger.error(f"❌ Error sending WhatsApp message to {to_number}: {str(e)}")
         return False
-
+        
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
     from chat_server import get_db_connection, release_db_connection, ai_respond, logger, get_ai_enabled
     from openai import RateLimitError, APIError
+    import asyncio
 
     try:
         # Get or create conversation
@@ -223,9 +224,14 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
         response = None
         if should_respond:
             try:
-                # Run the async ai_respond function
-                response = asyncio.run(ai_respond(message_body, convo_id))
-                logger.info(f"AI response generated: {response}")
+                # Create a new event loop for this task
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    response = loop.run_until_complete(ai_respond(message_body, convo_id))
+                    logger.info(f"AI response generated: {response}")
+                finally:
+                    loop.close()
             except RateLimitError as e:
                 logger.error(f"❌ OpenAI RateLimitError in ai_respond for convo_id {convo_id}: {str(e)}")
                 response = (
