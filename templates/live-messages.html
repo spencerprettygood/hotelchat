@@ -457,7 +457,7 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
     <script>
-        // Explicitly specify the Socket.IO server URL with improved connection settings
+    // Explicitly specify the Socket.IO server URL with improved connection settings
         const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
             path: "/socket.io",
             transports: ["websocket", "polling"],
@@ -468,7 +468,7 @@
             randomizationFactor: 0.5,
             withCredentials: true
         });
-
+    
         let currentConversationId = null;
         let currentChatId = null;
         let currentAgent = null;
@@ -478,7 +478,7 @@
         let lastFetchedConversations = null; // Cache for conversation list
         let lastFetchedMessages = {}; // Cache for messages per conversation
         let lastMessageTimestamp = null; // Track the timestamp of the last message
-
+    
         // Debug Socket.IO connection status
         socket.on("connect", () => {
             isConnected = true;
@@ -499,12 +499,12 @@
                 }
             }, 5000); // Log every 5 seconds
         });
-
+    
         socket.on("connect_error", (error) => {
             console.error("Socket.IO connection error:", error);
             showToast("Failed to connect to server: " + error.message, "error");
         });
-
+    
         socket.on("disconnect", (reason) => {
             isConnected = false;
             console.warn("Socket.IO disconnected. Reason:", reason);
@@ -512,7 +512,7 @@
             // Start polling as a fallback
             startPollingForMessages();
         });
-
+    
         function showToast(message, type = "info") {
             const toastContainer = document.getElementById("toast-container");
             const toast = document.createElement("div");
@@ -521,14 +521,14 @@
             toast.setAttribute("aria-live", "assertive");
             toast.textContent = message;
             toastContainer.appendChild(toast);
-
+    
             setTimeout(() => toast.classList.add("show"), 100);
             setTimeout(() => {
                 toast.classList.remove("show");
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
         }
-
+    
         function addDateSeparator(dateStr) {
             const chatBox = document.getElementById("chat-box");
             const separator = document.createElement("div");
@@ -536,7 +536,7 @@
             separator.textContent = dateStr;
             chatBox.appendChild(separator);
         }
-
+    
         function appendMessage(msg, sender) {
             console.log("Appending message:", msg, "Sender:", sender);
             const chatBox = document.getElementById("chat-box");
@@ -549,45 +549,45 @@
                 return;
             }
             const dateStr = formatDateForSeparator(msg.timestamp);
-
+    
             if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
                 console.log("Adding date separator:", dateStr);
                 addDateSeparator(dateStr);
                 lastMessageDate = messageDate;
             }
-
+    
             const div = document.createElement("div");
             const isUser = sender === "user";
             const isAgent = sender === "agent";
             div.className = "message";
             div.classList.add(isUser ? "user-message" : isAgent ? "agent-message" : "ai-message");
-
+    
             const bubble = document.createElement("div");
             bubble.className = "message-bubble";
             bubble.textContent = msg.message;
             div.appendChild(bubble);
-
+    
             const meta = document.createElement("div");
             meta.className = "message-meta";
             const time = formatTimestamp(msg.timestamp);
             meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ""}`;
             div.appendChild(meta);
-
+    
             chatBox.appendChild(div);
             console.log("Message appended to chatBox:", div);
             chatBox.scrollTop = chatBox.scrollHeight;
-
+    
             // Update the last message timestamp
             if (!lastMessageTimestamp || new Date(msg.timestamp) > new Date(lastMessageTimestamp)) {
                 lastMessageTimestamp = msg.timestamp;
             }
         }
-
+    
         function formatTimestamp(timestamp) {
             const date = new Date(timestamp);
             return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
-
+    
         function formatDateForSeparator(timestamp) {
             let date = new Date(timestamp);
             if (isNaN(date.getTime())) {
@@ -604,7 +604,7 @@
             if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
             return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
         }
-
+    
         async function loadMessagesForConversation(convoId, sinceTimestamp = null) {
             const chatBox = document.getElementById("chat-box");
             const chatHeader = document.getElementById("chat-header");
@@ -616,7 +616,7 @@
                 if (sinceTimestamp) {
                     url += `?since=${encodeURIComponent(sinceTimestamp)}`;
                 }
-
+    
                 // Check if messages are cached and no sinceTimestamp is provided
                 if (!sinceTimestamp && lastFetchedMessages[convoId]) {
                     console.log("Using cached messages for convoId:", convoId);
@@ -625,7 +625,7 @@
                     lastMessageDate = null;
                     chatHeader.style.display = "flex";
                     chatTitle.textContent = data.username || "Unknown User";
-
+    
                     if (data.messages && data.messages.length > 0) {
                         data.messages.forEach(msg => {
                             appendMessage(msg, msg.sender);
@@ -635,8 +635,8 @@
                     }
                     return;
                 }
-
-                const response = await fetch(url);
+    
+                const response = await fetch(url, { credentials: 'include' });
                 if (!response.ok) {
                     const errorText = await response.text();
                     if (response.status === 503 || response.status === 429) {
@@ -646,7 +646,7 @@
                 }
                 const data = await response.json();
                 console.log("Messages fetched:", data);
-
+    
                 if (!sinceTimestamp) {
                     // Cache the messages only for full fetches
                     lastFetchedMessages[convoId] = data;
@@ -655,7 +655,7 @@
                     chatHeader.style.display = "flex";
                     chatTitle.textContent = data.username || "Unknown User";
                 }
-
+    
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
                         appendMessage(msg, msg.sender);
@@ -671,11 +671,11 @@
                 showToast("Failed to load messages: " + error.message, "error");
             }
         }
-
-        async function fetchConversations() {
+    
+        async function fetchConversations(preselectConvoId = null) {
             const conversationList = document.getElementById("conversation-list");
             try {
-                const response = await fetch("/all-whatsapp-messages");
+                const response = await fetch("/all-whatsapp-messages", { credentials: 'include' });
                 if (!response.ok) {
                     const errorText = await response.text();
                     if (response.status === 503 || response.status === 429) {
@@ -708,23 +708,42 @@
                         });
                         conversationList.appendChild(convoElement);
                     });
-                    // Auto-select the first conversation if none is selected
-                    if (!currentConversationId && data.conversations.length > 0) {
+    
+                    // Pre-select a conversation if preselectConvoId is provided
+                    if (preselectConvoId) {
+                        const convo = data.conversations.find(c => String(c.convo_id) === String(preselectConvoId));
+                        if (convo) {
+                            selectConversation(convo.convo_id, convo.chat_id);
+                        } else {
+                            showToast("Conversation not found", "error");
+                            // Select the first conversation as a fallback
+                            selectConversation(data.conversations[0].convo_id, data.conversations[0].chat_id);
+                        }
+                    } else if (!currentConversationId) {
+                        // Auto-select the first conversation if none is selected
                         selectConversation(data.conversations[0].convo_id, data.conversations[0].chat_id);
                     }
                 } else {
                     conversationList.innerHTML = "<p>No WhatsApp conversations found.</p>";
+                    const chatBox = document.getElementById("chat-box");
+                    chatBox.innerHTML = "<p>No conversations available. Please start a new conversation.</p>";
+                    const inputContainer = document.getElementById("input-container");
+                    inputContainer.style.display = "none";
                 }
             } catch (error) {
                 console.error("Error fetching conversations:", error);
                 conversationList.innerHTML = "<p>Failed to load conversations. Please try again later.</p>";
                 showToast("Failed to load conversations: " + error.message, "error");
+                const chatBox = document.getElementById("chat-box");
+                chatBox.innerHTML = "<p>Failed to load conversations. Please try again later.</p>";
+                const inputContainer = document.getElementById("input-container");
+                inputContainer.style.display = "none";
             }
         }
-
+    
         async function fetchSettings() {
             try {
-                const response = await fetch("/settings");
+                const response = await fetch("/settings", { credentials: 'include' });
                 if (!response.ok) {
                     if (response.status === 503 || response.status === 429) {
                         showToast("Server is under heavy load, please try again later", "error");
@@ -741,12 +760,12 @@
                 aiToggle.checked = true;
             }
         }
-
+    
         function selectConversation(convoId, chatId) {
             // Ensure convoId is a string
             convoId = String(convoId);
             console.log("selectConversation called with convoId:", convoId, "chatId:", chatId);
-
+    
             if (currentConversationId) {
                 console.log("Leaving previous conversation room:", currentConversationId);
                 socket.emit("leave_conversation", { conversation_id: currentConversationId }, () => {
@@ -755,7 +774,7 @@
             }
             currentConversationId = convoId;
             currentChatId = chatId;
-
+    
             // Ensure the client is connected before emitting join_conversation
             if (socket.connected) {
                 console.log("Emitting join_conversation for convoId:", convoId);
@@ -771,7 +790,7 @@
                     });
                 });
             }
-
+    
             const conversationList = document.getElementById("conversation-list");
             const items = conversationList.getElementsByClassName("conversation-item");
             for (let item of items) {
@@ -780,26 +799,27 @@
                     item.classList.add("active");
                 }
             }
-
+    
             lastMessageTimestamp = null; // Reset the last message timestamp
             loadMessagesForConversation(convoId);
-
+    
             const inputContainer = document.getElementById("input-container");
             inputContainer.style.display = "flex";
             const messageInput = document.getElementById("message-input");
             const sendButton = document.getElementById("send-button");
             sendButton.disabled = !messageInput.value.trim();
-
+            messageInput.focus();
+    
             // Start polling for new messages as a fallback
             startPollingForMessages();
         }
-
+    
         function sendMessage() {
             if (!currentConversationId) {
                 showToast("Please select a conversation to reply to", "error");
                 return;
             }
-
+    
             const messageInput = document.getElementById("message-input");
             const sendButton = document.getElementById("send-button");
             const message = messageInput.value.trim();
@@ -807,22 +827,29 @@
                 showToast("Please enter a message to send", "error");
                 return;
             }
-
+    
             const timestamp = new Date().toISOString();
             const messageKey = `agent:${message}:${timestamp}`;
             sentMessages.add(messageKey);
             console.log("Added to sentMessages:", messageKey);
-
+    
             socket.emit("agent_message", {
                 convo_id: currentConversationId,
                 message: message,
                 channel: "whatsapp",
+            }, (response) => {
+                if (response && response.error) {
+                    console.error("Error sending message:", response.error);
+                    showToast("Failed to send message: " + response.error, "error");
+                    // Remove the message from sentMessages to allow retry
+                    sentMessages.delete(messageKey);
+                }
             });
-
+    
             messageInput.value = "";
             sendButton.disabled = true;
         }
-
+    
         // Function to dynamically update the conversation list
         function updateConversationList(data) {
             console.log("Updating conversation list with data:", data);
@@ -830,7 +857,7 @@
             let convoItem = Array.from(conversationList.children).find(item =>
                 item.dataset.chatId === data.chat_id
             );
-
+    
             // Create or update the conversation item
             const isActive = convoItem && convoItem.classList.contains("active");
             if (!convoItem) {
@@ -840,7 +867,7 @@
                 convoItem.dataset.convoId = data.convo_id;
                 convoItem.dataset.chatId = data.chat_id;
             }
-
+    
             // Update the conversation item
             convoItem.innerHTML = `
                 <div class="profile-pic"></div>
@@ -855,16 +882,16 @@
             if (isActive) {
                 convoItem.classList.add("active");
             }
-
+    
             // Move the conversation to the top of the list
             conversationList.prepend(convoItem);
-
+    
             // Reattach the click event listener
             convoItem.addEventListener("click", () => {
                 console.log("Selecting conversation from updated list:", data.convo_id, data.chat_id);
                 selectConversation(data.convo_id, data.chat_id);
             });
-
+    
             // Update the cached conversations
             if (lastFetchedConversations) {
                 const convoIndex = lastFetchedConversations.findIndex(c => c.chat_id === data.chat_id);
@@ -882,7 +909,7 @@
                 }
             }
         }
-
+    
         // Fallback polling mechanism for new messages
         let pollingInterval = null;
         function startPollingForMessages() {
@@ -896,27 +923,32 @@
                 }
             }, 30000); // Poll every 30 seconds
         }
-
+    
         function stopPollingForMessages() {
             if (pollingInterval) {
                 clearInterval(pollingInterval);
                 pollingInterval = null;
             }
         }
-
+    
         document.addEventListener("DOMContentLoaded", () => {
             const dashboardSection = document.getElementById("dashboard");
             if (!dashboardSection) {
                 console.error("Required DOM element (dashboard) is missing.");
                 return;
             }
-
+    
             const chatBox = document.getElementById("chat-box");
             chatBox.innerHTML = "<p>Select a conversation to view messages.</p>";
-
-            fetchConversations();
+    
+            // Check for a convo_id in the URL query parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            const preselectConvoId = urlParams.get('convo_id');
+            console.log("Preselect convo_id from URL:", preselectConvoId);
+    
+            fetchConversations(preselectConvoId);
             fetchSettings();
-
+    
             const messageInput = document.getElementById("message-input");
             const sendButton = document.getElementById("send-button");
             if (messageInput && sendButton) {
@@ -931,7 +963,7 @@
                 });
                 sendButton.addEventListener("click", sendMessage);
             }
-
+    
             const emojiIcon = document.getElementById("emoji-icon");
             if (emojiIcon) {
                 const picker = document.createElement("emoji-picker");
@@ -940,11 +972,17 @@
                 picker.style.left = "20px";
                 picker.style.display = "none";
                 document.body.appendChild(picker);
-
+    
                 emojiIcon.addEventListener("click", () => {
                     picker.style.display = picker.style.display === "none" ? "block" : "none";
                 });
-
+    
+                emojiIcon.addEventListener("keypress", (e) => {
+                    if (e.key === "Enter" || e.keyCode === 13) {
+                        picker.style.display = picker.style.display === "none" ? "block" : "none";
+                    }
+                });
+    
                 picker.addEventListener("emoji-click", (event) => {
                     messageInput.value += event.detail.unicode;
                     messageInput.focus();
@@ -952,14 +990,20 @@
                     picker.style.display = "none";
                 });
             }
-
+    
             const attachIcon = document.getElementById("attach-icon");
             if (attachIcon) {
                 attachIcon.addEventListener("click", () => {
                     showToast("File attachment is not yet implemented", "info");
                 });
+    
+                attachIcon.addEventListener("keypress", (e) => {
+                    if (e.key === "Enter" || e.keyCode === 13) {
+                        showToast("File attachment is not yet implemented", "info");
+                    }
+                });
             }
-
+    
             // Handle logout button click
             const logoutButton = document.getElementById("logout-button");
             if (logoutButton) {
@@ -967,6 +1011,7 @@
                     fetch("/logout", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
+                        credentials: 'include'
                     })
                         .then((response) => response.json())
                         .then((data) => {
@@ -982,11 +1027,11 @@
                         });
                 });
             }
-
+    
             // Auto-logout after 1 hour of inactivity
             const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour in milliseconds
             let inactivityTimer;
-
+    
             function resetInactivityTimer() {
                 console.log("Resetting inactivity timer");
                 clearTimeout(inactivityTimer);
@@ -995,6 +1040,7 @@
                     fetch("/logout", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
+                        credentials: 'include'
                     })
                         .then((response) => response.json())
                         .then((data) => {
@@ -1011,16 +1057,16 @@
                         });
                 }, INACTIVITY_TIMEOUT);
             }
-
+    
             // Track user activity
             ["mousemove", "mousedown", "keypress", "scroll", "touchstart"].forEach((event) => {
                 document.addEventListener(event, resetInactivityTimer, { passive: true });
             });
-
+    
             // Start the timer on page load
             resetInactivityTimer();
         });
-
+    
         document.getElementById("ai-toggle").addEventListener("change", async (e) => {
             const aiEnabled = e.target.checked ? "1" : "0";
             try {
@@ -1028,6 +1074,7 @@
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ key: "ai_enabled", value: aiEnabled }),
+                    credentials: 'include'
                 });
                 if (!response.ok) {
                     if (response.status === 503 || response.status === 429) {
@@ -1044,31 +1091,31 @@
                 showToast(`Error updating AI settings: ${error.message}`, "error");
             }
         });
-
+    
         socket.on("status", (data) => {
             console.log("Received status event:", data);
             showToast(data.message, "info");
         });
-
+    
         socket.on("error", (data) => {
             console.error("Received error event:", data);
             showToast("Error: " + data.message, "error");
         });
-
+    
         socket.on("new_message", (data) => {
             console.log("Received new_message:", data);
             console.log("Current conversation ID:", currentConversationId);
             console.log("Socket connected status:", socket.connected);
-
+    
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
-
+    
             if (data.sender === "agent" && sentMessages.has(messageKey)) {
                 console.log("Skipping duplicate agent message:", messageKey);
                 sentMessages.delete(messageKey);
                 return;
             }
-
+    
             if (String(data.convo_id) === String(currentConversationId)) {
                 console.log("Appending message for convo_id:", data.convo_id);
                 appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
@@ -1087,24 +1134,24 @@
                 console.log(`Message not appended: convo_id ${data.convo_id} does not match currentConversationId ${currentConversationId}`);
             }
         });
-
+    
         socket.on("live_message", (data) => {
             console.log("Received live_message:", data);
             console.log("Socket connected status:", socket.connected);
-
+    
             const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
             console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
-
+    
             if (data.sender === "agent" && sentMessages.has(messageKey)) {
                 console.log("Skipping duplicate agent message:", messageKey);
                 sentMessages.delete(messageKey);
                 return;
             }
-
+    
             // Update the conversation list dynamically
             updateConversationList(data);
         });
-
+    
         socket.on("settings_updated", (settings) => {
             if ("ai_enabled" in settings) {
                 const aiToggle = document.getElementById("ai-toggle");
@@ -1112,10 +1159,12 @@
                 showToast(`AI has been ${settings.ai_enabled === "1" ? "enabled" : "disabled"}`, "success");
             }
         });
-
+    
         socket.on("reconnect", (attempt) => {
             console.log("Socket.IO reconnected after", attempt, "attempts");
-            fetchConversations();
+            const urlParams = new URLSearchParams(window.location.search);
+            const preselectConvoId = urlParams.get('convo_id');
+            fetchConversations(preselectConvoId);
             fetchSettings();
             if (currentConversationId) {
                 loadMessagesForConversation(currentConversationId);
@@ -1127,14 +1176,14 @@
             // Stop polling since we reconnected
             stopPollingForMessages();
         });
-
+    
         socket.on("reconnect_error", (error) => {
             console.error("Socket.IO reconnect error:", error);
             showToast("Failed to reconnect to server", "error");
             // Start polling as a fallback
             startPollingForMessages();
         });
-
+    
         socket.on("pong", (data) => {
             console.log("Received pong:", data);
         });
