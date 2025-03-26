@@ -49,6 +49,23 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('Message input not found for adding Enter key listener.');
     }
 
+    // Add event listener for the Live Messages button
+    const liveMessagesButton = document.getElementById('liveMessagesButton');
+    if (liveMessagesButton) {
+        liveMessagesButton.addEventListener('click', () => {
+            checkAuthStatus().then(isAuthenticated => {
+                if (isAuthenticated) {
+                    window.location.href = '/live-messages/';
+                } else {
+                    alert('You must be logged in to access the Live Messages page.');
+                    window.location.href = '/login';
+                }
+            });
+        });
+    } else {
+        console.error('Live Messages button not found.');
+    }
+
     // Auto-logout after 1 hour of inactivity
     const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour in milliseconds
     let inactivityTimer;
@@ -90,10 +107,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add channel filter UI (e.g., a dropdown)
     const channelFilter = document.createElement('select');
     channelFilter.id = 'channelFilter';
+    channelFilter.className = 'p-2 border rounded-lg';
     channelFilter.innerHTML = `
         <option value="">All Channels</option>
         <option value="whatsapp">WhatsApp</option>
-        <option value="test">Test</option>
+        <option value="instagram">Instagram</option>
     `;
     channelFilter.addEventListener('change', (e) => {
         filterByChannel(e.target.value);
