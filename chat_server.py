@@ -1589,9 +1589,9 @@ if __name__ == "__main__":
         logger.info("Shutting down application")
         db_pool.closeall()
         logger.info("✅ Closed database connection pool")
-        # Properly close the async Redis client
-        import asyncio
+        # Properly close the async Redis client using gevent's event loop
+        from gevent import get_hub
         async def close_redis():
             await redis_client.aclose()
-        asyncio.run(close_redis())
+        get_hub().loop.run_until_complete(close_redis())
         logger.info("✅ Closed Redis client")
