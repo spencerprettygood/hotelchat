@@ -94,6 +94,8 @@
                     <input type="checkbox" id="ai-toggle">
                     <span id="ai-toggle-error" class="text-red-500 ml-2 hidden"></span>
                 </div>
+                <!-- Add the "Go to Live Messages" button -->
+                <button id="liveMessagesButton" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Live Messages</button>
                 <button id="logout-button" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Logout</button>
             </div>
         </div>
@@ -107,13 +109,9 @@
         </div>
 
         <!-- Channel Filter -->
-        <div class="mb-4">
+        <div id="filter-section" class="mb-4">
             <label for="channelFilter" class="mr-2">Filter by Channel:</label>
-            <select id="channelFilter" onchange="filterByChannel(this.value)">
-                <option value="">All Channels</option>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="instagram">Instagram</option>
-            </select>
+            <!-- The channel filter dropdown is dynamically added by dashboard.js -->
         </div>
 
         <!-- Conversation List -->
@@ -127,6 +125,7 @@
         <div class="bg-white rounded-lg shadow p-4">
             <h2 class="text-lg font-semibold mb-2">Chat with <span id="clientName">Select a conversation</span></h2>
             <div id="chatBox" class="chat-box"></div>
+            <div id="typingIndicator" class="text-gray-500 mb-2"></div>
             <div class="mt-4">
                 <textarea id="messageInput" class="w-full p-2 border rounded-lg" rows="3" placeholder="Type your message..."></textarea>
                 <button onclick="sendMessage()" class="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Send</button>
