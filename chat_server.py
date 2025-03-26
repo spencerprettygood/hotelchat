@@ -1470,8 +1470,8 @@ def handle_join_conversation(data):
     try:
         conversation_id = data.get("conversation_id")
         if not conversation_id:
-            logger.error("❌ Missing conversation_id in join_conversation event")
-            emit("error", {"message": "Missing conversation ID"})
+            logger.warning("⚠️ Missing conversation_id in join_conversation event, ignoring request")
+            # Instead of emitting an error, silently return
             return
         join_room(str(conversation_id))
         logger.info(f"✅ Client joined room: {conversation_id}")
