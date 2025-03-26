@@ -1,4 +1,3 @@
-// dashboard.js
 const socket = io({
     transports: ["websocket", "polling"],
 });
@@ -33,16 +32,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (e.key === 'Enter' || e.keyCode === 13) {
                 e.preventDefault();
                 sendMessage();
-            }
-        });
-
-        // Add input listener for typing events
-        messageInput.addEventListener('input', () => {
-            if (currentConversationId) {
-                socket.emit('typing', {
-                    convo_id: currentConversationId,
-                    sender: 'agent'
-                });
             }
         });
     } else {
@@ -423,7 +412,11 @@ async function fetchConversations() {
             if (chatBox && clientName) {
                 chatBox.innerHTML = '';
                 clientName.textContent = 'Select a conversation';
+                updateChatControls(null); // Disable chat controls
             }
+        } else if (currentConversationId) {
+            // Update chat controls for the current conversation
+            updateChatControls(currentConversationId);
         }
     } catch (error) {
         console.error('Error fetching conversations:', error);
@@ -462,6 +455,48 @@ function filterByChannel(channel) {
     fetchConversations();
 }
 
+// Update chat controls based on conversation state
+async function updateChatControls(convoId) {
+    const messageInput = document.getElementById('messageInput');
+    const sendButton = document.querySelector('button[onclick="sendMessage()"]');
+    if (!messageInput || !sendButton) {
+        console.error('Message input or send button not found.');
+        return;
+    }
+
+    if (!convoId) {
+        // No conversation selected, disable chat controls
+        messageInput.disabled = true;
+        sendButton.disabled = true;
+        return;
+    }
+
+    try {
+        const response = await fetch('/conversations', {
+            method: 'GET',
+            credentials: 'include'
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const conversations = await response.json();
+        const convo = conversations.find(c => c.id === parseInt(convoId));
+        if (convo && convo.assigned_agent === currentAgent) {
+            // Agent has taken over, enable chat controls
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+        } else {
+            // Agent has not taken over, disable chat controls
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+        }
+    } catch (error) {
+        console.error('Error updating chat controls:', error);
+        messageInput.disabled = true;
+        sendButton.disabled = true;
+    }
+}
+
 // Take over a conversation
 function takeOverConversation(convoId) {
     fetch('/handoff', {
@@ -487,6 +522,7 @@ function takeOverConversation(convoId) {
                 fetchConversations();
                 if (currentConversationId === convoId) {
                     loadConversation(convoId);
+                    updateChatControls(convoId); // Enable chat controls after taking over
                 }
             } else {
                 alert('Error assigning chat: ' + data.error);
@@ -528,6 +564,9 @@ function loadConversation(convoId) {
 
             chatBox.scrollTop = chatBox.scrollHeight;
             clientName.textContent = username;
+
+            // Update chat controls based on conversation state
+            updateChatControls(convoId);
         })
         .catch(error => console.error('Error loading messages:', error));
 }
@@ -633,6 +672,7 @@ function handBackToAI(convoId) {
                     if (chatBox && clientName) {
                         chatBox.innerHTML = '';
                         clientName.textContent = 'Select a conversation';
+                        updateChatControls(null); // Disable chat controls
                     }
                 }
                 fetchConversations();
@@ -654,18 +694,6 @@ socket.on('new_message', (data) => {
         });
     }
     fetchConversations();
-});
-
-socket.on('typing', (data) => {
-    if (data.convo_id === currentConversationId) {
-        const typingIndicator = document.getElementById('typingIndicator');
-        if (typingIndicator) {
-            typingIndicator.textContent = `${data.sender} is typing...`;
-            setTimeout(() => {
-                typingIndicator.textContent = '';
-            }, 3000);
-        }
-    }
 });
 
 socket.on('error', (data) => {
