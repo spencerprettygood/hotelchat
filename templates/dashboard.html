@@ -23,17 +23,19 @@
             max-width: 70%;
         }
         .user-message {
-            background-color: #d1e7dd;
+            background-color: #ffffff; /* White */
             margin-left: auto;
             text-align: right;
         }
         .ai-message {
-            background-color: #f3f4f6;
-            margin-right: auto;
+            background-color: #d1e7dd; /* Green */
+            margin-left: auto;
+            text-align: right;
         }
         .agent-message {
-            background-color: #e0f2fe;
-            margin-right: auto;
+            background-color: #e0f2fe; /* Blue */
+            margin-left: auto;
+            text-align: right;
         }
         .message-timestamp {
             font-size: 0.75rem;
@@ -94,7 +96,6 @@
                     <input type="checkbox" id="ai-toggle">
                     <span id="ai-toggle-error" class="text-red-500 ml-2 hidden"></span>
                 </div>
-                <!-- Add the "Go to Live Messages" button -->
                 <button id="liveMessagesButton" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Live Messages</button>
                 <button id="logout-button" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Logout</button>
             </div>
