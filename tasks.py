@@ -1,4 +1,10 @@
 # tasks.py
+# Gevent monkey-patching at the very top
+import gevent
+from gevent import monkey
+monkey.patch_all()
+
+# Now proceed with other imports
 import os
 import sys
 import logging
@@ -129,7 +135,7 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
     except Exception as e:
         logger.error(f"❌ Error sending WhatsApp message to {to_number}: {str(e)}")
         return False
-        
+
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
     from chat_server import get_db_connection, release_db_connection, ai_respond, logger, get_ai_enabled
