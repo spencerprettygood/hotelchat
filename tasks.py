@@ -1,4 +1,3 @@
-# tasks.py
 import os
 import sys
 import logging
@@ -7,7 +6,8 @@ from celery import Celery
 from datetime import datetime, timezone
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
-import requests
+import aiohttp
+import asyncio
 
 # Add the project root directory to the Python path to fix import issues
 project_root = str(Path(__file__).parent.absolute())
@@ -15,13 +15,13 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Configure logging for Celery to preserve application log levels
-logger = logging.getLogger("chat_server")  # Match the logger name used in chat_server.py
+logger = logging.getLogger("chat_server")
 celery_logger = logging.getLogger("celery")
 handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-celery_logger.handlers = [handler]  # Replace default handlers
-celery_logger.setLevel(logging.INFO)  # Set Celery logger to INFO level
-celery_logger.propagate = False  # Prevent Celery logs from being handled by the root logger
+celery_logger.handlers = [handler]
+celery_logger.setLevel(logging.INFO)
+celery_logger.propagate = False
 
 # Configure Celery with Redis
 REDIS_URL = os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
@@ -34,7 +34,7 @@ celery_app = Celery(
     backend=REDIS_URL
 )
 
-# Optimize Celery configuration to reduce memory usage
+# Optimize Celery configuration
 celery_app.conf.update(
     task_serializer='json',
     accept_content=['json'],
@@ -42,13 +42,17 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
     broker_connection_retry_on_startup=True,
-    task_ignore_result=True,  # Don't store task results to save memory
-    worker_prefetch_multiplier=1,  # Reduce task prefetching to minimize memory usage
-    task_acks_late=True,  # Acknowledge tasks after completion to prevent memory buildup
-    worker_concurrency=int(os.getenv("CELERY_CONCURRENCY", 2)),  # Adjust based on CPU count; default to 2 for small instances
+    task_ignore_result=True,
+    worker_prefetch_multiplier=1,
+    task_acks_late=True,
+    worker_concurrency=int(os.getenv("CELERY_CONCURRENCY", 9)),  # Adjust based on CPU cores
+    task_routes={
+        'tasks.send_whatsapp_message_task': {'queue': 'whatsapp'},
+        'tasks.process_whatsapp_message': {'queue': 'default'},
+    },
 )
 
-# Initialize Twilio client once at the module level to avoid creating new instances per task
+# Initialize Twilio client
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
@@ -59,12 +63,29 @@ if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_NUMBER
 
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Server URL for emitting events (adjust based on your deployment)
+# Server URL for emitting events
 SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com/")
+
+# Helper function to notify the server asynchronously
+def notify_server_sync(url, data):
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async def make_request():
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=data, timeout=5) as response:
+                        response.raise_for_status()
+                        return await response.text()
+            loop.run_until_complete(make_request())
+            logger.info(f"✅ Notified server at {url}")
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"❌ Failed to notify server at {url}: {str(e)}")
 
 @celery_app.task
 def send_whatsapp_message_task(to_number, message, convo_id=None, username=None, chat_id=None):
-    # Move the import inside the function to avoid circular import
     from chat_server import get_db_connection, release_db_connection
 
     try:
@@ -74,18 +95,20 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
             logger.error(f"❌ TWILIO_WHATSAPP_NUMBER must start with 'whatsapp:': {TWILIO_WHATSAPP_NUMBER}")
             return False
 
+        logger.info(f"Attempting to send WhatsApp message to {to_number} from {TWILIO_WHATSAPP_NUMBER}: {message}")
         message_obj = twilio_client.messages.create(
             body=message,
             from_=TWILIO_WHATSAPP_NUMBER,
             to=to_number
         )
-        logger.info(f"✅ Sent WhatsApp message to {to_number}: {message_obj.sid}")
+        logger.info(f"✅ Sent WhatsApp message to {to_number}: SID={message_obj.sid}, Status={message_obj.status}")
 
         # If this task was called from process_whatsapp_message, log the AI response and notify the server
         if convo_id and username and chat_id:
             with get_db_connection() as conn:
                 try:
                     c = conn.cursor()
+                    c.execute("BEGIN")
                     # Log the AI message
                     ai_timestamp = datetime.now(timezone.utc).isoformat()
                     c.execute(
@@ -98,33 +121,27 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
                         "UPDATE conversations SET last_updated = %s WHERE id = %s",
                         (ai_timestamp, convo_id)
                     )
-                    conn.commit()
+                    c.execute("COMMIT")
                 finally:
                     release_db_connection(conn)
 
             # Notify the Flask-SocketIO server to emit the new_message event
-            try:
-                response = requests.post(
-                    f"{SERVER_URL}/emit_new_message",
-                    json={
-                        "convo_id": str(convo_id),
-                        "message": message,
-                        "sender": "ai",
-                        "channel": "whatsapp",
-                        "timestamp": ai_timestamp,
-                        "chat_id": chat_id,
-                        "username": username
-                    },
-                    timeout=5
-                )
-                response.raise_for_status()
-                logger.info(f"✅ Notified server to emit new_message for convo_id {convo_id}")
-            except requests.RequestException as e:
-                logger.error(f"❌ Failed to notify server for new_message: {str(e)}")
+            notify_server_sync(
+                f"{SERVER_URL}/emit_new_message",
+                {
+                    "convo_id": str(convo_id),
+                    "message": message,
+                    "sender": "ai",
+                    "channel": "whatsapp",
+                    "timestamp": ai_timestamp,
+                    "chat_id": chat_id,
+                    "username": username
+                }
+            )
 
         return True
     except TwilioRestException as e:
-        logger.error(f"❌ Failed to send WhatsApp message to {to_number}: {str(e)}")
+        logger.error(f"❌ Failed to send WhatsApp message to {to_number}: Code={e.code}, Message={e.msg}, Status={e.status}")
         return False
     except Exception as e:
         logger.error(f"❌ Error sending WhatsApp message to {to_number}: {str(e)}")
@@ -132,15 +149,16 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
 
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
-    from chat_server import get_db_connection, release_db_connection, ai_respond, logger, get_ai_enabled
+    from chat_server import get_db_connection, release_db_connection, ai_respond_sync, logger, get_ai_enabled
     from openai import RateLimitError, APIError
-    import asyncio
 
     try:
-        # Get or create conversation
+        # Get or create conversation and log user message in a single transaction
         with get_db_connection() as conn:
             try:
                 c = conn.cursor()
+                c.execute("BEGIN")
+                # Get or create conversation
                 c.execute(
                     "SELECT id, username, ai_enabled, needs_agent FROM conversations WHERE chat_id = %s AND channel = %s",
                     (chat_id, "whatsapp")
@@ -163,42 +181,29 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                         (chat_id, "whatsapp", username, ai_enabled, needs_agent, current_timestamp)
                     )
                     convo_id = c.fetchone()[0]
-                conn.commit()
-            finally:
-                release_db_connection(conn)
-
-        # Log user message
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
+                # Log user message
                 c.execute(
                     "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
                     "VALUES (%s, %s, %s, %s, %s)",
                     (convo_id, username, message_body, "user", user_timestamp)
                 )
-                conn.commit()
+                c.execute("COMMIT")
             finally:
                 release_db_connection(conn)
 
         # Notify the Flask-SocketIO server to emit the new_message event for the user's message
-        try:
-            response = requests.post(
-                f"{SERVER_URL}/emit_new_message",
-                json={
-                    "convo_id": str(convo_id),
-                    "message": message_body,
-                    "sender": "user",
-                    "channel": "whatsapp",
-                    "timestamp": user_timestamp,
-                    "chat_id": chat_id,
-                    "username": username
-                },
-                timeout=5
-            )
-            response.raise_for_status()
-            logger.info(f"✅ Notified server to emit new_message for user message in convo_id {convo_id}")
-        except requests.RequestException as e:
-            logger.error(f"❌ Failed to notify server for user new_message: {str(e)}")
+        notify_server_sync(
+            f"{SERVER_URL}/emit_new_message",
+            {
+                "convo_id": str(convo_id),
+                "message": message_body,
+                "sender": "user",
+                "channel": "whatsapp",
+                "timestamp": user_timestamp,
+                "chat_id": chat_id,
+                "username": username
+            }
+        )
 
         # Determine language and check for help keywords
         language = "en" if message_body.strip().upper().startswith("EN ") else "es"
@@ -224,14 +229,8 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
         response = None
         if should_respond:
             try:
-                # Create a new event loop for this task
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    response = loop.run_until_complete(ai_respond(message_body, convo_id))
-                    logger.info(f"AI response generated: {response}")
-                finally:
-                    loop.close()
+                response = ai_respond_sync(message_body, convo_id)
+                logger.info(f"AI response generated: {response}")
             except RateLimitError as e:
                 logger.error(f"❌ OpenAI RateLimitError in ai_respond for convo_id {convo_id}: {str(e)}")
                 response = (
@@ -251,14 +250,10 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     finally:
                         release_db_connection(conn)
                 # Notify the server to refresh conversations
-                try:
-                    requests.post(
-                        f"{SERVER_URL}/refresh_conversations",
-                        json={"conversation_id": str(convo_id)},
-                        timeout=5
-                    )
-                except requests.RequestException as e:
-                    logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                notify_server_sync(
+                    f"{SERVER_URL}/refresh_conversations",
+                    {"conversation_id": str(convo_id)}
+                )
             except APIError as e:
                 logger.error(f"❌ OpenAI APIError in ai_respond for convo_id {convo_id}: {str(e)}")
                 response = (
@@ -278,14 +273,10 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     finally:
                         release_db_connection(conn)
                 # Notify the server to refresh conversations
-                try:
-                    requests.post(
-                        f"{SERVER_URL}/refresh_conversations",
-                        json={"conversation_id": str(convo_id)},
-                        timeout=5
-                    )
-                except requests.RequestException as e:
-                    logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                notify_server_sync(
+                    f"{SERVER_URL}/refresh_conversations",
+                    {"conversation_id": str(convo_id)}
+                )
             except Exception as e:
                 logger.error(f"❌ Unexpected error in ai_respond for convo_id {convo_id}: {str(e)}")
                 response = (
@@ -305,14 +296,10 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     finally:
                         release_db_connection(conn)
                 # Notify the server to refresh conversations
-                try:
-                    requests.post(
-                        f"{SERVER_URL}/refresh_conversations",
-                        json={"conversation_id": str(convo_id)},
-                        timeout=5
-                    )
-                except requests.RequestException as e:
-                    logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+                notify_server_sync(
+                    f"{SERVER_URL}/refresh_conversations",
+                    {"conversation_id": str(convo_id)}
+                )
         elif help_triggered:
             response = (
                 "I’m sorry, I couldn’t process that. I’ll connect you with a team member to assist you."
@@ -331,14 +318,10 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                 finally:
                     release_db_connection(conn)
             # Notify the server to refresh conversations
-            try:
-                requests.post(
-                    f"{SERVER_URL}/refresh_conversations",
-                    json={"conversation_id": str(convo_id)},
-                    timeout=5
-                )
-            except requests.RequestException as e:
-                logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+            notify_server_sync(
+                f"{SERVER_URL}/refresh_conversations",
+                {"conversation_id": str(convo_id)}
+            )
         else:
             logger.info(f"AI response skipped for convo_id {convo_id}")
             return
