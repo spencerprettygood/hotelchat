@@ -1628,6 +1628,8 @@ def handle_join_conversation(data):
     room = f"conversation_{convo_id}"
     join_room(room)
     logger.info(f"Agent joined room: {room}")
+    # Emit a test message to confirm the client is in the room
+    emit("room_joined", {"room": room, "convo_id": convo_id}, room=room)
 
 @socketio.on("leave_conversation")
 def handle_leave_conversation(data):
