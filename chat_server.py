@@ -30,6 +30,9 @@ from functools import lru_cache
 from openai import AsyncOpenAI, RateLimitError, APIError, AuthenticationError  # Added AuthenticationError
 import redis.asyncio as redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
+from langdetect import detect, DetectorFactory
+
+DetectorFactory.seed = 0
 
 # Set up logging with both stream and file handlers
 logging.basicConfig(level=logging.INFO)
@@ -307,11 +310,12 @@ def init_db():
                 booking_intent INTEGER DEFAULT 0,
                 handoff_notified INTEGER DEFAULT 0,
                 visible_in_conversations INTEGER DEFAULT 1,
+                language TEXT DEFAULT 'en',  -- New column for language
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP
             )''')
             logger.info("Created conversations table")
         else:
-            # Migration: Add needs_agent column if it doesn't exist
+            # Migration: Add needs_agent and language columns if they don't exist
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
@@ -322,6 +326,17 @@ def init_db():
             if not needs_agent_exists:
                 c.execute("ALTER TABLE conversations ADD COLUMN needs_agent INTEGER DEFAULT 0")
                 logger.info("Added needs_agent column to conversations table")
+
+            c.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns 
+                    WHERE table_name = 'conversations' AND column_name = 'language'
+                )
+            """)
+            language_exists = c.fetchone()[0]
+            if not language_exists:
+                c.execute("ALTER TABLE conversations ADD COLUMN language TEXT DEFAULT 'en'")
+                logger.info("Added language column to conversations table")
 
         if not messages_table_exists:
             c.execute('''CREATE TABLE messages (
@@ -399,9 +414,9 @@ def init_db():
                 logger.info("ℹ️ Inserting test conversations")
                 test_timestamp1 = "2025-03-22T00:00:00Z"
                 c.execute(
-                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                    ('TestUser1', '123456789', 'whatsapp', None, 1, 0, 0, test_timestamp1)
+                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated, language) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    ('TestUser1', '123456789', 'whatsapp', None, 1, 0, 0, test_timestamp1, 'en')
                 )
                 convo_id1 = c.fetchone()['id']
                 c.execute(
@@ -410,14 +425,14 @@ def init_db():
                 )
                 test_timestamp2 = "2025-03-22T00:00:01Z"
                 c.execute(
-                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                    ('TestUser2', '987654321', 'whatsapp', None, 1, 0, 0, test_timestamp2)
+                    "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated, language) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    ('TestUser2', '987654321', 'whatsapp', None, 1, 0, 0, test_timestamp2, 'es')
                 )
                 convo_id2 = c.fetchone()['id']
                 c.execute(
                     "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                    (convo_id2, 'TestUser2', 'Can I book a room?', 'user', test_timestamp2)
+                    (convo_id2, 'TestUser2', 'Hola, ¿puedo reservar una habitación?', 'user', test_timestamp2)
                 )
                 logger.info("Inserted test conversations")
 
@@ -949,11 +964,75 @@ def check_availability(check_in, check_out):
 OPENAI_CONCURRENT_LIMIT = 20  # Adjusted based on typical OpenAI rate limits
 openai_semaphore = asyncio.Semaphore(OPENAI_CONCURRENT_LIMIT)
 
+def detect_language(message, convo_id):
+    start_time = time.time()
+    logger.info(f"Starting detect_language for convo_id {convo_id}")
+    try:
+        # First, check if the conversation has a stored language
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT language FROM conversations WHERE id = %s",
+                (convo_id,)
+            )
+            result = c.fetchone()
+            if result and result['language']:
+                logger.info(f"Using stored language for convo_id {convo_id}: {result['language']}")
+                release_db_connection(conn)
+                return result['language']
+
+        # If no stored language, detect the language of the current message
+        detected_lang = detect(message)
+        logger.info(f"Detected language for message '{message}': {detected_lang}")
+
+        # If detection confidence is low, check conversation history
+        if detected_lang not in ['en', 'es']:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "SELECT message FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 5",
+                    (convo_id,)
+                )
+                messages = c.fetchall()
+                release_db_connection(conn)
+                for msg in messages:
+                    try:
+                        hist_lang = detect(msg['message'])
+                        if hist_lang in ['en', 'es']:
+                            detected_lang = hist_lang
+                            logger.info(f"Using language from history for convo_id {convo_id}: {detected_lang}")
+                            break
+                    except:
+                        continue
+
+        # Default to English if still undetermined
+        if detected_lang not in ['en', 'es']:
+            detected_lang = 'en'
+            logger.info(f"Defaulting to English for convo_id {convo_id}")
+
+        # Store the detected language in the conversations table
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "UPDATE conversations SET language = %s WHERE id = %s",
+                (detected_lang, convo_id)
+            )
+            conn.commit()
+            release_db_connection(conn)
+            logger.info(f"Stored detected language for convo_id {convo_id}: {detected_lang}")
+
+        logger.info(f"Finished detect_language in {time.time() - start_time:.2f} seconds")
+        return detected_lang
+    except Exception as e:
+        logger.error(f"Error in detect_language for convo_id {convo_id}: {str(e)}")
+        return 'en'  # Default to English on error
+
+# Update the ai_respond function
 async def ai_respond(message, convo_id):
     start_time = time.time()
     logger.info(f"Starting ai_respond for convo_id {convo_id}: {message}")
     try:
-        # Detect language using the dedicated function
+        # Detect language
         language = detect_language(message, convo_id)
         is_spanish = (language == "es")
 
@@ -964,50 +1043,80 @@ async def ai_respond(message, convo_id):
             logger.info(f"Returning cached response for message: {message}")
             return cached_response
 
-        # Date parsing logic
+        # Enhanced date parsing logic
         date_match = re.search(
-            r'(?:are rooms available|availability|do you have any rooms|rooms available|what about|'
-            r'¿hay habitaciones disponibles?|disponibilidad|¿tienen habitaciones?|habitaciones disponibles?|qué tal)?\s*'
+            r'(?:are rooms available|availability|do you have any rooms|rooms available|what about|next week|this|'
+            r'¿hay habitaciones disponibles?|disponibilidad|¿tienen habitaciones?|habitaciones disponibles?|qué tal|la próxima semana|este)?\s*'
             r'(?:from|on|de|el)?\s*'
             r'(?:(?:([A-Za-z]{3,9})\s+(\d{1,2}(?:st|nd|rd|th)?))|(?:(\d{1,2})\s*(?:de)?\s*([A-Za-z]{3,9})))'
             r'(?:\s*(?:to|a|al|until|hasta)?\s*'
             r'(?:(?:([A-Za-z]{3,9})\s+(\d{1,2}(?:st|nd|rd|th)?))|(?:(\d{1,2})\s*(?:de)?\s*([A-Za-z]{3,9}))))?',
             message.lower()
         )
-        if date_match:
-            month1_en, day1_en, day1_es, month1_es, month2_en, day2_en, day2_es, month2_es = date_match.groups()
-            current_year = datetime.now().year
+        if date_match or "next week" in message.lower() or "la próxima semana" in message.lower() or "this" in message.lower() or "este" in message.lower():
             spanish_to_english_months = {
                 "enero": "January", "febrero": "February", "marzo": "March", "abril": "April",
                 "mayo": "May", "junio": "June", "julio": "July", "agosto": "August",
                 "septiembre": "September", "octubre": "October", "noviembre": "November", "diciembre": "December"
             }
+            current_year = datetime.now().year
+            today = datetime.now()
 
-            if month1_en and day1_en:
-                check_in_str = f"{month1_en} {day1_en}"
-                check_in_str = re.sub(r'(st|nd|rd|th)', '', check_in_str).strip()
-                check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
-            elif day1_es and month1_es:
-                month1_en = spanish_to_english_months.get(month1_es.lower(), month1_es)
-                check_in_str = f"{month1_en} {day1_es}"
-                check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
+            if "next week" in message.lower() or "la próxima semana" in message.lower():
+                # Calculate next week's Monday as check-in and Sunday as check-out
+                days_until_monday = (7 - today.weekday()) % 7 or 7
+                check_in = today + timedelta(days=days_until_monday)
+                check_out = check_in + timedelta(days=6)
+            elif "this" in message.lower() or "este" in message.lower():
+                # Parse "this Friday" or "este viernes"
+                day_match = re.search(r'(this|este)\s*(monday|lunes|Tuesday|martes|wednesday|miércoles|thursday|jueves|friday|viernes|saturday|sábado|sunday|domingo)', message.lower())
+                if day_match:
+                    day_name = day_match.group(2)
+                    day_mapping = {
+                        "monday": 0, "lunes": 0, "tuesday": 1, "martes": 1, "wednesday": 2, "miércoles": 2,
+                        "thursday": 3, "jueves": 3, "friday": 4, "viernes": 4, "saturday": 5, "sábado": 5,
+                        "sunday": 6, "domingo": 6
+                    }
+                    target_day = day_mapping.get(day_name)
+                    days_until_target = (target_day - today.weekday()) % 7
+                    if days_until_target == 0 and today.hour >= 12:
+                        days_until_target = 7  # If it's already that day past noon, assume next week
+                    check_in = today + timedelta(days=days_until_target)
+                    check_out = check_in + timedelta(days=1)
+                else:
+                    result = "I’m not sure which day you meant by 'this'. Can you specify, like 'this Friday' or 'este viernes'?" if not is_spanish else \
+                             "No estoy seguro de qué día te refieres con 'este'. ¿Puedes especificar, como 'este viernes' o 'this Friday'?"
+                    await redis_client.setex(cache_key, 3600, result)
+                    logger.info(f"Finished ai_respond (ambiguous 'this' date) in {time.time() - start_time:.2f} seconds")
+                    return result
             else:
-                result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if not is_spanish else \
-                       "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
-                await redis_client.setex(cache_key, 3600, result)  # Cache for 1 hour
-                logger.info(f"Finished ai_respond (date error) in {time.time() - start_time:.2f} seconds")
-                return result
+                month1_en, day1_en, day1_es, month1_es, month2_en, day2_en, day2_es, month2_es = date_match.groups()
 
-            if month2_en and day2_en:
-                check_out_str = f"{month2_en} {day2_en}"
-                check_out_str = re.sub(r'(st|nd|rd|th)', '', check_out_str).strip()
-                check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
-            elif day2_es and month2_es:
-                month2_en = spanish_to_english_months.get(month2_es.lower(), month2_es)
-                check_out_str = f"{month2_en} {day2_es}"
-                check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
-            else:
-                check_out = check_in + timedelta(days=1)
+                if month1_en and day1_en:
+                    check_in_str = f"{month1_en} {day1_en}"
+                    check_in_str = re.sub(r'(st|nd|rd|th)', '', check_in_str).strip()
+                    check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
+                elif day1_es and month1_es:
+                    month1_en = spanish_to_english_months.get(month1_es.lower(), month1_es)
+                    check_in_str = f"{month1_en} {day1_es}"
+                    check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
+                else:
+                    result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if not is_spanish else \
+                           "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
+                    await redis_client.setex(cache_key, 3600, result)
+                    logger.info(f"Finished ai_respond (date error) in {time.time() - start_time:.2f} seconds")
+                    return result
+
+                if month2_en and day2_en:
+                    check_out_str = f"{month2_en} {day2_en}"
+                    check_out_str = re.sub(r'(st|nd|rd|th)', '', check_out_str).strip()
+                    check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
+                elif day2_es and month2_es:
+                    month2_en = spanish_to_english_months.get(month2_es.lower(), month2_es)
+                    check_out_str = f"{month2_en} {day2_es}"
+                    check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
+                else:
+                    check_out = check_in + timedelta(days=1)
 
             if check_out < check_in:
                 check_out = check_out.replace(year=check_out.year + 1)
@@ -1033,8 +1142,8 @@ async def ai_respond(message, convo_id):
                         c.execute("COMMIT")
                     finally:
                         release_db_connection(conn)
-                response = f"{availability}. Would you like to book?" if not is_spanish else \
-                           f"{availability.replace('are available', 'están disponibles')}. ¿Te gustaría reservar?"
+                response = f"{availability} Would you like to proceed with the booking? I’ll need to connect you with a team member to finalize it." if not is_spanish else \
+                           f"{availability.replace('are available', 'están disponibles')} ¿Te gustaría proceder con la reserva? Necesitaré conectarte con un miembro del equipo para finalizarla."
             else:
                 response = availability if not is_spanish else \
                            availability.replace("are not available", "no están disponibles").replace("fully booked", "completamente reservado")
@@ -1042,7 +1151,51 @@ async def ai_respond(message, convo_id):
             logger.info(f"Finished ai_respond (availability check) in {time.time() - start_time:.2f} seconds")
             return response
 
-        if "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
+        # Check for booking intent with partial information
+        booking_match = re.search(
+            r'(?:book|booking|reserve|reservar)\s*(?:a\s*)?(room|habitación)?\s*(?:for\s*)?(\d+)\s*(?:people|personas|guests|huéspedes)?',
+            message.lower()
+        )
+        if booking_match or "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
+            # Check if we have partial booking info
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "SELECT booking_intent FROM conversations WHERE id = %s",
+                    (convo_id,)
+                )
+                result = c.fetchone()
+                booking_intent = result['booking_intent'] if result else None
+                release_db_connection(conn)
+
+            if booking_match:
+                _, num_guests = booking_match.groups()
+                if num_guests:
+                    # Store the number of guests in booking_intent
+                    booking_intent = f"guests:{num_guests}" if not booking_intent else f"{booking_intent},guests:{num_guests}"
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE conversations SET booking_intent = %s WHERE id = %s",
+                            (booking_intent, convo_id)
+                        )
+                        conn.commit()
+                        release_db_connection(conn)
+
+            if not booking_intent or "guests" not in booking_intent or "to" not in booking_intent:
+                missing_info = []
+                if not booking_intent or "to" not in booking_intent:
+                    missing_info.append("your preferred dates (like March 10 to March 15)" if not is_spanish else "tus fechas preferidas (como del 10 al 15 de marzo)")
+                if not booking_intent or "guests" not in booking_intent:
+                    missing_info.append("the number of guests" if not is_spanish else "el número de huéspedes")
+                missing_info.append("the room type you’d like (Standard, Deluxe, or Suite)" if not is_spanish else "el tipo de habitación que te gustaría (Estándar, Deluxe o Suite)")
+
+                result = f"I’d love to help with your booking! Can you tell me {', '.join(missing_info)}?" if not is_spanish else \
+                         f"¡Me encantaría ayudarte con tu reserva! ¿Me puedes decir {', '.join(missing_info)}?"
+                await redis_client.setex(cache_key, 3600, result)
+                logger.info(f"Finished ai_respond (partial booking info) in {time.time() - start_time:.2f} seconds")
+                return result
+
             with get_db_connection() as conn:
                 try:
                     c = conn.cursor()
@@ -1065,8 +1218,8 @@ async def ai_respond(message, convo_id):
                         response.raise_for_status()
             except aiohttp.ClientError as e:
                 logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
-            result = "I’ll connect you with a team member to assist with your booking." if not is_spanish else \
-                   "Te conectaré con un miembro del equipo para que te ayude con tu reserva."
+            result = "I have all the details for your booking! I’ll connect you with a team member to finalize it for you." if not is_spanish else \
+                   "¡Tengo todos los detalles para tu reserva! Te conectaré con un miembro del equipo para que la finalice por ti."
             await redis_client.setex(cache_key, 3600, result)
             logger.info(f"Finished ai_respond (booking intent, needs agent) in {time.time() - start_time:.2f} seconds")
             return result
@@ -1093,7 +1246,7 @@ async def ai_respond(message, convo_id):
 
         # Build conversation history
         conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT + "\nYou are a hotel customer service and sales agent for Amapola Resort. Use the provided business information and Q&A to answer guest questions. Maintain conversation context. Detect the user's language (English or Spanish) based on their input and respond in the same language. If you don’t know the answer or the query is complex, respond with the appropriate escalation message in the user's language. Do not mention room types or pricing unless specifically asked."}
+            {"role": "system", "content": TRAINING_DOCUMENT}
         ]
         for msg in messages:
             message_text, sender, timestamp = msg['message'], msg['sender'], msg['timestamp']
@@ -1107,10 +1260,10 @@ async def ai_respond(message, convo_id):
             for attempt in range(retry_attempts):
                 try:
                     response = await openai_client.chat.completions.create(
-                        model="gpt-4o-mini",  # Ensure this model is available in your OpenAI account
+                        model="gpt-4o",  # Upgraded to gpt-4o for better quality
                         messages=conversation_history,
-                        max_tokens=150,
-                        temperature=0.7  # Explicitly set temperature for consistency
+                        max_tokens=300,  # Increased for more natural responses
+                        temperature=0.7
                     )
                     ai_reply = response.choices[0].message.content.strip()
                     logger.info(f"✅ AI reply: {ai_reply}")
@@ -1333,30 +1486,6 @@ async def ai_respond(message, convo_id):
         await redis_client.setex(cache_key, 3600, result)
         logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
         return result
-
-def detect_language(message, convo_id):
-    start_time = time.time()
-    logger.info(f"Starting detect_language for convo_id {convo_id}")
-    spanish_keywords = ["hola", "gracias", "reservar", "habitación", "disponibilidad", "marzo", "abril"]
-    if any(keyword in message.lower() for keyword in spanish_keywords):
-        logger.info(f"Finished detect_language (Spanish detected) in {time.time() - start_time:.2f} seconds")
-        return "es"
-    
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute(
-            "SELECT message FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 5",
-            (convo_id,)
-        )
-        messages = c.fetchall()
-        release_db_connection(conn)
-        for msg in messages:
-            if any(keyword in msg['message'].lower() for keyword in spanish_keywords):
-                logger.info(f"Finished detect_language (Spanish detected in history) in {time.time() - start_time:.2f} seconds")
-                return "es"
-    
-    logger.info(f"Finished detect_language (English detected) in {time.time() - start_time:.2f} seconds")
-    return "en"
 
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
