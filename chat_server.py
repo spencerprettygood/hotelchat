@@ -67,12 +67,13 @@ redis_client = redis.Redis.from_url(
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
 CORS(app)
+
 socketio = SocketIO(
     app,
     cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
     async_mode="gevent",
-    ping_timeout=120,
-    ping_interval=30,
+    ping_timeout=60,  # Reduced from 120
+    ping_interval=15,  # Reduced from 30
     logger=True,
     engineio_logger=True
 )
@@ -485,11 +486,12 @@ def log_message(convo_id, username, message, sender):
                 c.execute("BEGIN")
                 c.execute(
                     "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
-                    "VALUES (%s, %s, %s, %s, %s)",
+                    "VALUES (%s, %s, %s, %s, %s) RETURNING id",
                     (convo_id, username, message, sender, timestamp)
                 )
+                message_id = c.fetchone()['id']
                 c.execute("COMMIT")
-                logger.info(f"✅ Logged message for convo_id {convo_id}: {message} (Sender: {sender})")
+                logger.info(f"✅ Logged message for convo_id {convo_id}, message_id {message_id}: {message} (Sender: {sender})")
                 release_db_connection(conn)
                 return timestamp
             except Exception as e:
@@ -810,6 +812,13 @@ def get_all_whatsapp_messages():
     start_time = time.time()
     logger.info("Starting /all-whatsapp-messages endpoint")
     try:
+        # Check Redis cache first
+        cache_key = "all_whatsapp_conversations"
+        cached_conversations = await redis_client.get(cache_key)
+        if cached_conversations:
+            logger.info("Returning cached WhatsApp conversations")
+            return jsonify({"conversations": json.loads(cached_conversations)})
+
         with get_db_connection() as conn:
             c = conn.cursor()
             logger.info("Executing query to fetch conversations")
@@ -830,6 +839,8 @@ def get_all_whatsapp_messages():
                 }
                 for convo in conversations
             ]
+            # Cache the result for 10 seconds
+            await redis_client.setex(cache_key, 10, json.dumps(result))
             release_db_connection(conn)
             logger.info(f"Finished /all-whatsapp-messages in {time.time() - start_time:.2f} seconds")
             return jsonify({"conversations": result})
@@ -858,6 +869,17 @@ def get_messages_for_conversation(convo_id):
             except ValueError:
                 logger.error(f"❌ Invalid 'since' timestamp format: {since}")
                 return jsonify({"error": "Invalid 'since' timestamp format"}), 400
+
+        # Check Redis cache first
+        cache_key = f"messages:{convo_id}:{since or 'full'}"
+        cached_messages = await redis_client.get(cache_key)
+        if cached_messages:
+            logger.info(f"Returning cached messages for convo_id {convo_id}")
+            cached_data = json.loads(cached_messages)
+            return jsonify({
+                "username": cached_data["username"],
+                "messages": cached_data["messages"]
+            })
 
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -901,6 +923,10 @@ def get_messages_for_conversation(convo_id):
                 for msg in c.fetchall()
             ]
             logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
+
+            # Cache the result for 10 seconds
+            cache_data = {"username": username, "messages": messages}
+            await redis_client.setex(cache_key, 10, json.dumps(cache_data))
             release_db_connection(conn)
 
             logger.info(f"Finished /messages/{convo_id} in {time.time() - start_time:.2f} seconds")
@@ -1486,6 +1512,25 @@ async def ai_respond(message, convo_id):
         await redis_client.setex(cache_key, 3600, result)
         logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
         return result
+
+def ai_respond_sync(message, convo_id):
+    try:
+        # Create a new event loop for this call
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Run the async ai_respond function
+            result = loop.run_until_complete(ai_respond(message, convo_id))
+            return result
+        finally:
+            # Close the loop after use
+            loop.close()
+    except Exception as e:
+        logger.error(f"❌ Error in ai_respond_sync for convo_id {convo_id}: {str(e)}")
+        return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
+
+# Export both ai_respond and ai_respond_sync for use in tasks.py
+__all__ = ['ai_respond', 'ai_respond_sync']
 
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp():
