@@ -1571,7 +1571,6 @@ async def handle_agent_message(data):
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
         
-# Main execution block
 if __name__ == "__main__":
     try:
         logger.info("✅ Starting Flask-SocketIO server")
@@ -1586,13 +1585,13 @@ if __name__ == "__main__":
         logger.error(f"❌ Failed to start server: {str(e)}")
         raise
     finally:
-    # Cleanup resources on shutdown
-    logger.info("Shutting down application")
-    db_pool.closeall()
-    logger.info("✅ Closed database connection pool")
-    # Properly close the async Redis client
-    import asyncio
-    async def close_redis():
-        await redis_client.aclose()
-    asyncio.run(close_redis())
-    logger.info("✅ Closed Redis client")
+        # Cleanup resources on shutdown
+        logger.info("Shutting down application")
+        db_pool.closeall()
+        logger.info("✅ Closed database connection pool")
+        # Properly close the async Redis client
+        import asyncio
+        async def close_redis():
+            await redis_client.aclose()
+        asyncio.run(close_redis())
+        logger.info("✅ Closed Redis client")
