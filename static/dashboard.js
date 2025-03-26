@@ -2,6 +2,12 @@ const socket = io({
     transports: ["websocket", "polling"],
 });
 
+window.addEventListener('beforeunload', () => {
+    if (currentConversationId) {
+        socket.emit('leave_conversation', { conversation_id: currentConversationId });
+    }
+});
+
 let currentConversationId = null;
 let currentFilter = 'unassigned';
 let currentChannel = null;
@@ -531,8 +537,12 @@ function takeOverConversation(convoId) {
         .catch(error => console.error('Error during handoff:', error));
 }
 
-// Load a conversation into the active panel
 function loadConversation(convoId) {
+    if (!convoId) {
+        console.warn('Cannot load conversation: convoId is null or undefined');
+        return;
+    }
+
     currentConversationId = convoId;
     const chatBox = document.getElementById('chatBox');
     const clientName = document.getElementById('clientName');
@@ -542,7 +552,7 @@ function loadConversation(convoId) {
     }
 
     // Join the Socket.IO room for this conversation
-    socket.emit('join_conversation', { convo_id: convoId });
+    socket.emit('join_conversation', { conversation_id: convoId });
 
     fetch(`/messages/${convoId}`, {
         credentials: 'include'
@@ -639,7 +649,6 @@ function sendMessage() {
     messageInput.value = ''; // Clear input after sending
 }
 
-// Hand back to AI
 function handBackToAI(convoId) {
     fetch('/handback-to-ai', {
         method: 'POST',
@@ -648,8 +657,8 @@ function handBackToAI(convoId) {
         },
         body: JSON.stringify({ 
             conversation_id: convoId,
-            enable_ai: true, // Indicate that AI should be re-enabled for this conversation
-            clear_needs_agent: true // Indicate that this conversation no longer needs agent intervention
+            enable_ai: true,
+            clear_needs_agent: true
         }),
         credentials: 'include'
     })
@@ -665,7 +674,7 @@ function handBackToAI(convoId) {
                 socket.emit('refresh_conversations', { conversation_id: convoId });
                 if (currentConversationId === convoId) {
                     // Leave the Socket.IO room for this conversation
-                    socket.emit('leave_conversation', { convo_id: convoId });
+                    socket.emit('leave_conversation', { conversation_id: convoId }); // Changed 'convo_id' to 'conversation_id'
                     currentConversationId = null;
                     const chatBox = document.getElementById('chatBox');
                     const clientName = document.getElementById('clientName');
