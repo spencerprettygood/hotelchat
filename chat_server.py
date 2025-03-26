@@ -1,8 +1,7 @@
-# Move gevent monkey-patching to the top and wrap it in a conditional
-if __name__ == "__main__":
-    import gevent
-    from gevent import monkey
-    monkey.patch_all()
+# Gevent monkey-patching at the very top
+import gevent
+from gevent import monkey
+monkey.patch_all()
 
 # Now proceed with other imports
 from flask import Flask, render_template, request, jsonify, session, redirect
@@ -301,7 +300,7 @@ def init_db():
                 channel TEXT NOT NULL,
                 assigned_agent TEXT,
                 ai_enabled INTEGER DEFAULT 1,
-                needs_agent INTEGER DEFAULT 0,  -- Added needs_agent column
+                needs_agent INTEGER DEFAULT 0,
                 booking_intent INTEGER DEFAULT 0,
                 handoff_notified INTEGER DEFAULT 0,
                 visible_in_conversations INTEGER DEFAULT 1,
@@ -1326,6 +1325,31 @@ def whatsapp():
         logger.error(f"❌ Error in /whatsapp: {str(e)}")
         return Response("Failed to process WhatsApp message", status=500)
 
+@app.route("/refresh_conversations", methods=["POST"])
+def refresh_conversations():
+    start_time = time.time()
+    logger.info("Starting /refresh_conversations endpoint")
+    try:
+        data = request.get_json()
+        convo_id = data.get("conversation_id")
+        if not convo_id:
+            logger.error("Missing conversation_id in /refresh_conversations")
+            return jsonify({"error": "Missing conversation_id"}), 400
+        try:
+            convo_id = int(convo_id)
+            if convo_id <= 0:
+                raise ValueError("Conversation ID must be a positive integer")
+        except ValueError:
+            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
+            return jsonify({"error": "Invalid conversation ID format"}), 400
+
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+        logger.info(f"Finished /refresh_conversations in {time.time() - start_time:.2f} seconds")
+        return jsonify({"message": "Conversations refresh triggered"})
+    except Exception as e:
+        logger.error(f"❌ Error in /refresh_conversations: {str(e)}")
+        return jsonify({"error": "Failed to trigger refresh"}), 500
+
 # Socket.IO Event Handlers
 @socketio.on("connect")
 def handle_connect():
@@ -1341,17 +1365,17 @@ def handle_join_conversation(data):
     start_time = time.time()
     logger.info(f"Starting handle_join_conversation: {data}")
     try:
-        convo_id = data.get("conversation_id")
+        convo_id = data.get("convo_id")
         if not convo_id:
-            logger.error("❌ Missing conversation_id in join_conversation event")
+            logger.error("❌ Missing convo_id in join_conversation event")
             emit("error", {"message": "Missing conversation ID"})
             return
         join_room(str(convo_id))
-        logger.info(f"✅ Client joined conversation {convo_id}")
-        emit("status", {"message": f"Joined conversation {convo_id}"})
+        logger.info(f"✅ Client joined room: {convo_id}")
+        emit("status", {"message": f"Joined conversation {convo_id}"}, room=str(convo_id))
         logger.info(f"Finished handle_join_conversation in {time.time() - start_time:.2f} seconds")
     except Exception as e:
-        logger.error(f"❌ Error in handle_join_conversation: {str(e)}")
+        logger.error(f"❌ Error in join_conversation event: {str(e)}")
         emit("error", {"message": "Failed to join conversation"})
 
 @socketio.on("leave_conversation")
@@ -1359,21 +1383,21 @@ def handle_leave_conversation(data):
     start_time = time.time()
     logger.info(f"Starting handle_leave_conversation: {data}")
     try:
-        convo_id = data.get("conversation_id")
+        convo_id = data.get("convo_id")
         if not convo_id:
-            logger.error("❌ Missing conversation_id in leave_conversation event")
+            logger.error("❌ Missing convo_id in leave_conversation event")
             emit("error", {"message": "Missing conversation ID"})
             return
         leave_room(str(convo_id))
-        logger.info(f"✅ Client left conversation room: {convo_id}")
-        emit("status", {"message": f"Left conversation {convo_id}"})
+        logger.info(f"✅ Client left room: {convo_id}")
+        emit("status", {"message": f"Left conversation {convo_id}"}, room=str(convo_id))
         logger.info(f"Finished handle_leave_conversation in {time.time() - start_time:.2f} seconds")
     except Exception as e:
-        logger.error(f"❌ Error in handle_leave_conversation: {str(e)}")
+        logger.error(f"❌ Error in leave_conversation event: {str(e)}")
         emit("error", {"message": "Failed to leave conversation"})
 
 @socketio.on("agent_message")
-def handle_agent_message(data):
+async def handle_agent_message(data):
     start_time = time.time()
     logger.info(f"Starting handle_agent_message: {data}")
     try:
@@ -1466,73 +1490,41 @@ def handle_agent_message(data):
         logger.error(f"❌ Error in agent_message event: {str(e)}")
         emit("error", {"message": "Failed to process agent message"})
 
-@app.route("/emit_new_message", methods=["POST"])
-def emit_new_message():
+@socketio.on("typing")
+def handle_typing(data):
     start_time = time.time()
-    logger.info("Starting /emit_new_message endpoint")
+    logger.info(f"Starting handle_typing: {data}")
     try:
-        data = request.get_json()
         convo_id = data.get("convo_id")
-        message = data.get("message")
-        sender = data.get("sender")
-        channel = data.get("channel")
-        timestamp = data.get("timestamp")
-        chat_id = data.get("chat_id")
-        username = data.get("username")
-
-        if not all([convo_id, message, sender, channel, timestamp, chat_id, username]):
-            logger.error("❌ Missing required fields in /emit_new_message request")
-            return jsonify({"error": "Missing required fields"}), 400
-
-        # Emit new_message event to the conversation room
-        socketio.emit("new_message", {
-            "convo_id": convo_id,
-            "message": message,
-            "sender": sender,
-            "channel": channel,
-            "timestamp": timestamp,
-            "chat_id": chat_id,
-            "username": username
-        }, room=convo_id)
-
-        # Emit live_message event to all clients (for live-messages page)
-        socketio.emit("live_message", {
-            "convo_id": convo_id,
-            "message": message,
-            "sender": sender,
-            "chat_id": chat_id,
-            "username": username,
-            "timestamp": timestamp
-        })
-
-        logger.info(f"Finished /emit_new_message in {time.time() - start_time:.2f} seconds")
-        return jsonify({"status": "success"})
+        sender = data.get("sender", "agent")
+        if not convo_id:
+            logger.error("❌ Missing convo_id in typing event")
+            emit("error", {"message": "Missing conversation ID"})
+            return
+        emit("typing", {"convo_id": convo_id, "sender": sender}, room=str(convo_id))
+        logger.info(f"Finished handle_typing in {time.time() - start_time:.2f} seconds")
     except Exception as e:
-        logger.error(f"❌ Error in /emit_new_message: {str(e)}")
-        return jsonify({"error": "Failed to emit new message"}), 500
+        logger.error(f"❌ Error in typing event: {str(e)}")
+        emit("error", {"message": "Failed to broadcast typing event"})
 
-@app.route("/refresh_conversations", methods=["POST"])
-def refresh_conversations_endpoint():
-    start_time = time.time()
-    logger.info("Starting /refresh_conversations endpoint")
-    try:
-        data = request.get_json()
-        conversation_id = data.get("conversation_id")
-        if not conversation_id:
-            logger.error("❌ Missing conversation_id in /refresh_conversations request")
-            return jsonify({"error": "Missing conversation_id"}), 400
-
-        socketio.emit("refresh_conversations", {"conversation_id": conversation_id})
-        logger.info(f"Finished /refresh_conversations in {time.time() - start_time:.2f} seconds")
-        return jsonify({"status": "success"})
-    except Exception as e:
-        logger.error(f"❌ Error in /refresh_conversations: {str(e)}")
-        return jsonify({"error": "Failed to refresh conversations"}), 500
-
+# Main execution block
 if __name__ == "__main__":
     try:
         logger.info("✅ Starting Flask-SocketIO server")
-        socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
+        socketio.run(
+            app,
+            host="0.0.0.0",
+            port=int(os.getenv("PORT", 5000)),
+            debug=False,
+            use_reloader=False  # Disable reloader for production-like behavior
+        )
     except Exception as e:
         logger.error(f"❌ Failed to start server: {str(e)}")
         raise
+    finally:
+        # Cleanup resources on shutdown
+        logger.info("Shutting down application")
+        db_pool.closeall()
+        logger.info("✅ Closed database connection pool")
+        redis_client.close()
+        logger.info("✅ Closed Redis client")
