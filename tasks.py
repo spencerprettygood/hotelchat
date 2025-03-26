@@ -186,26 +186,6 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             finally:
                 release_db_connection(conn)
 
-        # Notify the Flask-SocketIO server to emit the new_message event for the user's message
-        try:
-            response = requests.post(
-                f"{SERVER_URL}/emit_new_message",
-                json={
-                    "convo_id": str(convo_id),
-                    "message": message_body,
-                    "sender": "user",
-                    "channel": "whatsapp",
-                    "timestamp": user_timestamp,
-                    "chat_id": chat_id,
-                    "username": username
-                },
-                timeout=5
-            )
-            response.raise_for_status()
-            logger.info(f"✅ Notified server to emit new_message for user message in convo_id {convo_id}")
-        except requests.RequestException as e:
-            logger.error(f"❌ Failed to notify server for user new_message: {str(e)}")
-
         # Determine language and check for help keywords
         language = "en" if message_body.strip().upper().startswith("EN ") else "es"
         help_triggered = "HELP" in message_body.upper() or "AYUDA" in message_body.upper()
@@ -347,12 +327,54 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                 logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
         else:
             logger.info(f"AI response skipped for convo_id {convo_id}")
-            return
 
-        # Send the AI response via WhatsApp
+        # Send the AI response via WhatsApp if there is a response
         if response:
             send_whatsapp_message_task.delay(from_number, response, convo_id=convo_id, username=username, chat_id=chat_id)
             logger.info(f"Queued send_whatsapp_message_task for AI response to {from_number}")
+
+        # Notify the Flask-SocketIO server to emit the new_message event for the user's message
+        # This is moved after the AI response to ensure the user gets a reply even if the notification fails
+        try:
+            response = requests.post(
+                f"{SERVER_URL}/emit_new_message",
+                json={
+                    "convo_id": str(convo_id),
+                    "message": message_body,
+                    "sender": "user",
+                    "channel": "whatsapp",
+                    "timestamp": user_timestamp,
+                    "chat_id": chat_id,
+                    "username": username
+                },
+                timeout=5
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Notified server to emit new_message for user message in convo_id {convo_id}")
+        except requests.RequestException as e:
+            logger.error(f"❌ Failed to notify server for user new_message: {str(e)}")
+
+        # If an AI response was generated, notify the server about the AI's message
+        if response:
+            try:
+                ai_timestamp = datetime.now(timezone.utc).isoformat()
+                response = requests.post(
+                    f"{SERVER_URL}/emit_new_message",
+                    json={
+                        "convo_id": str(convo_id),
+                        "message": response,
+                        "sender": "ai",
+                        "channel": "whatsapp",
+                        "timestamp": ai_timestamp,
+                        "chat_id": chat_id,
+                        "username": username
+                    },
+                    timeout=5
+                )
+                response.raise_for_status()
+                logger.info(f"✅ Notified server to emit new_message for AI response in convo_id {convo_id}")
+            except requests.RequestException as e:
+                logger.error(f"❌ Failed to notify server for AI new_message: {str(e)}")
 
     except Exception as e:
         logger.error(f"❌ Error in process_whatsapp_message task: {str(e)}", exc_info=True)
