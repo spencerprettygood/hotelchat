@@ -22,3 +22,4 @@ aiohttp==3.10.5
 concurrent-log-handler==0.9.25
 werkzeug==3.0.4
 langdetect==1.0.9
+tenacity==8.5.0
