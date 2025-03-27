@@ -278,26 +278,33 @@ def release_db_connection(conn):
         except Exception as e:
             logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
 
-# Decorator for database retries
 def with_db_retry(func):
     """Decorator to retry database operations on failure."""
     def wrapper(*args, **kwargs):
-        retries = 3
+        retries = 5
         for attempt in range(retries):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
                 logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
-                if "connection already closed" in str(e).lower() or "pool is closed" in str(e).lower():
-                    global db_pool  # Declare global at the beginning of the function
+                error_str = str(e).lower()
+                if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
+                    global db_pool
                     try:
                         db_pool.closeall()
-                        db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
-                        logger.info("✅ Reinitialized database connection pool")
+                        db_pool = SimpleConnectionPool(
+                            minconn=5,
+                            maxconn=30,
+                            dsn=database_url,
+                            sslmode="require",
+                            sslrootcert=None,
+                            sslminprotocol="TLSv1.2"
+                        )
+                        logger.info("✅ Reinitialized database connection pool due to SSL error")
                     except Exception as e2:
                         logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
                 if attempt < retries - 1:
-                    time.sleep(1)
+                    time.sleep(2)
                     continue
                 raise e
     return wrapper
@@ -322,8 +329,8 @@ def get_ai_enabled():
         logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}")
         return ("1", "1970-01-01T00:00:00Z")
 
-# Database initialization
 def init_db():
+    logger.info("Initializing database")
     with get_db_connection() as conn:
         c = conn.cursor()
 
@@ -442,6 +449,23 @@ def init_db():
                 password_hash TEXT NOT NULL
             )''')
             logger.info("Created agents table")
+        else:
+            # Migration: Add password_hash column if it doesn't exist
+            c.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns 
+                    WHERE table_name = 'agents' AND column_name = 'password_hash'
+                )
+            """)
+            password_hash_exists = c.fetchone()[0]
+            if not password_hash_exists:
+                c.execute("ALTER TABLE agents ADD COLUMN password_hash TEXT")
+                # Update existing rows with a default password hash
+                c.execute(
+                    "UPDATE agents SET password_hash = %s WHERE password_hash IS NULL",
+                    (generate_password_hash("password123"),)
+                )
+                logger.info("Added password_hash column to agents table and updated existing rows")
 
         if not settings_table_exists:
             c.execute('''CREATE TABLE settings (
@@ -524,7 +548,7 @@ def init_db():
         conn.commit()
         logger.info("✅ Database initialized")
         release_db_connection(conn)
-
+        
 # Add test conversations (for development purposes)
 def add_test_conversations():
     if os.getenv("SEED_INITIAL_DATA", "false").lower() != "true":
@@ -615,6 +639,7 @@ def load_user(agent_id):
 @app.route("/login", methods=["GET", "POST"])
 @with_db_retry
 def login():
+    logger.info("✅ /login endpoint registered and called")
     start_time = time.time()
     logger.info("Starting /login endpoint")
     try:
@@ -625,20 +650,50 @@ def login():
             logger.info(f"Rendering login page in {time.time() - start_time:.2f} seconds")
             return render_template("login.html")
         
-        data = request.get_json()
+        # Log the request headers and content type
+        logger.info(f"Request headers: {request.headers}")
+        logger.info(f"Request content type: {request.content_type}")
+
+        # Try to get JSON data
+        data = request.get_json(silent=True)
+        if data is None:
+            # Fallback to form data
+            logger.info("No JSON data found, trying form data")
+            data = request.form
+            logger.info(f"Form data: {dict(data)}")
+        
+        if not data:
+            logger.error("❌ No valid JSON or form data in /login request")
+            return jsonify({"message": "Invalid request format, expected JSON or form data"}), 400
+
         username = data.get("username")
         password = data.get("password")
         if not username or not password:
             logger.error("❌ Missing username or password in /login request")
             return jsonify({"message": "Missing username or password"}), 400
         
+        logger.info(f"Attempting to log in user: {username}")
         with get_db_connection() as conn:
+            logger.info("Database connection established")
             c = conn.cursor()
+            c.execute("SELECT 1")
+            logger.info("Test query executed successfully")
+            # Check if password_hash column exists
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'agents' AND column_name = 'password_hash'
+            """)
+            has_password_hash = bool(c.fetchone())
+            if not has_password_hash:
+                logger.error("❌ password_hash column does not exist in agents table")
+                return jsonify({"error": "Server configuration error: password_hash column missing"}), 500
             c.execute(
                 "SELECT id, username, password_hash FROM agents WHERE username = %s",
                 (username,)
             )
             agent = c.fetchone()
+            logger.info(f"Agent query result: {agent}")
             if agent and check_password_hash(agent['password_hash'], password):
                 agent_obj = Agent(agent['id'], agent['username'])
                 login_user(agent_obj)
@@ -652,7 +707,7 @@ def login():
             logger.info(f"Finished /login (failed) in {time.time() - start_time:.2f} seconds")
             return jsonify({"message": "Invalid credentials"}), 401
     except Exception as e:
-        logger.error(f"❌ Error in /login: {str(e)}")
+        logger.error(f"❌ Error in /login: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to login"}), 500
 
 @app.route("/logout", methods=["POST"])
