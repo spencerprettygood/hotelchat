@@ -243,13 +243,21 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
+# Initialize connection pool
+database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+db_pool = SimpleConnectionPool(
+    minconn=5,
+    maxconn=30,
+    dsn=database_url
+)
+
 # Database connection management
 def get_db_connection():
     try:
         conn = db_pool.getconn()
         if conn.closed:
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            global db_pool
+            # No need for global db_pool here; it's already global and we're modifying it
             db_pool.closeall()
             db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
             conn = db_pool.getconn()
@@ -282,7 +290,7 @@ def with_db_retry(func):
             except Exception as e:
                 logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
                 if "connection already closed" in str(e).lower() or "pool is closed" in str(e).lower():
-                    global db_pool
+                    global db_pool  # Declare global at the beginning of the function
                     try:
                         db_pool.closeall()
                         db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
