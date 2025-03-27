@@ -477,11 +477,10 @@
         let lastFetchedConversations = null;
         let lastFetchedMessages = {};
         let lastMessageTimestamp = null;
-        let hasInitiallyConnected = false; // Track if the initial connection has occurred
+        let hasInitiallyConnected = false;
 
         // Function to set up Socket.IO listeners
         function setupSocketListeners() {
-            // Remove existing listeners to prevent duplicates
             socket.off("connect");
             socket.off("connect_error");
             socket.off("disconnect");
@@ -493,8 +492,8 @@
             socket.off("reconnect");
             socket.off("reconnect_error");
             socket.off("pong");
+            socket.off("room_joined");
 
-            // Add new listeners
             socket.on("connect", () => {
                 isConnected = true;
                 console.log("Socket.IO connected successfully with ID:", socket.id);
@@ -502,14 +501,12 @@
                     showToast("Connected to server", "success");
                     hasInitiallyConnected = true;
                 }
-                // Rejoin the current conversation if it exists
                 if (currentConversationId) {
                     console.log("Rejoining conversation on connect:", currentConversationId);
                     socket.emit("join_conversation", { conversation_id: currentConversationId }, (response) => {
                         console.log("Join conversation response on connect:", response);
                     });
                 }
-                // Log connection status periodically
                 setInterval(() => {
                     console.log("Socket connection status:", socket.connected, "Current conversation ID:", currentConversationId);
                     if (isConnected) {
@@ -538,6 +535,11 @@
             socket.on("error", (data) => {
                 console.error("Received error event:", data);
                 showToast("Error: " + data.message, "error");
+            });
+
+            socket.on("room_joined", (data) => {
+                console.log("Room joined:", data);
+                showToast(`Joined conversation ${data.convo_id}`, "success");
             });
 
             socket.on("new_message", (data) => {
@@ -620,7 +622,6 @@
             });
         }
 
-        // Call setupSocketListeners once on page load
         setupSocketListeners();
 
         function showToast(message, type = "info") {
@@ -867,6 +868,11 @@
         function selectConversation(convoId, chatId) {
             convoId = String(convoId);
             console.log("selectConversation called with convoId:", convoId, "chatId:", chatId);
+
+            // Update URL to persist conversation ID
+            const url = new URL(window.location);
+            url.searchParams.set('convo_id', convoId);
+            window.history.pushState({}, '', url);
 
             if (currentConversationId) {
                 console.log("Leaving previous conversation room:", currentConversationId);
