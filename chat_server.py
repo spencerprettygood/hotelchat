@@ -248,40 +248,6 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Update get_db_connection to reinitialize the pool if it's closed
-def get_db_connection():
-    global db_pool
-    try:
-        conn = db_pool.getconn()
-        if conn.closed:
-            logger.warning("Retrieved a closed connection from pool, reinitializing pool")
-            db_pool.closeall()  # Close the existing pool
-            db_pool = SimpleConnectionPool(
-                minconn=5,
-                maxconn=30,
-                dsn=database_url
-            )
-            conn = db_pool.getconn()
-        conn.cursor_factory = DictCursor
-        logger.info("✅ Database connection retrieved from pool")
-        return conn
-    except Exception as e:
-        logger.error(f"❌ Failed to get database connection: {str(e)}")
-        # Reinitialize the pool and try one more time
-        try:
-            db_pool.closeall()
-            db_pool = SimpleConnectionPool(
-                minconn=5,
-                maxconn=30,
-                dsn=database_url
-            )
-            conn = db_pool.getconn()
-            conn.cursor_factory = DictCursor
-            logger.info("✅ Database connection retrieved after reinitializing pool")
-            return conn
-        except Exception as e2:
-            logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
-            raise Exception(f"Failed to get database connection: {str(e2)}")
 
 # Update the /login endpoint with a retry wrapper
 def with_db_retry(func):
