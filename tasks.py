@@ -135,7 +135,7 @@ def send_whatsapp_message_task(to_number, message, convo_id=None, username=None,
 @celery_app.task
 def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp):
     from chat_server import get_db_connection, release_db_connection, ai_respond_sync, get_ai_enabled, detect_language, socketio
-    from openai import RateLimitError, APIError, AuthenticationError
+    from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
 
     start_time = time.time()
     logger.info(f"Starting process_whatsapp_message for chat_id {chat_id}: {message_body}")
@@ -197,6 +197,16 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
             "username": username
         }, room=room)
         logger.info(f"Emitted new_message event for user message in room {room}")
+
+        # Emit live_message to update conversation list
+        socketio.emit("live_message", {
+            "convo_id": convo_id,
+            "chat_id": chat_id,
+            "username": username,
+            "message": message_body,
+            "timestamp": user_timestamp
+        })
+        logger.info(f"Emitted live_message event for convo_id {convo_id}")
 
         # Detect language
         language = detect_language(message_body, convo_id)
@@ -285,8 +295,8 @@ def process_whatsapp_message(from_number, chat_id, message_body, user_timestamp)
                     finally:
                         release_db_connection(conn)
                 socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-            except asyncio.TimeoutError as e:
-                logger.error(f"❌ OpenAI TimeoutError in ai_respond for convo_id {convo_id}: {str(e)}")
+            except APITimeoutError as e:
+                logger.error(f"❌ OpenAI APITimeoutError in ai_respond for convo_id {convo_id}: {str(e)}")
                 response = (
                     "I’m sorry, the AI service timed out while processing your request. I’ll connect you with a team member to assist you."
                     if language == "en"
