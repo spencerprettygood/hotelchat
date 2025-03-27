@@ -23,11 +23,10 @@ from googleapiclient.errors import HttpError
 from psycopg2.pool import SimpleConnectionPool
 from cachetools import TTLCache
 from werkzeug.security import generate_password_hash, check_password_hash
-import aiohttp
 import asyncio
-from functools import lru_cache
 from openai import AsyncOpenAI, RateLimitError, APIError, AuthenticationError
 import redis.asyncio as redis
+import redis as sync_redis  # Add synchronous Redis client
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -57,36 +56,32 @@ if not SECRET_KEY:
 
 SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com")
 
-# Redis client for caching
-redis_client = redis.Redis.from_url(
+# Redis clients
+# Synchronous Redis client for Flask routes
+redis_client = sync_redis.Redis.from_url(
     os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
     decode_responses=True,
     max_connections=20
 )
 
-# Use a single event loop for synchronous Redis operations
-_sync_loop = None
+# Async Redis client for ai_respond
+async_redis_client = redis.Redis.from_url(
+    os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
+    decode_responses=True,
+    max_connections=20
+)
 
-def get_sync_loop():
-    global _sync_loop
-    if _sync_loop is None or _sync_loop.is_closed():
-        _sync_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_sync_loop)
-    return _sync_loop
-
+# Simplified Redis sync functions
 def redis_get_sync(key):
     try:
-        loop = get_sync_loop()
-        result = loop.run_until_complete(redis_client.get(key))
-        return result
+        return redis_client.get(key)
     except Exception as e:
         logger.error(f"❌ Error in redis_get_sync for key {key}: {str(e)}")
         return None
 
 def redis_setex_sync(key, ttl, value):
     try:
-        loop = get_sync_loop()
-        loop.run_until_complete(redis_client.setex(key, ttl, value))
+        redis_client.setex(key, ttl, value)
     except Exception as e:
         logger.error(f"❌ Error in redis_setex_sync for key {key}: {str(e)}")
 
@@ -248,35 +243,22 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-
-# Update the /login endpoint with a retry wrapper
-def with_db_retry(func):
-    """Decorator to retry database operations on failure."""
-    def wrapper(*args, **kwargs):
-        retries = 3
-        for attempt in range(retries):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
-                if "connection already closed" in str(e).lower() or "pool is closed" in str(e).lower():
-                    # Reinitialize the pool on connection errors
-                    global db_pool
-                    try:
-                        db_pool.closeall()
-                        db_pool = SimpleConnectionPool(
-                            minconn=5,
-                            maxconn=30,
-                            dsn=database_url
-                        )
-                        logger.info("✅ Reinitialized database connection pool")
-                    except Exception as e2:
-                        logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
-                if attempt < retries - 1:
-                    time.sleep(1)  # Wait 1 second before retrying
-                    continue
-                raise e
-    return wrapper
+# Database connection management
+def get_db_connection():
+    try:
+        conn = db_pool.getconn()
+        if conn.closed:
+            logger.warning("Connection retrieved from pool is closed, reinitializing pool")
+            global db_pool
+            db_pool.closeall()
+            db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
+            conn = db_pool.getconn()
+        conn.cursor_factory = DictCursor
+        logger.info("✅ Retrieved database connection from pool")
+        return conn
+    except Exception as e:
+        logger.error(f"❌ Failed to get database connection: {str(e)}")
+        raise
 
 def release_db_connection(conn):
     if conn:
@@ -288,6 +270,30 @@ def release_db_connection(conn):
                 logger.info("✅ Database connection returned to pool")
         except Exception as e:
             logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
+
+# Decorator for database retries
+def with_db_retry(func):
+    """Decorator to retry database operations on failure."""
+    def wrapper(*args, **kwargs):
+        retries = 3
+        for attempt in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
+                if "connection already closed" in str(e).lower() or "pool is closed" in str(e).lower():
+                    global db_pool
+                    try:
+                        db_pool.closeall()
+                        db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
+                        logger.info("✅ Reinitialized database connection pool")
+                    except Exception as e2:
+                        logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
+                if attempt < retries - 1:
+                    time.sleep(1)
+                    continue
+                raise e
+    return wrapper
 
 # Cache the ai_enabled setting
 def get_ai_enabled():
@@ -309,6 +315,7 @@ def get_ai_enabled():
         logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}")
         return ("1", "1970-01-01T00:00:00Z")
 
+# Database initialization
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -641,16 +648,6 @@ def login():
         logger.error(f"❌ Error in /login: {str(e)}")
         return jsonify({"error": "Failed to login"}), 500
 
-# Keep the teardown_appcontext as is, since it will still log shutdown
-@app.teardown_appcontext
-def shutdown_session(exception=None):
-    logger.info("Shutting down database connection pool")
-    try:
-        db_pool.closeall()
-        logger.info("✅ Database connection pool closed")
-    except Exception as e:
-        logger.error(f"❌ Error closing database connection pool: {str(e)}")
-
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
@@ -860,7 +857,7 @@ def get_messages_for_conversation(convo_id):
                 {
                     "message": msg["message"],
                     "sender": msg["sender"],
-                    "timestamp": msg["timestamp"]
+                    "timestamp": msg["timestamp"] if isinstance(msg["timestamp"], str) else msg["timestamp"].isoformat()
                 }
                 for msg in c.fetchall()
             ]
@@ -1158,7 +1155,7 @@ async def ai_respond(message, convo_id):
 
         # Check cache for common messages
         cache_key = f"ai_response:{message}:{convo_id}"
-        cached_response = await redis_client.get(cache_key)
+        cached_response = await async_redis_client.get(cache_key)
         if cached_response:
             logger.info(f"Returning cached response for message: {message}")
             return cached_response
@@ -1206,7 +1203,7 @@ async def ai_respond(message, convo_id):
                 else:
                     result = "I’m not sure which day you meant by 'this'. Can you specify, like 'this Friday' or 'este viernes'?" if not is_spanish else \
                              "No estoy seguro de qué día te refieres con 'este'. ¿Puedes especificar, como 'este viernes' o 'this Friday'?"
-                    await redis_client.setex(cache_key, 3600, result)
+                    await async_redis_client.setex(cache_key, 3600, result)
                     logger.info(f"Finished ai_respond (ambiguous 'this' date) in {time.time() - start_time:.2f} seconds")
                     return result
             else:
@@ -1223,7 +1220,7 @@ async def ai_respond(message, convo_id):
                 else:
                     result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if not is_spanish else \
                            "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
-                    await redis_client.setex(cache_key, 3600, result)
+                    await async_redis_client.setex(cache_key, 3600, result)
                     logger.info(f"Finished ai_respond (date error) in {time.time() - start_time:.2f} seconds")
                     return result
 
@@ -1244,7 +1241,7 @@ async def ai_respond(message, convo_id):
             if check_out <= check_in:
                 result = "The check-out date must be after the check-in date. Please provide a valid range." if not is_spanish else \
                        "La fecha de salida debe ser posterior a la fecha de entrada. Por favor, proporciona un rango válido."
-                await redis_client.setex(cache_key, 3600, result)
+                await async_redis_client.setex(cache_key, 3600, result)
                 logger.info(f"Finished ai_respond (invalid date range) in {time.time() - start_time:.2f} seconds")
                 return result
 
@@ -1267,7 +1264,7 @@ async def ai_respond(message, convo_id):
             else:
                 response = availability if not is_spanish else \
                            availability.replace("are not available", "no están disponibles").replace("fully booked", "completamente reservado")
-            await redis_client.setex(cache_key, 3600, response)
+            await async_redis_client.setex(cache_key, 3600, response)
             logger.info(f"Finished ai_respond (availability check) in {time.time() - start_time:.2f} seconds")
             return response
 
@@ -1312,7 +1309,7 @@ async def ai_respond(message, convo_id):
 
                 result = f"I’d love to help with your booking! Can you tell me {', '.join(missing_info)}?" if not is_spanish else \
                          f"¡Me encantaría ayudarte con tu reserva! ¿Me puedes decir {', '.join(missing_info)}?"
-                await redis_client.setex(cache_key, 3600, result)
+                await async_redis_client.setex(cache_key, 3600, result)
                 logger.info(f"Finished ai_respond (partial booking info) in {time.time() - start_time:.2f} seconds")
                 return result
 
@@ -1327,26 +1324,16 @@ async def ai_respond(message, convo_id):
                     c.execute("COMMIT")
                 finally:
                     release_db_connection(conn)
-            # Notify the server to refresh conversations via HTTP
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{SERVER_URL}/refresh_conversations",
-                        json={"conversation_id": str(convo_id)},
-                        timeout=5
-                    ) as response:
-                        response.raise_for_status()
-            except aiohttp.ClientError as e:
-                logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
             result = "I have all the details for your booking! I’ll connect you with a team member to finalize it for you." if not is_spanish else \
                    "¡Tengo todos los detalles para tu reserva! Te conectaré con un miembro del equipo para que la finalice por ti."
-            await redis_client.setex(cache_key, 3600, result)
+            await async_redis_client.setex(cache_key, 3600, result)
             logger.info(f"Finished ai_respond (booking intent, needs agent) in {time.time() - start_time:.2f} seconds")
             return result
 
         # Fetch conversation history from cache or database
         history_cache_key = f"conversation_history:{convo_id}"
-        cached_history = await redis_client.get(history_cache_key)
+        cached_history = await async_redis_client.get(history_cache_key)
         if cached_history:
             messages = json.loads(cached_history)
             logger.info(f"Retrieved conversation history from cache for convo_id {convo_id}")
@@ -1359,7 +1346,7 @@ async def ai_respond(message, convo_id):
                         (convo_id,)
                     )
                     messages = c.fetchall()
-                    await redis_client.setex(history_cache_key, 300, json.dumps([dict(msg) for msg in messages]))
+                    await async_redis_client.setex(history_cache_key, 300, json.dumps([dict(msg) for msg in messages]))
                     logger.info(f"Cached conversation history for convo_id {convo_id}")
                 finally:
                     release_db_connection(conn)
@@ -1377,7 +1364,7 @@ async def ai_respond(message, convo_id):
         # Call OpenAI API asynchronously with rate limiting
         async with openai_semaphore:
             response = await openai_client.chat.completions.create(
-                model="gpt-4o-mini",  # Use a lighter model for faster responses
+                model="gpt-4o-mini",
                 messages=conversation_history,
                 max_tokens=300,
                 temperature=0.7
@@ -1396,30 +1383,20 @@ async def ai_respond(message, convo_id):
                         c.execute("COMMIT")
                     finally:
                         release_db_connection(conn)
-                # Notify the server to refresh conversations
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(
-                            f"{SERVER_URL}/refresh_conversations",
-                            json={"conversation_id": str(convo_id)},
-                            timeout=5
-                        ) as response:
-                            response.raise_for_status()
-                except aiohttp.ClientError as e:
-                    logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
-                await redis_client.setex(cache_key, 3600, ai_reply)
+                socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+                await async_redis_client.setex(cache_key, 3600, ai_reply)
                 logger.info(f"Finished ai_respond (AI sorry, needs agent) in {time.time() - start_time:.2f} seconds")
                 return ai_reply
-            await redis_client.setex(cache_key, 3600, ai_reply)
+            await async_redis_client.setex(cache_key, 3600, ai_reply)
             logger.info(f"Finished ai_respond (AI success) in {time.time() - start_time:.2f} seconds")
             return ai_reply
 
     except RateLimitError as e:
         logger.error(f"❌ OpenAI RateLimitError: {str(e)}")
-        raise  # Let tenacity handle the retry
+        raise
     except asyncio.TimeoutError as e:
         logger.error(f"❌ OpenAI API request timed out: {str(e)}")
-        raise  # Let tenacity handle the retry
+        raise
     except APIError as e:
         logger.error(f"❌ OpenAI APIError: {str(e)}")
         with get_db_connection() as conn:
@@ -1433,20 +1410,10 @@ async def ai_respond(message, convo_id):
                 c.execute("COMMIT")
             finally:
                 release_db_connection(conn)
-        # Notify the server to refresh conversations
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{SERVER_URL}/refresh_conversations",
-                    json={"conversation_id": str(convo_id)},
-                    timeout=5
-                ) as response:
-                    response.raise_for_status()
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         result = "I’m sorry, I’m having trouble processing your request right now due to an API error. I’ll connect you with a team member to assist you." if not is_spanish else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo debido a un error de API. Te conectaré con un miembro del equipo para que te ayude."
-        await redis_client.setex(cache_key, 3600, result)
+        await async_redis_client.setex(cache_key, 3600, result)
         logger.info(f"Finished ai_respond (APIError, needs agent) in {time.time() - start_time:.2f} seconds")
         return result
     except AuthenticationError as e:
@@ -1462,20 +1429,10 @@ async def ai_respond(message, convo_id):
                 c.execute("COMMIT")
             finally:
                 release_db_connection(conn)
-        # Notify the server to refresh conversations
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{SERVER_URL}/refresh_conversations",
-                    json={"conversation_id": str(convo_id)},
-                    timeout=5
-                ) as response:
-                    response.raise_for_status()
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         result = "I’m sorry, I’m having trouble authenticating with the AI service. I’ll connect you with a team member to assist you." if not is_spanish else \
                "Lo siento, tengo problemas para autenticarme con el servicio de IA. Te conectaré con un miembro del equipo para que te ayude."
-        await redis_client.setex(cache_key, 3600, result)
+        await async_redis_client.setex(cache_key, 3600, result)
         logger.info(f"Finished ai_respond (AuthenticationError, needs agent) in {time.time() - start_time:.2f} seconds")
         return result
     except Exception as e:
@@ -1491,20 +1448,10 @@ async def ai_respond(message, convo_id):
                 c.execute("COMMIT")
             finally:
                 release_db_connection(conn)
-        # Notify the server to refresh conversations
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{SERVER_URL}/refresh_conversations",
-                    json={"conversation_id": str(convo_id)},
-                    timeout=5
-                ) as response:
-                    response.raise_for_status()
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Failed to notify server to refresh conversations: {str(e)}")
+        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
         result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
                "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-        await redis_client.setex(cache_key, 3600, result)
+        await async_redis_client.setex(cache_key, 3600, result)
         logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
         return result
 
@@ -1588,8 +1535,7 @@ def handle_join_conversation(data):
         return
     room = f"conversation_{convo_id}"
     join_room(room)
-    logger.info(f"Agent joined room: {room}")
-    # Emit a test message to confirm the client is in the room
+    logger.info(f"Agent joined room: {room} for convo_id: {convo_id}")
     emit("room_joined", {"room": room, "convo_id": convo_id}, room=room)
 
 @socketio.on("leave_conversation")
@@ -1641,7 +1587,6 @@ def handle_agent_message(data):
             if not convo:
                 logger.error(f"Conversation not found: {convo_id}")
                 emit("error", {"message": "Conversation not found"})
-                release_db_connection(conn)
                 return
 
             chat_id = convo["chat_id"]
@@ -1652,7 +1597,14 @@ def handle_agent_message(data):
         # Log the agent's message
         timestamp = log_message(convo_id, username, message, "agent")
 
-        # Emit the message to the conversation room
+        # Invalidate message cache for this conversation
+        cache_key = f"messages:{convo_id}:*"
+        keys = redis_client.keys(cache_key)
+        if keys:
+            redis_client.delete(*keys)
+            logger.info(f"Invalidated message cache for convo_id {convo_id}")
+
+        # Emit the message to the room
         room = f"conversation_{convo_id}"
         emit(
             "new_message",
@@ -1661,42 +1613,21 @@ def handle_agent_message(data):
                 "message": message,
                 "sender": "agent",
                 "timestamp": timestamp,
-                "agent": current_user.username
+                "username": username
             },
             room=room
         )
 
         # If the channel is WhatsApp, send the message to the user
         if channel == "whatsapp":
-            phone_number = f"whatsapp:{chat_id}"
-            send_whatsapp_message(phone_number, message)
+            send_whatsapp_message(chat_id, message)
 
         logger.info(f"Finished handle_agent_message in {time.time() - start_time:.2f} seconds")
     except Exception as e:
         logger.error(f"❌ Error in handle_agent_message: {str(e)}")
         emit("error", {"message": "Failed to send message"})
 
-# Cleanup on shutdown
-@app.teardown_appcontext
-def shutdown_session(exception=None):
-    logger.info("Shutting down database connection pool")
-    try:
-        db_pool.closeall()
-        logger.info("✅ Database connection pool closed")
-    except Exception as e:
-        logger.error(f"❌ Error closing database connection pool: {str(e)}")
-
 # Run the application
 if __name__ == "__main__":
     logger.info("Starting Flask-SocketIO server")
-    try:
-        socketio.run(
-            app,
-            host="0.0.0.0",
-            port=int(os.getenv("PORT", 5000)),
-            debug=os.getenv("FLASK_ENV", "production") == "development",
-            use_reloader=False
-        )
-    except Exception as e:
-        logger.error(f"❌ Failed to start Flask-SocketIO server: {str(e)}")
-        raise
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
