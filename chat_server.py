@@ -251,13 +251,12 @@ db_pool = SimpleConnectionPool(
     dsn=database_url
 )
 
-# Database connection management
 def get_db_connection():
+    global db_pool  # Declare db_pool as global at the start of the function
     try:
         conn = db_pool.getconn()
         if conn.closed:
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            # No need for global db_pool here; it's already global and we're modifying it
             db_pool.closeall()
             db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
             conn = db_pool.getconn()
