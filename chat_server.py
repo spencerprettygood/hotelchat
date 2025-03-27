@@ -22,7 +22,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
-from werkzeug.security import generate_password_hash, check_password_hash
 import asyncio
 from openai import AsyncOpenAI, RateLimitError, APIError, AuthenticationError
 import redis.asyncio as redis
@@ -121,7 +120,7 @@ db_pool = SimpleConnectionPool(
     maxconn=30,
     dsn=database_url,
     sslmode="require",
-    sslrootcert=None  # Disable server certificate verification (if acceptable)
+    sslrootcert=None
 )
 logger.info("✅ Database connection pool initialized")
 
@@ -484,11 +483,11 @@ def init_db():
             c.execute('''CREATE TABLE agents (
                 id SERIAL PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL
+                password TEXT NOT NULL
             )''')
             logger.info("Created agents table")
         else:
-            # Migration: Add password_hash column if it doesn't exist
+            # Migration: Rename password_hash to password if it exists, or add password column
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
@@ -496,14 +495,24 @@ def init_db():
                 )
             """)
             password_hash_exists = c.fetchone()[0]
-            if not password_hash_exists:
-                c.execute("ALTER TABLE agents ADD COLUMN password_hash TEXT")
-                # Update existing rows with a default password hash
-                c.execute(
-                    "UPDATE agents SET password_hash = %s WHERE password_hash IS NULL",
-                    (generate_password_hash("password123"),)
-                )
-                logger.info("Added password_hash column to agents table and updated existing rows")
+            if password_hash_exists:
+                c.execute("ALTER TABLE agents RENAME COLUMN password_hash TO password")
+                logger.info("Renamed password_hash column to password in agents table")
+            else:
+                c.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'agents' AND column_name = 'password'
+                    )
+                """)
+                password_exists = c.fetchone()[0]
+                if not password_exists:
+                    c.execute("ALTER TABLE agents ADD COLUMN password TEXT NOT NULL DEFAULT 'password123'")
+                    logger.info("Added password column to agents table with default value")
+
+            # Ensure existing rows have a valid password
+            c.execute("UPDATE agents SET password = 'password123' WHERE password IS NULL")
+            logger.info("Updated existing agents with NULL password")
 
         if not settings_table_exists:
             c.execute('''CREATE TABLE settings (
@@ -551,8 +560,8 @@ def init_db():
             c.execute("SELECT COUNT(*) FROM agents")
             if c.fetchone()[0] == 0:
                 c.execute(
-                    "INSERT INTO agents (username, password_hash) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
-                    ('admin', generate_password_hash('password123'))
+                    "INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
+                    ('admin', 'password123')
                 )
                 logger.info("Inserted default admin user")
 
@@ -715,23 +724,23 @@ def login():
         logger.info(f"Attempting to log in user: {username}")
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Check if password_hash column exists
+            # Check if password column exists
             c.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
-                WHERE table_name = 'agents' AND column_name = 'password_hash'
+                WHERE table_name = 'agents' AND column_name = 'password'
             """)
-            has_password_hash = bool(c.fetchone())
-            if not has_password_hash:
-                logger.error("❌ password_hash column does not exist in agents table")
-                return jsonify({"error": "Server configuration error: password_hash column missing"}), 500
+            has_password = bool(c.fetchone())
+            if not has_password:
+                logger.error("❌ password column does not exist in agents table")
+                return jsonify({"error": "Server configuration error: password column missing"}), 500
             c.execute(
-                "SELECT id, username, password_hash FROM agents WHERE username = %s",
+                "SELECT id, username, password FROM agents WHERE username = %s",
                 (username,)
             )
             agent = c.fetchone()
             logger.info(f"Agent query result: {agent}")
-            if agent and check_password_hash(agent['password_hash'], password):
+            if agent and agent['password'] == password:
                 agent_obj = Agent(agent['id'], agent['username'])
                 login_user(agent_obj)
                 logger.info(f"✅ Login successful for agent: {agent['username']}")
