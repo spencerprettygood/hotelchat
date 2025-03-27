@@ -10,6 +10,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import psycopg2
 from psycopg2.extras import DictCursor
+from psycopg2.pool import SimpleConnectionPool
 import os
 import requests
 import json
@@ -102,7 +103,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Initialize database URL (no connection pool for now)
+# Initialize connection pool
 try:
     database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     logger.info(f"Using DATABASE_URL: {database_url}")
@@ -110,10 +111,20 @@ except NameError:
     logger.error("❌ DATABASE_URL environment variable not set")
     raise ValueError("DATABASE_URL environment variable not set")
 
-# Disable SSL for debugging
+# Use sslmode=require
 if "sslmode" not in database_url:
-    database_url += "?sslmode=disable"
-    logger.info(f"Added sslmode=disable to DATABASE_URL: {database_url}")
+    database_url += "?sslmode=require"
+    logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
+
+db_pool = SimpleConnectionPool(
+    minconn=5,
+    maxconn=30,
+    dsn=database_url,
+    sslmode="require",
+    sslrootcert=None,  # Disable server certificate verification (if acceptable)
+    sslminprotocol="TLSv1.2"  # Enforce minimum TLS version
+)
+logger.info("✅ Database connection pool initialized")
 
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5)
@@ -248,31 +259,98 @@ except FileNotFoundError:
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
 def get_db_connection():
+    global db_pool
     try:
-        # Create a new connection for each request
-        conn = psycopg2.connect(
-            dsn=database_url,
-            sslmode="disable",
-            cursor_factory=DictCursor
-        )
-        # Test the connection
+        conn = db_pool.getconn()
+        if conn.closed:
+            logger.warning("Connection retrieved from pool is closed, reinitializing pool")
+            db_pool.closeall()
+            db_pool = SimpleConnectionPool(
+                minconn=5,
+                maxconn=30,
+                dsn=database_url,
+                sslmode="require",
+                sslrootcert=None,
+                sslminprotocol="TLSv1.2"
+            )
+            conn = db_pool.getconn()
+        # Test the connection with a simple query
         with conn.cursor() as c:
             c.execute("SELECT 1")
-        logger.info("✅ Established new database connection")
+        conn.cursor_factory = DictCursor
+        logger.info("✅ Retrieved database connection from pool")
         return conn
     except Exception as e:
-        logger.error(f"❌ Failed to establish database connection: {str(e)}")
+        logger.error(f"❌ Failed to get database connection: {str(e)}")
+        # If the error is SSL-related, reinitialize the pool
+        error_str = str(e).lower()
+        if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
+            logger.warning("SSL error detected, reinitializing connection pool")
+            try:
+                db_pool.closeall()
+                db_pool = SimpleConnectionPool(
+                    minconn=5,
+                    maxconn=30,
+                    dsn=database_url,
+                    sslmode="require",
+                    sslrootcert=None,
+                    sslminprotocol="TLSv1.2"
+                )
+                conn = db_pool.getconn()
+                with conn.cursor() as c:
+                    c.execute("SELECT 1")
+                conn.cursor_factory = DictCursor
+                logger.info("✅ Reinitialized database connection pool and retrieved new connection")
+                return conn
+            except Exception as e2:
+                logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
         raise e
 
 def release_db_connection(conn):
+    global db_pool
     if conn:
         try:
-            conn.close()
-            logger.info("✅ Closed database connection")
+            if conn.closed:
+                logger.warning("Attempted to release a closed connection")
+            else:
+                db_pool.putconn(conn)
+                logger.info("✅ Database connection returned to pool")
         except Exception as e:
-            logger.error(f"❌ Failed to close database connection: {str(e)}")
+            logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
+
+def with_db_retry(func):
+    """Decorator to retry database operations on failure."""
+    def wrapper(*args, **kwargs):
+        retries = 5
+        for attempt in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
+                error_str = str(e).lower()
+                if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac", "connection already closed"]):
+                    global db_pool
+                    try:
+                        db_pool.closeall()
+                        db_pool = SimpleConnectionPool(
+                            minconn=5,
+                            maxconn=30,
+                            dsn=database_url,
+                            sslmode="require",
+                            sslrootcert=None,
+                            sslminprotocol="TLSv1.2"
+                        )
+                        logger.info("✅ Reinitialized database connection pool due to SSL or connection error")
+                    except Exception as e2:
+                        logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
+                if attempt < retries - 1:
+                    time.sleep(2)
+                    continue
+                raise e
+    return wrapper
 
 # Cache the ai_enabled setting
+@with_db_retry
 def get_ai_enabled():
     if "ai_enabled" in settings_cache:
         logger.info("✅ Retrieved ai_enabled from cache")
@@ -292,6 +370,7 @@ def get_ai_enabled():
         logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}")
         return ("1", "1970-01-01T00:00:00Z")
 
+@with_db_retry
 def init_db():
     logger.info("Initializing database")
     with get_db_connection() as conn:
@@ -512,7 +591,7 @@ def init_db():
         logger.info("✅ Database initialized")
         release_db_connection(conn)
 
-# Add test conversations (for development purposes)
+@with_db_retry
 def add_test_conversations():
     if os.getenv("SEED_INITIAL_DATA", "false").lower() != "true":
         logger.info("Skipping test conversations (SEED_INITIAL_DATA not enabled)")
@@ -547,6 +626,7 @@ def add_test_conversations():
 init_db()
 add_test_conversations()
 
+@with_db_retry
 def log_message(convo_id, username, message, sender):
     try:
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -579,6 +659,7 @@ class Agent(UserMixin):
         self.username = username
 
 @login_manager.user_loader
+@with_db_retry
 def load_user(agent_id):
     start_time = time.time()
     logger.info(f"Starting load_user for agent_id {agent_id}")
@@ -600,6 +681,7 @@ def load_user(agent_id):
         release_db_connection(conn)
 
 @app.route("/login", methods=["GET", "POST"])
+@with_db_retry
 def login():
     logger.info("✅ /login endpoint registered and called")
     start_time = time.time()
