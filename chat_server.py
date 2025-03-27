@@ -121,8 +121,7 @@ db_pool = SimpleConnectionPool(
     maxconn=30,
     dsn=database_url,
     sslmode="require",
-    sslrootcert=None,  # Disable server certificate verification (if acceptable)
-    sslminprotocol="TLSv1.2"  # Enforce minimum TLS version
+    sslrootcert=None  # Disable server certificate verification (if acceptable)
 )
 logger.info("✅ Database connection pool initialized")
 
@@ -270,8 +269,7 @@ def get_db_connection():
                 maxconn=30,
                 dsn=database_url,
                 sslmode="require",
-                sslrootcert=None,
-                sslminprotocol="TLSv1.2"
+                sslrootcert=None
             )
             conn = db_pool.getconn()
         # Test the connection with a simple query
@@ -293,8 +291,7 @@ def get_db_connection():
                     maxconn=30,
                     dsn=database_url,
                     sslmode="require",
-                    sslrootcert=None,
-                    sslminprotocol="TLSv1.2"
+                    sslrootcert=None
                 )
                 conn = db_pool.getconn()
                 with conn.cursor() as c:
@@ -337,8 +334,7 @@ def with_db_retry(func):
                             maxconn=30,
                             dsn=database_url,
                             sslmode="require",
-                            sslrootcert=None,
-                            sslminprotocol="TLSv1.2"
+                            sslrootcert=None
                         )
                         logger.info("✅ Reinitialized database connection pool due to SSL or connection error")
                     except Exception as e2:
