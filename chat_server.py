@@ -20,7 +20,6 @@ import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from psycopg2.pool import SimpleConnectionPool
 from cachetools import TTLCache
 from werkzeug.security import generate_password_hash, check_password_hash
 import asyncio
@@ -103,13 +102,18 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Initialize connection pool
-database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-db_pool = SimpleConnectionPool(
-    minconn=5,
-    maxconn=30,
-    dsn=database_url
-)
+# Initialize database URL (no connection pool for now)
+try:
+    database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    logger.info(f"Using DATABASE_URL: {database_url}")
+except NameError:
+    logger.error("❌ DATABASE_URL environment variable not set")
+    raise ValueError("DATABASE_URL environment variable not set")
+
+# Disable SSL for debugging
+if "sslmode" not in database_url:
+    database_url += "?sslmode=disable"
+    logger.info(f"Added sslmode=disable to DATABASE_URL: {database_url}")
 
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5)
@@ -243,71 +247,30 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
-# Initialize connection pool
-database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-db_pool = SimpleConnectionPool(
-    minconn=5,
-    maxconn=30,
-    dsn=database_url
-)
-
 def get_db_connection():
-    global db_pool  # Declare db_pool as global at the start of the function
     try:
-        conn = db_pool.getconn()
-        if conn.closed:
-            logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            db_pool.closeall()
-            db_pool = SimpleConnectionPool(minconn=5, maxconn=30, dsn=database_url)
-            conn = db_pool.getconn()
-        conn.cursor_factory = DictCursor
-        logger.info("✅ Retrieved database connection from pool")
+        # Create a new connection for each request
+        conn = psycopg2.connect(
+            dsn=database_url,
+            sslmode="disable",
+            cursor_factory=DictCursor
+        )
+        # Test the connection
+        with conn.cursor() as c:
+            c.execute("SELECT 1")
+        logger.info("✅ Established new database connection")
         return conn
     except Exception as e:
-        logger.error(f"❌ Failed to get database connection: {str(e)}")
-        raise
+        logger.error(f"❌ Failed to establish database connection: {str(e)}")
+        raise e
 
 def release_db_connection(conn):
     if conn:
         try:
-            if conn.closed:
-                logger.warning("Attempted to release a closed connection")
-            else:
-                db_pool.putconn(conn)
-                logger.info("✅ Database connection returned to pool")
+            conn.close()
+            logger.info("✅ Closed database connection")
         except Exception as e:
-            logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
-
-def with_db_retry(func):
-    """Decorator to retry database operations on failure."""
-    def wrapper(*args, **kwargs):
-        retries = 5
-        for attempt in range(retries):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
-                error_str = str(e).lower()
-                if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
-                    global db_pool
-                    try:
-                        db_pool.closeall()
-                        db_pool = SimpleConnectionPool(
-                            minconn=5,
-                            maxconn=30,
-                            dsn=database_url,
-                            sslmode="require",
-                            sslrootcert=None,
-                            sslminprotocol="TLSv1.2"
-                        )
-                        logger.info("✅ Reinitialized database connection pool due to SSL error")
-                    except Exception as e2:
-                        logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
-                if attempt < retries - 1:
-                    time.sleep(2)
-                    continue
-                raise e
-    return wrapper
+            logger.error(f"❌ Failed to close database connection: {str(e)}")
 
 # Cache the ai_enabled setting
 def get_ai_enabled():
@@ -548,7 +511,7 @@ def init_db():
         conn.commit()
         logger.info("✅ Database initialized")
         release_db_connection(conn)
-        
+
 # Add test conversations (for development purposes)
 def add_test_conversations():
     if os.getenv("SEED_INITIAL_DATA", "false").lower() != "true":
@@ -637,7 +600,6 @@ def load_user(agent_id):
         release_db_connection(conn)
 
 @app.route("/login", methods=["GET", "POST"])
-@with_db_retry
 def login():
     logger.info("✅ /login endpoint registered and called")
     start_time = time.time()
@@ -674,10 +636,7 @@ def login():
         
         logger.info(f"Attempting to log in user: {username}")
         with get_db_connection() as conn:
-            logger.info("Database connection established")
             c = conn.cursor()
-            c.execute("SELECT 1")
-            logger.info("Test query executed successfully")
             # Check if password_hash column exists
             c.execute("""
                 SELECT column_name 
@@ -708,7 +667,7 @@ def login():
             return jsonify({"message": "Invalid credentials"}), 401
     except Exception as e:
         logger.error(f"❌ Error in /login: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to login"}), 500
+        return jsonify({"error": "Failed to login due to a server error"}), 500
 
 @app.route("/logout", methods=["POST"])
 @login_required
