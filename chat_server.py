@@ -248,20 +248,69 @@ except FileNotFoundError:
     """
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
 
+# Update get_db_connection to reinitialize the pool if it's closed
 def get_db_connection():
+    global db_pool
     try:
         conn = db_pool.getconn()
-        # Validate the connection
         if conn.closed:
-            logger.warning("Retrieved a closed connection from pool, attempting to get a new one")
-            db_pool.putconn(conn, close=True)
+            logger.warning("Retrieved a closed connection from pool, reinitializing pool")
+            db_pool.closeall()  # Close the existing pool
+            db_pool = SimpleConnectionPool(
+                minconn=5,
+                maxconn=30,
+                dsn=database_url
+            )
             conn = db_pool.getconn()
         conn.cursor_factory = DictCursor
         logger.info("✅ Database connection retrieved from pool")
         return conn
     except Exception as e:
         logger.error(f"❌ Failed to get database connection: {str(e)}")
-        raise Exception(f"Failed to get database connection: {str(e)}")
+        # Reinitialize the pool and try one more time
+        try:
+            db_pool.closeall()
+            db_pool = SimpleConnectionPool(
+                minconn=5,
+                maxconn=30,
+                dsn=database_url
+            )
+            conn = db_pool.getconn()
+            conn.cursor_factory = DictCursor
+            logger.info("✅ Database connection retrieved after reinitializing pool")
+            return conn
+        except Exception as e2:
+            logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
+            raise Exception(f"Failed to get database connection: {str(e2)}")
+
+# Update the /login endpoint with a retry wrapper
+def with_db_retry(func):
+    """Decorator to retry database operations on failure."""
+    def wrapper(*args, **kwargs):
+        retries = 3
+        for attempt in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
+                if "connection already closed" in str(e).lower() or "pool is closed" in str(e).lower():
+                    # Reinitialize the pool on connection errors
+                    global db_pool
+                    try:
+                        db_pool.closeall()
+                        db_pool = SimpleConnectionPool(
+                            minconn=5,
+                            maxconn=30,
+                            dsn=database_url
+                        )
+                        logger.info("✅ Reinitialized database connection pool")
+                    except Exception as e2:
+                        logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
+                if attempt < retries - 1:
+                    time.sleep(1)  # Wait 1 second before retrying
+                    continue
+                raise e
+    return wrapper
 
 def release_db_connection(conn):
     if conn:
@@ -584,6 +633,7 @@ def load_user(agent_id):
         release_db_connection(conn)
 
 @app.route("/login", methods=["GET", "POST"])
+@with_db_retry
 def login():
     start_time = time.time()
     logger.info("Starting /login endpoint")
@@ -622,8 +672,18 @@ def login():
             logger.info(f"Finished /login (failed) in {time.time() - start_time:.2f} seconds")
             return jsonify({"message": "Invalid credentials"}), 401
     except Exception as e:
-        logger.error(f"❌ Error in /login: {e}")
+        logger.error(f"❌ Error in /login: {str(e)}")
         return jsonify({"error": "Failed to login"}), 500
+
+# Keep the teardown_appcontext as is, since it will still log shutdown
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    logger.info("Shutting down database connection pool")
+    try:
+        db_pool.closeall()
+        logger.info("✅ Database connection pool closed")
+    except Exception as e:
+        logger.error(f"❌ Error closing database connection pool: {str(e)}")
 
 @app.route("/logout", methods=["POST"])
 @login_required
