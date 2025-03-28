@@ -116,13 +116,14 @@ if "sslmode" not in database_url:
     logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
 
 db_pool = SimpleConnectionPool(
-    minconn=5,
-    maxconn=30,
+    minconn=2,  # Reduced from 5
+    maxconn=10,  # Reduced from 30
     dsn=database_url,
     sslmode="require",
-    sslrootcert=None
+    sslrootcert=None,
+    connect_timeout=10  # Add a 10-second connection timeout
 )
-logger.info("✅ Database connection pool initialized")
+logger.info("✅ Database connection pool initialized with minconn=2, maxconn=10, connect_timeout=10")
 
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5)
@@ -264,11 +265,12 @@ def get_db_connection():
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
             db_pool.closeall()
             db_pool = SimpleConnectionPool(
-                minconn=5,
-                maxconn=30,
+                minconn=2,
+                maxconn=10,
                 dsn=database_url,
                 sslmode="require",
-                sslrootcert=None
+                sslrootcert=None,
+                connect_timeout=10
             )
             conn = db_pool.getconn()
         # Test the connection with a simple query
@@ -278,7 +280,7 @@ def get_db_connection():
         logger.info("✅ Retrieved database connection from pool")
         return conn
     except Exception as e:
-        logger.error(f"❌ Failed to get database connection: {str(e)}")
+        logger.error(f"❌ Failed to get database connection: {str(e)}", exc_info=True)  # Added exc_info=True for stack trace
         # If the error is SSL-related, reinitialize the pool
         error_str = str(e).lower()
         if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
@@ -286,11 +288,12 @@ def get_db_connection():
             try:
                 db_pool.closeall()
                 db_pool = SimpleConnectionPool(
-                    minconn=5,
-                    maxconn=30,
+                    minconn=2,
+                    maxconn=10,
                     dsn=database_url,
                     sslmode="require",
-                    sslrootcert=None
+                    sslrootcert=None,
+                    connect_timeout=10
                 )
                 conn = db_pool.getconn()
                 with conn.cursor() as c:
@@ -299,7 +302,7 @@ def get_db_connection():
                 logger.info("✅ Reinitialized database connection pool and retrieved new connection")
                 return conn
             except Exception as e2:
-                logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
+                logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}", exc_info=True)
         raise e
 
 def release_db_connection(conn):
@@ -1719,6 +1722,140 @@ def handle_agent_message(data):
     except Exception as e:
         logger.error(f"❌ Error in handle_agent_message: {str(e)}")
         emit("error", {"message": "Failed to send message"})
+
+@socketio.on("message")
+def handle_user_message(data):
+    start_time = time.time()
+    logger.info("Starting handle_user_message")
+    try:
+        convo_id = data.get("conversation_id")
+        message = data.get("message")
+        if not convo_id or not message:
+            logger.error("Missing conversation_id or message in user_message")
+            emit("error", {"message": "Missing conversation_id or message"})
+            return
+
+        try:
+            convo_id = int(convo_id)
+            if convo_id <= 0:
+                raise ValueError("Conversation ID must be a positive integer")
+        except ValueError:
+            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
+            emit("error", {"message": "Invalid conversation ID format"})
+            return
+
+        # Verify the conversation exists and get the username, ai_enabled, and channel
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT username, ai_enabled, channel, needs_agent, handoff_notified FROM conversations WHERE id = %s",
+                (convo_id,)
+            )
+            convo = c.fetchone()
+            if not convo:
+                logger.error(f"Conversation not found: {convo_id}")
+                emit("error", {"message": "Conversation not found"})
+                return
+
+            username = convo["username"]
+            ai_enabled = convo["ai_enabled"]
+            channel = convo["channel"]
+            needs_agent = convo["needs_agent"]
+            handoff_notified = convo["handoff_notified"]
+            release_db_connection(conn)
+
+        # Log the user's message
+        timestamp = log_message(convo_id, username, message, "user")
+
+        # Invalidate message cache for this conversation
+        cache_key = f"messages:{convo_id}:*"
+        keys = redis_client.keys(cache_key)
+        if keys:
+            redis_client.delete(*keys)
+            logger.info(f"Invalidated message cache for convo_id {convo_id}")
+
+        # Emit the user's message to the room
+        room = f"conversation_{convo_id}"
+        emit(
+            "new_message",
+            {
+                "convo_id": convo_id,
+                "message": message,
+                "sender": "user",
+                "timestamp": timestamp,
+                "username": username
+            },
+            room=room
+        )
+
+        # Check if the conversation needs an agent and hasn't been notified yet
+        if needs_agent and not handoff_notified:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE conversations SET handoff_notified = 1, last_updated = %s WHERE id = %s",
+                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                )
+                conn.commit()
+                release_db_connection(conn)
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+            logger.info(f"Notified agent for convo_id {convo_id} due to needs_agent")
+
+        # Check if AI is enabled for this conversation
+        if not ai_enabled:
+            logger.info(f"AI is disabled for convo_id {convo_id}, skipping AI response")
+            return
+
+        # Get global AI enabled setting
+        global_ai_enabled, _ = get_ai_enabled()
+        if global_ai_enabled != "1":
+            logger.info(f"Global AI is disabled, skipping AI response for convo_id {convo_id}")
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
+                    (datetime.now(timezone.utc).isoformat(), convo_id)
+                )
+                conn.commit()
+                release_db_connection(conn)
+            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
+            return
+
+        # Generate AI response
+        ai_reply = ai_respond_sync(message, convo_id)
+
+        # Log the AI's response
+        ai_timestamp = log_message(convo_id, username, ai_reply, "ai")
+
+        # Invalidate message cache again after AI response
+        cache_key = f"messages:{convo_id}:*"
+        keys = redis_client.keys(cache_key)
+        if keys:
+            redis_client.delete(*keys)
+            logger.info(f"Invalidated message cache for convo_id {convo_id} after AI response")
+
+        # Emit the AI's response to the room
+        emit(
+            "new_message",
+            {
+                "convo_id": convo_id,
+                "message": ai_reply,
+                "sender": "ai",
+                "timestamp": ai_timestamp,
+                "username": username
+            },
+            room=room
+        )
+
+        # If the channel is WhatsApp, send the AI's response to the user
+        if channel == "whatsapp":
+            chat_id = f"whatsapp:{username}"
+            send_whatsapp_message(chat_id, ai_reply)
+
+        logger.info(f"Finished handle_user_message in {time.time() - start_time:.2f} seconds")
+    except Exception as e:
+        logger.error(f"❌ Error in handle_user_message: {str(e)}", exc_info=True)
+        emit("error", {"message": "Failed to process message"})
 
 # Run the application
 if __name__ == "__main__":
