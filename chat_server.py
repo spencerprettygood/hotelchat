@@ -1585,11 +1585,13 @@ def whatsapp():
             return Response("Missing required fields", status=400)
 
         user_timestamp = datetime.now(timezone.utc).isoformat()
-        process_whatsapp_message.delay(from_number, chat_id, message_body, user_timestamp)
+        logger.info(f"Queuing process_whatsapp_message task: from_number={from_number}, chat_id={chat_id}, message_body={message_body}, user_timestamp={user_timestamp}")
+        task = process_whatsapp_message.delay(from_number, chat_id, message_body, user_timestamp)
+        logger.info(f"Task queued successfully: task_id={task.id}")
         logger.info(f"Finished /whatsapp (queued) in {time.time() - start_time:.2f} seconds")
         return Response("Message queued for processing", status=202)
     except Exception as e:
-        logger.error(f"❌ Error in /whatsapp: {str(e)}")
+        logger.error(f"❌ Error in /whatsapp: {str(e)}", exc_info=True)
         return Response("Failed to process WhatsApp message", status=500)
 
 @app.route("/refresh_conversations", methods=["POST"])
