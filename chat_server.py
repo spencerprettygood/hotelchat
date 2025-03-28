@@ -106,7 +106,7 @@ login_manager.login_view = 'login'
 
 # Initialize connection pool
 try:
-    database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
     logger.info(f"Using DATABASE_URL: {database_url}")
 except NameError:
     logger.error("❌ DATABASE_URL environment variable not set")
