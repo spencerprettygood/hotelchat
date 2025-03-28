@@ -22,8 +22,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
+import openai
+from openai import AsyncOpenAI, OpenAI
+from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
 import asyncio
-from openai import AsyncOpenAI, RateLimitError, APIError, AuthenticationError
 import redis.asyncio as redis
 import redis as sync_redis  # Add synchronous Redis client
 from concurrent_log_handler import ConcurrentRotatingFileHandler
