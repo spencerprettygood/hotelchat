@@ -43,10 +43,10 @@ file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelnam
 logger.addHandler(file_handler)
 
 # Validate critical environment variables
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    logger.error("⚠️ DATABASE_URL not set in environment variables")
-    raise ValueError("DATABASE_URL not set")
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    logger.error("❌ DATABASE_URL environment variable is not set")
+    raise ValueError("DATABASE_URL environment variable is not set")
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
@@ -116,14 +116,15 @@ if "sslmode" not in database_url:
     logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
 
 db_pool = SimpleConnectionPool(
-    minconn=2,  # Reduced from 5
-    maxconn=10,  # Reduced from 30
+    minconn=1,  # Start with 1 connection
+    maxconn=5,  # Limit to 5 connections to avoid overloading
     dsn=database_url,
-    sslmode="require",
-    sslrootcert=None,
-    connect_timeout=10  # Add a 10-second connection timeout
+    sslmode="require",  # Enforce SSL
+    sslrootcert=None,  # Let psycopg2 handle SSL certificates
+    connect_timeout=10,  # 10-second timeout for connections
+    options="-c statement_timeout=10000"  # Set a 10-second statement timeout
 )
-logger.info("✅ Database connection pool initialized with minconn=2, maxconn=10, connect_timeout=10")
+logger.info("✅ Database connection pool initialized with minconn=1, maxconn=5, connect_timeout=10")
 
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5)
@@ -265,12 +266,13 @@ def get_db_connection():
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
             db_pool.closeall()
             db_pool = SimpleConnectionPool(
-                minconn=2,
-                maxconn=10,
+                minconn=1,
+                maxconn=5,
                 dsn=database_url,
                 sslmode="require",
                 sslrootcert=None,
-                connect_timeout=10
+                connect_timeout=10,
+                options="-c statement_timeout=10000"
             )
             conn = db_pool.getconn()
         # Test the connection with a simple query
@@ -280,7 +282,7 @@ def get_db_connection():
         logger.info("✅ Retrieved database connection from pool")
         return conn
     except Exception as e:
-        logger.error(f"❌ Failed to get database connection: {str(e)}", exc_info=True)  # Added exc_info=True for stack trace
+        logger.error(f"❌ Failed to get database connection: {str(e)}", exc_info=True)
         # If the error is SSL-related, reinitialize the pool
         error_str = str(e).lower()
         if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
@@ -288,12 +290,13 @@ def get_db_connection():
             try:
                 db_pool.closeall()
                 db_pool = SimpleConnectionPool(
-                    minconn=2,
-                    maxconn=10,
+                    minconn=1,
+                    maxconn=5,
                     dsn=database_url,
                     sslmode="require",
                     sslrootcert=None,
-                    connect_timeout=10
+                    connect_timeout=10,
+                    options="-c statement_timeout=10000"
                 )
                 conn = db_pool.getconn()
                 with conn.cursor() as c:
@@ -303,6 +306,7 @@ def get_db_connection():
                 return conn
             except Exception as e2:
                 logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}", exc_info=True)
+                raise
         raise e
 
 def release_db_connection(conn):
