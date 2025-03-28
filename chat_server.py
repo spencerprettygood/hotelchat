@@ -411,6 +411,7 @@ def init_db():
                 username TEXT NOT NULL,
                 chat_id TEXT NOT NULL,
                 channel TEXT NOT NULL,
+S
                 assigned_agent TEXT,
                 ai_enabled INTEGER DEFAULT 1,
                 needs_agent INTEGER DEFAULT 0,
@@ -482,12 +483,11 @@ def init_db():
         if not agents_table_exists:
             c.execute('''CREATE TABLE agents (
                 id SERIAL PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
-                password TEXT NOT NULL
+                username TEXT NOT NULL UNIQUE
             )''')
             logger.info("Created agents table")
         else:
-            # Migration: Rename password_hash to password if it exists, or add password column
+            # Migration: Drop password_hash and password columns if they exist
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
@@ -496,23 +496,19 @@ def init_db():
             """)
             password_hash_exists = c.fetchone()[0]
             if password_hash_exists:
-                c.execute("ALTER TABLE agents RENAME COLUMN password_hash TO password")
-                logger.info("Renamed password_hash column to password in agents table")
-            else:
-                c.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.columns 
-                        WHERE table_name = 'agents' AND column_name = 'password'
-                    )
-                """)
-                password_exists = c.fetchone()[0]
-                if not password_exists:
-                    c.execute("ALTER TABLE agents ADD COLUMN password TEXT NOT NULL DEFAULT 'password123'")
-                    logger.info("Added password column to agents table with default value")
+                c.execute("ALTER TABLE agents DROP COLUMN password_hash")
+                logger.info("Dropped password_hash column from agents table")
 
-            # Ensure existing rows have a valid password
-            c.execute("UPDATE agents SET password = 'password123' WHERE password IS NULL")
-            logger.info("Updated existing agents with NULL password")
+            c.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns 
+                    WHERE table_name = 'agents' AND column_name = 'password'
+                )
+            """)
+            password_exists = c.fetchone()[0]
+            if password_exists:
+                c.execute("ALTER TABLE agents DROP COLUMN password")
+                logger.info("Dropped password column from agents table")
 
         if not settings_table_exists:
             c.execute('''CREATE TABLE settings (
@@ -560,8 +556,8 @@ def init_db():
             c.execute("SELECT COUNT(*) FROM agents")
             if c.fetchone()[0] == 0:
                 c.execute(
-                    "INSERT INTO agents (username, password) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
-                    ('admin', 'password123')
+                    "INSERT INTO agents (username) VALUES (%s) ON CONFLICT (username) DO NOTHING",
+                    ('admin',)
                 )
                 logger.info("Inserted default admin user")
 
@@ -716,31 +712,20 @@ def login():
             return jsonify({"message": "Invalid request format, expected JSON or form data"}), 400
 
         username = data.get("username")
-        password = data.get("password")
-        if not username or not password:
-            logger.error("❌ Missing username or password in /login request")
-            return jsonify({"message": "Missing username or password"}), 400
+        if not username:
+            logger.error("❌ Missing username in /login request")
+            return jsonify({"message": "Missing username"}), 400
         
         logger.info(f"Attempting to log in user: {username}")
         with get_db_connection() as conn:
             c = conn.cursor()
-            # Check if password column exists
-            c.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'agents' AND column_name = 'password'
-            """)
-            has_password = bool(c.fetchone())
-            if not has_password:
-                logger.error("❌ password column does not exist in agents table")
-                return jsonify({"error": "Server configuration error: password column missing"}), 500
             c.execute(
-                "SELECT id, username, password FROM agents WHERE username = %s",
+                "SELECT id, username FROM agents WHERE username = %s",
                 (username,)
             )
             agent = c.fetchone()
             logger.info(f"Agent query result: {agent}")
-            if agent and agent['password'] == password:
+            if agent:
                 agent_obj = Agent(agent['id'], agent['username'])
                 login_user(agent_obj)
                 logger.info(f"✅ Login successful for agent: {agent['username']}")
@@ -748,10 +733,10 @@ def login():
                 release_db_connection(conn)
                 logger.info(f"Finished /login (success) in {time.time() - start_time:.2f} seconds")
                 return jsonify({"message": "Login successful", "agent": agent['username'], "redirect": next_page})
-            logger.error("❌ Invalid credentials in /login request")
+            logger.error("❌ Invalid username in /login request")
             release_db_connection(conn)
             logger.info(f"Finished /login (failed) in {time.time() - start_time:.2f} seconds")
-            return jsonify({"message": "Invalid credentials"}), 401
+            return jsonify({"message": "Invalid username"}), 401
     except Exception as e:
         logger.error(f"❌ Error in /login: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to login due to a server error"}), 500
