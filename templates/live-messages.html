@@ -3,1184 +3,316 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Live WhatsApp messaging interface for Amapola Resort agents.">
     <title>Live Messages - Amapola Resort</title>
-    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            height: 100vh;
-            display: flex;
-            background-color: #f0f2f5;
-        }
-        .container {
-            display: flex;
-            height: 100vh;
-            width: 100%;
-        }
-        .sidebar {
-            width: 30%;
-            min-width: 300px;
-            background-color: #f0f2f5;
-            border-right: 1px solid #ddd;
-            display: flex;
-            flex-direction: column;
-        }
-        .sidebar-header {
-            background-color: #075E54;
-            color: white;
-            padding: 10px 15px;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-        }
-        .sidebar-header .profile-pic {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background-color: #ddd;
-            margin-right: 10px;
-        }
-        .sidebar-header .title {
-            flex-grow: 1;
-            font-size: 16px;
-            font-weight: 500;
-        }
-        .sidebar-header .icons {
-            display: flex;
-            gap: 20px;
-        }
-        .logout-button {
-            background-color: transparent;
-            border: none;
-            color: white;
-            font-size: 14px;
-            cursor: pointer;
-            padding: 5px 10px;
-            border-radius: 5px;
-            transition: background-color 0.2s;
-        }
-        .logout-button:hover {
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        .ai-toggle-container {
-            display: flex;
-            align-items: center;
-            margin-right: 10px;
-        }
-        .ai-toggle-container label {
-            font-size: 12px;
-            margin-right: 5px;
-        }
-        .ai-toggle-container input[type="checkbox"] {
-            appearance: none;
-            width: 34px;
-            height: 20px;
-            background-color: #ccc;
-            border-radius: 10px;
-            position: relative;
-            cursor: pointer;
-            outline: none;
-        }
-        .ai-toggle-container input[type="checkbox"]:checked {
-            background-color: #34C759;
-        }
-        .ai-toggle-container input[type="checkbox"]::before {
-            content: '';
-            position: absolute;
-            width: 16px;
-            height: 16px;
-            background-color: white;
-            border-radius: 50%;
-            top: 2px;
-            left: 2px;
-            transition: transform 0.2s;
-        }
-        .ai-toggle-container input[type="checkbox"]:checked::before {
-            transform: translateX(14px);
-        }
-        .conversation-item {
-            display: flex;
-            align-items: center;
-            padding: 10px;
-            border-bottom: 1px solid #ddd;
-            cursor: pointer;
-            background-color: #fff;
-        }
-        .conversation-item:hover {
-            background-color: #f0f0f0;
-        }
-        .conversation-item.active {
-            background-color: #e0f7fa;
-        }
-        .profile-pic {
-            width: 40px;
-            height: 40px;
-            background-color: #ccc;
-            border-radius: 50%;
-            margin-right: 10px;
-            flex-shrink: 0;
-        }
-        .conversation-info {
-            flex: 1;
-            min-width: 0;
-        }
-        .conversation-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-        }
-        .username {
-            font-weight: bold;
-            color: #333;
-        }
-        .timestamp {
-            color: #888;
-            font-size: 0.8em;
-        }
-        .message-preview {
-            color: #555;
-            font-size: 0.9em;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .chat-area {
-            flex-grow: 1;
-            display: flex;
-            flex-direction: column;
-        }
-        .chat-header {
-            background-color: #075E54;
-            color: white;
-            padding: 10px 15px;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-        }
-        .chat-header .profile-pic {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background-color: #ddd;
-            margin-right: 10px;
-        }
-        .chat-header .contact-info {
-            flex-grow: 1;
-        }
-        .chat-header .contact-info h1 {
-            font-size: 16px;
-            margin: 0;
-            font-weight: 500;
-        }
-        .chat-header .contact-info p {
-            font-size: 12px;
-            margin: 0;
-            opacity: 0.7;
-        }
-        .chat-header .icons {
-            display: flex;
-            gap: 20px;
-        }
-        .chat-header .icons span {
-            font-size: 20px;
-            cursor: pointer;
-        }
-        .chat-container {
-            flex-grow: 1;
+        .message-container {
+            height: 70vh;
             overflow-y: auto;
-            padding: 20px 10px;
-            background: #e5ddd5;
-            background-size: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 20px;
+            background-color: #f9f9f9;
         }
         .message {
-            margin-bottom: 10px;
-            display: flex;
-            flex-direction: column;
-            max-width: 70%;
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            max-width: 80%;
+            position: relative;
+            clear: both;
         }
         .user-message {
-            align-self: flex-start;
-            margin-right: auto;
+            background-color: #dcf8c6;
+            float: right;
         }
         .agent-message {
-            align-self: flex-end;
-            margin-left: auto;
+            background-color: #f1f0f0;
+            float: left;
         }
-        .ai-message {
-            align-self: flex-end;
-            margin-left: auto;
+        .message-metadata {
+            font-size: 0.8em;
+            color: #777;
+            margin-top: 5px;
+            display: block;
         }
-        .message-bubble {
-            padding: 8px 12px;
-            border-radius: 7.5px;
-            position: relative;
-            word-wrap: break-word;
-            font-size: 14.2px;
-            line-height: 1.4;
-        }
-        .user-message .message-bubble {
-            background-color: #FFFFFF;
-            border-bottom-left-radius: 2px;
-            box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
-        }
-        .user-message .message-bubble::after {
-            content: '';
-            position: absolute;
-            left: -5px;
-            bottom: 0;
-            width: 10px;
-            height: 10px;
-            background: radial-gradient(circle at bottom right, transparent 50%, #FFFFFF 50%);
-        }
-        .agent-message .message-bubble {
-            background-color: #DCF8C6;
-            border-bottom-right-radius: 2px;
-        }
-        .agent-message .message-bubble::after {
-            content: '';
-            position: absolute;
-            right: -5px;
-            bottom: 0;
-            width: 10px;
-            height: 10px;
-            background: radial-gradient(circle at bottom left, transparent 50%, #DCF8C6 50%);
-        }
-        .ai-message .message-bubble {
-            background-color: #DCF8C6;
-            border-bottom-right-radius: 2px;
-        }
-        .ai-message .message-bubble::after {
-            content: '';
-            position: absolute;
-            right: -5px;
-            bottom: 0;
-            width: 10px;
-            height: 10px;
-            background: radial-gradient(circle at bottom left, transparent 50%, #DCF8C6 50%);
-        }
-        .message-meta {
-            font-size: 11px;
-            color: #666;
-            margin-top: 2px;
-            align-self: flex-end;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .message-meta .checkmark {
-            font-size: 12px;
-            color: #34B7F1;
-        }
-        .date-separator {
-            text-align: center;
-            margin: 20px 0;
-            font-size: 12px;
-            color: #666;
-            position: relative;
-        }
-        .date-separator::before,
-        .date-separator::after {
-            content: '';
-            position: absolute;
-            top: 50%;
-            width: 40%;
-            height: 1px;
-            background-color: #ddd;
-        }
-        .date-separator::before {
-            left: 0;
-        }
-        .date-separator::after {
-            right: 0;
-        }
-        .typing-indicator {
-            display: none;
-            align-self: flex-start;
+        .connection-status {
+            padding: 5px 10px;
+            border-radius: 5px;
             margin-bottom: 10px;
         }
-        .typing-indicator .dots {
-            display: flex;
-            gap: 5px;
-            padding: 8px 12px;
-            background-color: #DCF8C6;
-            border-radius: 7.5px;
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
         }
-        .typing-indicator .dot {
-            width: 8px;
-            height: 8px;
-            background-color: #999;
-            border-radius: 50%;
-            animation: bounce 1.2s infinite;
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
         }
-        .typing-indicator .dot:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-        .typing-indicator .dot:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-        @keyframes bounce {
-            0%, 20%, 50%, 80%, 100% {
-                transform: translateY(0);
-            }
-            40% {
-                transform: translateY(-5px);
-            }
-            60% {
-                transform: translateY(-2px);
-            }
-        }
-        .input-container {
-            display: flex;
-            align-items: center;
-            padding: 10px;
-            background-color: #F0F2F5;
-            border-top: 1px solid #ddd;
-        }
-        #message-input {
-            flex-grow: 1;
-            padding: 10px 40px 10px 15px;
-            border: none;
-            border-radius: 20px;
-            background-color: #FFFFFF;
-            margin: 0 10px;
-            outline: none;
-            font-size: 14px;
-        }
-        .input-container .icon {
-            font-size: 20px;
-            color: #54656F;
-            cursor: pointer;
-        }
-        #send-button {
-            background-color: #00AF9C;
-            color: white;
-            border: none;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-        }
-        #send-button:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-        }
-        #send-button:hover:not(:disabled) {
-            background-color: #009688;
-        }
-        #send-button::before {
-            content: "➤";
-            font-size: 18px;
-            transform: rotate(-45deg);
-        }
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .toast {
-            padding: 10px 20px;
-            border-radius: 5px;
-            color: white;
-            font-size: 14px;
-            max-width: 300px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-            opacity: 0;
-            transform: translateY(-10px);
-            transition: opacity 0.3s ease, transform 0.3s ease;
-        }
-        .toast.show {
-            opacity: 1;
-            transform: translateY(0);
-        }
-        .toast.error {
-            background-color: #E74C3C;
-        }
-        .toast.success {
-            background-color: #34C759;
-        }
-        .toast.info {
-            background-color: #54656F;
+        .typing-indicator {
+            font-style: italic;
+            color: #555;
+            height: 20px;
         }
     </style>
 </head>
 <body>
-    <div class="container" id="dashboard">
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <div class="profile-pic"></div>
-                <div class="title">Amapola Resort (WhatsApp)</div>
-                <div class="ai-toggle-container">
-                    <label for="ai-toggle">AI</label>
-                    <input type="checkbox" id="ai-toggle" checked aria-label="Toggle AI">
-                </div>
-                <div class="icons">
-                    <button id="logout-button" class="logout-button" aria-label="Logout">Logout</button>
-                </div>
+    <div class="container mt-4 mb-4">
+        <div class="row align-items-center mb-3">
+            <div class="col">
+                <h2>Live Messages</h2>
+                <p>Conversation with: <strong id="client-username">Loading...</strong> 
+                   <span class="badge badge-info ml-2" id="conversation-channel"></span>
+                </p>
             </div>
-            <div class="conversation-list" id="conversation-list">
-                <!-- Conversations will be appended here -->
+            <div class="col-auto">
+                <span id="connection-status" class="connection-status disconnected">Connecting...</span>
+            </div>
+            <div class="col-auto">
+                <button id="back-btn" class="btn btn-secondary">Back to Dashboard</button>
             </div>
         </div>
-        <div class="chat-area">
-            <div class="chat-header" id="chat-header" style="display: none;">
-                <div class="profile-pic"></div>
-                <div class="contact-info">
-                    <h1 id="chat-title">Select a conversation</h1>
-                    <p>End-to-end encrypted</p>
+
+        <div id="message-container" class="message-container">
+            <div class="text-center p-4">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="sr-only">Loading...</span>
                 </div>
-                <div class="icons">
-                    <span aria-label="Chat options">⋮</span>
-                </div>
+                <p class="mt-2">Loading conversation history...</p>
             </div>
-            <div class="chat-container" id="chat-box" aria-live="polite">
-                <!-- Messages will be appended here -->
-            </div>
-            <div class="input-container" id="input-container" style="display: none;">
-                <span class="icon" id="emoji-icon" aria-label="Open emoji picker" role="button" tabindex="0">😊</span>
-                <span class="icon" id="attach-icon" aria-label="Attach file" role="button" tabindex="0">📎</span>
-                <input type="text" id="message-input" placeholder="Message" aria-label="Type a message">
-                <button id="send-button" aria-label="Send message" disabled></button>
+        </div>
+
+        <div class="typing-indicator" id="typing-indicator"></div>
+        
+        <div class="input-group">
+            <input type="text" id="message-input" class="form-control" placeholder="Type your message...">
+            <div class="input-group-append">
+                <button class="btn btn-primary" id="send-button">Send</button>
             </div>
         </div>
     </div>
-    <div class="toast-container" id="toast-container"></div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://unpkg.com/emoji-picker-element@1.12.0/dist/index.js" type="module"></script>
+    <!-- Required scripts -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+    
     <script>
-        const socket = io('https://hotel-chatbot-1qj5.onrender.com', {
-            path: "/socket.io",
-            transports: ["websocket", "polling"],
-            reconnection: true,
-            reconnectionAttempts: 5,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            randomizationFactor: 0.5,
-            withCredentials: true
-        });
-
-        let currentConversationId = null;
-        let currentChatId = null;
-        let currentAgent = null;
-        let lastMessageDate = null;
-        let isConnected = false;
-        let sentMessages = new Set();
-        let lastFetchedConversations = null;
-        let lastFetchedMessages = {};
-        let lastMessageTimestamp = null;
-        let hasInitiallyConnected = false;
-
-        // Function to set up Socket.IO listeners
-        function setupSocketListeners() {
-            socket.off("connect");
-            socket.off("connect_error");
-            socket.off("disconnect");
-            socket.off("status");
-            socket.off("error");
-            socket.off("new_message");
-            socket.off("live_message");
-            socket.off("settings_updated");
-            socket.off("reconnect");
-            socket.off("reconnect_error");
-            socket.off("pong");
-            socket.off("room_joined");
-
-            socket.on("connect", () => {
-                isConnected = true;
-                console.log("Socket.IO connected successfully with ID:", socket.id);
-                if (!hasInitiallyConnected) {
-                    showToast("Connected to server", "success");
-                    hasInitiallyConnected = true;
-                }
-                if (currentConversationId) {
-                    console.log("Rejoining conversation on connect:", currentConversationId);
-                    socket.emit("join_conversation", { conversation_id: currentConversationId }, (response) => {
-                        console.log("Join conversation response on connect:", response);
-                    });
-                }
-                setInterval(() => {
-                    console.log("Socket connection status:", socket.connected, "Current conversation ID:", currentConversationId);
-                    if (isConnected) {
-                        socket.emit("ping", { timestamp: new Date().toISOString() });
-                    }
-                }, 5000);
-            });
-
-            socket.on("connect_error", (error) => {
-                console.error("Socket.IO connection error:", error);
-                showToast("Failed to connect to server: " + error.message, "error");
-            });
-
-            socket.on("disconnect", (reason) => {
-                isConnected = false;
-                console.warn("Socket.IO disconnected. Reason:", reason);
-                showToast("Disconnected from server: " + reason, "error");
-                startPollingForMessages();
-            });
-
-            socket.on("status", (data) => {
-                console.log("Received status event:", data);
-                showToast(data.message, "info");
-            });
-
-            socket.on("error", (data) => {
-                console.error("Received error event:", data);
-                showToast("Error: " + data.message, "error");
-            });
-
-            socket.on("room_joined", (data) => {
-                console.log("Room joined:", data);
-                showToast(`Joined conversation ${data.convo_id}`, "success");
-            });
-
-            socket.on("new_message", (data) => {
-                console.log("Received new_message:", data);
-                console.log("Current conversation ID:", currentConversationId);
-                console.log("Socket connected status:", socket.connected);
-
-                const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
-                console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
-
-                if (data.sender === "agent" && sentMessages.has(messageKey)) {
-                    console.log("Skipping duplicate agent message:", messageKey);
-                    sentMessages.delete(messageKey);
-                    return;
-                }
-
-                if (String(data.convo_id) === String(currentConversationId)) {
-                    console.log("Appending message for convo_id:", data.convo_id);
-                    appendMessage({ message: data.message, timestamp: data.timestamp }, data.sender);
-                    if (lastFetchedMessages[currentConversationId]) {
-                        lastFetchedMessages[currentConversationId].messages.push({
-                            message: data.message,
-                            sender: data.sender,
-                            timestamp: data.timestamp
-                        });
-                        lastMessageTimestamp = data.timestamp;
-                    }
-                    stopPollingForMessages();
-                }
-            });
-
-            socket.on("live_message", (data) => {
-                console.log("Received live_message:", data);
-                console.log("Socket connected status:", socket.connected);
-
-                const messageKey = `${data.sender}:${data.message}:${data.timestamp}`;
-                console.log("Checking messageKey in sentMessages:", messageKey, sentMessages.has(messageKey));
-
-                if (data.sender === "agent" && sentMessages.has(messageKey)) {
-                    console.log("Skipping duplicate agent message:", messageKey);
-                    sentMessages.delete(messageKey);
-                    return;
-                }
-
-                updateConversationList(data);
-            });
-
-            socket.on("settings_updated", (settings) => {
-                if ("ai_enabled" in settings) {
-                    const aiToggle = document.getElementById("ai-toggle");
-                    aiToggle.checked = settings.ai_enabled === "1";
-                    showToast(`AI has been ${settings.ai_enabled === "1" ? "enabled" : "disabled"}`, "success");
-                }
-            });
-
-            socket.on("reconnect", (attempt) => {
-                console.log("Socket.IO reconnected after", attempt, "attempts");
-                const urlParams = new URLSearchParams(window.location.search);
-                const preselectConvoId = urlParams.get('convo_id');
-                fetchConversations(preselectConvoId);
-                fetchSettings();
-                if (currentConversationId) {
-                    loadMessagesForConversation(currentConversationId);
-                    socket.emit("join_conversation", { conversation_id: currentConversationId }, (response) => {
-                        console.log("Join conversation response after reconnect:", response);
-                    });
-                }
-                showToast("Reconnected to server", "success");
-                stopPollingForMessages();
-            });
-
-            socket.on("reconnect_error", (error) => {
-                console.error("Socket.IO reconnect error:", error);
-                showToast("Failed to reconnect to server", "error");
-                startPollingForMessages();
-            });
-
-            socket.on("pong", (data) => {
-                console.log("Received pong:", data);
-            });
-        }
-
-        setupSocketListeners();
-
-        function showToast(message, type = "info") {
-            const toastContainer = document.getElementById("toast-container");
-            const toast = document.createElement("div");
-            toast.className = `toast ${type}`;
-            toast.setAttribute("role", "alert");
-            toast.setAttribute("aria-live", "assertive");
-            toast.textContent = message;
-            toastContainer.appendChild(toast);
-
-            setTimeout(() => toast.classList.add("show"), 100);
-            setTimeout(() => {
-                toast.classList.remove("show");
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-
-        function addDateSeparator(dateStr) {
-            const chatBox = document.getElementById("chat-box");
-            const separator = document.createElement("div");
-            separator.className = "date-separator";
-            separator.textContent = dateStr;
-            chatBox.appendChild(separator);
-        }
-
-        function appendMessage(msg, sender) {
-            console.log("Appending message:", msg, "Sender:", sender);
-            const chatBox = document.getElementById("chat-box");
-            let messageDate = new Date(msg.timestamp);
-            if (isNaN(messageDate.getTime())) {
-                messageDate = new Date(msg.timestamp + "Z");
-            }
-            if (isNaN(messageDate.getTime())) {
-                console.error("Invalid message timestamp:", msg.timestamp);
-                return;
-            }
-            const dateStr = formatDateForSeparator(msg.timestamp);
-
-            if (!lastMessageDate || formatDateForSeparator(lastMessageDate) !== dateStr) {
-                console.log("Adding date separator:", dateStr);
-                addDateSeparator(dateStr);
-                lastMessageDate = messageDate;
-            }
-
-            const div = document.createElement("div");
-            const isUser = sender === "user";
-            const isAgent = sender === "agent";
-            div.className = "message";
-            div.classList.add(isUser ? "user-message" : isAgent ? "agent-message" : "ai-message");
-
-            const bubble = document.createElement("div");
-            bubble.className = "message-bubble";
-            bubble.textContent = msg.message;
-            div.appendChild(bubble);
-
-            const meta = document.createElement("div");
-            meta.className = "message-meta";
-            const time = formatTimestamp(msg.timestamp);
-            meta.innerHTML = `${time}${isAgent ? '<span class="checkmark">✓✓</span>' : ""}`;
-            div.appendChild(meta);
-
-            chatBox.appendChild(div);
-            console.log("Message appended to chatBox:", div);
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            if (!lastMessageTimestamp || new Date(msg.timestamp) > new Date(lastMessageTimestamp)) {
-                lastMessageTimestamp = msg.timestamp;
-            }
-        }
-
-        function formatTimestamp(timestamp) {
-            const date = new Date(timestamp);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-
-        function formatDateForSeparator(timestamp) {
-            let date = new Date(timestamp);
-            if (isNaN(date.getTime())) {
-                date = new Date(timestamp + "Z");
-            }
-            if (isNaN(date.getTime())) {
-                console.error("Invalid timestamp for date separator:", timestamp);
-                return "Unknown Date";
-            }
-            const today = new Date();
-            if (date.toDateString() === today.toDateString()) return "Today";
-            const yesterday = new Date(today);
-            yesterday.setDate(today.getDate() - 1);
-            if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
-            return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-        }
-
-        async function loadMessagesForConversation(convoId, sinceTimestamp = null) {
-            const chatBox = document.getElementById("chat-box");
-            const chatHeader = document.getElementById("chat-header");
-            const chatTitle = document.getElementById("chat-title");
-            try {
-                console.log("Fetching messages for convoId:", convoId, "sinceTimestamp:", sinceTimestamp);
-                let url = `/messages/${convoId}`;
-                if (sinceTimestamp) {
-                    url += `?since=${encodeURIComponent(sinceTimestamp)}`;
-                }
-
-                if (!sinceTimestamp && lastFetchedMessages[convoId]) {
-                    console.log("Using cached messages for convoId:", convoId);
-                    const data = lastFetchedMessages[convoId];
-                    chatBox.innerHTML = "";
-                    lastMessageDate = null;
-                    chatHeader.style.display = "flex";
-                    chatTitle.textContent = data.username || "Unknown User";
-
-                    if (data.messages && data.messages.length > 0) {
-                        data.messages.forEach(msg => {
-                            appendMessage(msg, msg.sender);
-                        });
-                    } else {
-                        chatBox.innerHTML = "<p>No messages found for this conversation.</p>";
-                    }
-                    return;
-                }
-
-                const response = await fetch(url, { credentials: 'include' });
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    if (response.status === 503 || response.status === 429) {
-                        showToast("Server is under heavy load, please try again later", "error");
-                    }
-                    throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
-                }
-                const data = await response.json();
-                console.log("Messages fetched:", data);
-
-                if (!sinceTimestamp) {
-                    lastFetchedMessages[convoId] = data;
-                    chatBox.innerHTML = "";
-                    lastMessageDate = null;
-                    chatHeader.style.display = "flex";
-                    chatTitle.textContent = data.username || "Unknown User";
-                }
-
-                if (data.messages && data.messages.length > 0) {
-                    data.messages.forEach(msg => {
-                        appendMessage(msg, msg.sender);
-                    });
-                } else if (!sinceTimestamp) {
-                    chatBox.innerHTML = "<p>No messages found for this conversation.</p>";
-                }
-            } catch (error) {
-                console.error("Error loading messages:", error);
-                if (!sinceTimestamp) {
-                    chatBox.innerHTML = "<p>Failed to load messages. Please try again later.</p>";
-                }
-                showToast("Failed to load messages: " + error.message, "error");
-            }
-        }
-
-        async function fetchConversations(preselectConvoId = null) {
-            const conversationList = document.getElementById("conversation-list");
-            try {
-                const response = await fetch("/all-whatsapp-messages", { credentials: 'include' });
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    if (response.status === 503 || response.status === 429) {
-                        showToast("Server is under heavy load, please try again later", "error");
-                    }
-                    throw new Error(`HTTP error! Status: ${response.status}, Response: ${errorText}`);
-                }
-                const data = await response.json();
-                lastFetchedConversations = data.conversations;
-                conversationList.innerHTML = "";
-                if (data.conversations && data.conversations.length > 0) {
-                    data.conversations.forEach(convo => {
-                        const convoElement = document.createElement("div");
-                        convoElement.className = "conversation-item";
-                        convoElement.dataset.convoId = convo.convo_id;
-                        convoElement.dataset.chatId = convo.chat_id;
-                        convoElement.innerHTML = `
-                            <div class="profile-pic"></div>
-                            <div class="conversation-info">
-                                <div class="conversation-header">
-                                    <span class="username">${convo.username}</span>
-                                    <span class="timestamp">${formatDateForSeparator(convo.last_updated)}</span>
-                                </div>
-                                <div class="message-preview">Last updated: ${new Date(convo.last_updated).toLocaleTimeString()}</div>
-                            </div>
-                        `;
-                        convoElement.addEventListener("click", () => {
-                            console.log("Selecting conversation:", convo.convo_id, convo.chat_id);
-                            selectConversation(convo.convo_id, convo.chat_id);
-                        });
-                        conversationList.appendChild(convoElement);
-                    });
-
-                    if (preselectConvoId) {
-                        const convo = data.conversations.find(c => String(c.convo_id) === String(preselectConvoId));
-                        if (convo) {
-                            selectConversation(convo.convo_id, convo.chat_id);
-                        } else {
-                            showToast("Conversation not found", "error");
-                            selectConversation(data.conversations[0].convo_id, data.conversations[0].chat_id);
-                        }
-                    } else if (!currentConversationId) {
-                        selectConversation(data.conversations[0].convo_id, data.conversations[0].chat_id);
-                    }
-                } else {
-                    conversationList.innerHTML = "<p>No WhatsApp conversations found.</p>";
-                    const chatBox = document.getElementById("chat-box");
-                    chatBox.innerHTML = "<p>No conversations available. Please start a new conversation.</p>";
-                    const inputContainer = document.getElementById("input-container");
-                    inputContainer.style.display = "none";
-                }
-            } catch (error) {
-                console.error("Error fetching conversations:", error);
-                conversationList.innerHTML = "<p>Failed to load conversations. Please try again later.</p>";
-                showToast("Failed to load conversations: " + error.message, "error");
-                const chatBox = document.getElementById("chat-box");
-                chatBox.innerHTML = "<p>Failed to load conversations. Please try again later.</p>";
-                const inputContainer = document.getElementById("input-container");
-                inputContainer.style.display = "none";
-            }
-        }
-
-        async function fetchSettings() {
-            try {
-                const response = await fetch("/settings", { credentials: 'include' });
-                if (!response.ok) {
-                    if (response.status === 503 || response.status === 429) {
-                        showToast("Server is under heavy load, please try again later", "error");
-                    }
-                    throw new Error(`Failed to fetch settings: ${response.status}`);
-                }
-                const settings = await response.json();
-                const aiToggle = document.getElementById("ai-toggle");
-                aiToggle.checked = settings.ai_enabled === "1";
-            } catch (error) {
-                console.error("Error fetching settings:", error);
-                showToast("Error fetching settings, defaulting AI to enabled", "error");
-                const aiToggle = document.getElementById("ai-toggle");
-                aiToggle.checked = true;
-            }
-        }
-
-        function selectConversation(convoId, chatId) {
-            convoId = String(convoId);
-            console.log("selectConversation called with convoId:", convoId, "chatId:", chatId);
-
-            // Update URL to persist conversation ID
-            const url = new URL(window.location);
-            url.searchParams.set('convo_id', convoId);
-            window.history.pushState({}, '', url);
-
-            if (currentConversationId) {
-                console.log("Leaving previous conversation room:", currentConversationId);
-                socket.emit("leave_conversation", { conversation_id: currentConversationId }, () => {
-                    console.log(`Left conversation ${currentConversationId}`);
-                });
-            }
-            currentConversationId = convoId;
-            currentChatId = chatId;
-
-            if (socket.connected) {
-                console.log("Emitting join_conversation for convoId:", convoId);
-                socket.emit("join_conversation", { conversation_id: convoId }, (response) => {
-                    console.log("Join conversation response:", response);
-                });
-            } else {
-                console.warn("Socket not connected, waiting for connection to join conversation:", convoId);
-                socket.on("connect", () => {
-                    console.log("Socket connected, now joining conversation:", convoId);
-                    socket.emit("join_conversation", { conversation_id: convoId }, (response) => {
-                        console.log("Join conversation response after reconnect:", response);
-                    });
-                });
-            }
-
-            const conversationList = document.getElementById("conversation-list");
-            const items = conversationList.getElementsByClassName("conversation-item");
-            for (let item of items) {
-                item.classList.remove("active");
-                if (item.dataset.convoId === convoId) {
-                    item.classList.add("active");
-                }
-            }
-
-            lastMessageTimestamp = null;
-            loadMessagesForConversation(convoId);
-
-            const inputContainer = document.getElementById("input-container");
-            inputContainer.style.display = "flex";
-            const messageInput = document.getElementById("message-input");
-            const sendButton = document.getElementById("send-button");
-            sendButton.disabled = !messageInput.value.trim();
-            messageInput.focus();
-
-            startPollingForMessages();
-        }
-
-        function sendMessage() {
-            if (!currentConversationId) {
-                showToast("Please select a conversation to reply to", "error");
-                return;
-            }
-
-            const messageInput = document.getElementById("message-input");
-            const sendButton = document.getElementById("send-button");
-            const message = messageInput.value.trim();
-            if (!message) {
-                showToast("Please enter a message to send", "error");
-                return;
-            }
-
-            const timestamp = new Date().toISOString();
-            const messageKey = `agent:${message}:${timestamp}`;
-            sentMessages.add(messageKey);
-            console.log("Added to sentMessages:", messageKey);
-
-            socket.emit("agent_message", {
-                convo_id: currentConversationId,
-                message: message,
-                channel: "whatsapp",
-            }, (response) => {
-                if (response && response.error) {
-                    console.error("Error sending message:", response.error);
-                    showToast("Failed to send message: " + response.error, "error");
-                    sentMessages.delete(messageKey);
-                }
-            });
-
-            messageInput.value = "";
-            sendButton.disabled = true;
-        }
-
-        function updateConversationList(data) {
-            console.log("Updating conversation list with data:", data);
-            const conversationList = document.getElementById("conversation-list");
-            let convoItem = Array.from(conversationList.children).find(item =>
-                item.dataset.chatId === data.chat_id
-            );
-
-            const isActive = convoItem && convoItem.classList.contains("active");
-            if (!convoItem) {
-                convoItem = document.createElement("div");
-                convoItem.className = "conversation-item";
-                convoItem.dataset.convoId = data.convo_id;
-                convoItem.dataset.chatId = data.chat_id;
-            }
-
-            convoItem.innerHTML = `
-                <div class="profile-pic"></div>
-                <div class="conversation-info">
-                    <div class="conversation-header">
-                        <span class="username">${data.username || "Unknown User"}</span>
-                        <span class="timestamp">${formatDateForSeparator(data.timestamp)}</span>
-                    </div>
-                    <div class="message-preview">${data.message}</div>
-                </div>
-            `;
-            if (isActive) {
-                convoItem.classList.add("active");
-            }
-
-            conversationList.prepend(convoItem);
-
-            convoItem.addEventListener("click", () => {
-                console.log("Selecting conversation from updated list:", data.convo_id, data.chat_id);
-                selectConversation(data.convo_id, data.chat_id);
-            });
-
-            if (lastFetchedConversations) {
-                const convoIndex = lastFetchedConversations.findIndex(c => c.chat_id === data.chat_id);
-                if (convoIndex !== -1) {
-                    lastFetchedConversations[convoIndex].last_updated = data.timestamp;
-                    lastFetchedConversations[convoIndex].message_preview = data.message;
-                } else {
-                    lastFetchedConversations.unshift({
-                        convo_id: data.convo_id,
-                        chat_id: data.chat_id,
-                        username: data.username,
-                        last_updated: data.timestamp,
-                        message_preview: data.message
-                    });
-                }
-            }
-        }
-
-        let pollingInterval = null;
-        function startPollingForMessages() {
-            if (pollingInterval) {
-                clearInterval(pollingInterval);
-            }
-            pollingInterval = setInterval(() => {
-                if (currentConversationId && lastMessageTimestamp) {
-                    console.log("Polling for new messages since:", lastMessageTimestamp);
-                    loadMessagesForConversation(currentConversationId, lastMessageTimestamp);
-                }
-            }, 30000);
-        }
-
-        function stopPollingForMessages() {
-            if (pollingInterval) {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
-            }
-        }
-
-        document.addEventListener("DOMContentLoaded", () => {
-            const dashboardSection = document.getElementById("dashboard");
-            if (!dashboardSection) {
-                console.error("Required DOM element (dashboard) is missing.");
-                return;
-            }
-
-            const chatBox = document.getElementById("chat-box");
-            chatBox.innerHTML = "<p>Select a conversation to view messages.</p>";
-
+        $(document).ready(function() {
+            // Get conversation ID from URL parameters
             const urlParams = new URLSearchParams(window.location.search);
-            const preselectConvoId = urlParams.get('convo_id');
-            console.log("Preselect convo_id from URL:", preselectConvoId);
-
-            fetchConversations(preselectConvoId);
-            fetchSettings();
-
-            const messageInput = document.getElementById("message-input");
-            const sendButton = document.getElementById("send-button");
-            if (messageInput && sendButton) {
-                messageInput.addEventListener("keypress", (e) => {
-                    if (e.key === "Enter" || e.keyCode === 13) {
-                        e.preventDefault();
-                        sendMessage();
-                    }
-                });
-                messageInput.addEventListener("input", () => {
-                    sendButton.disabled = !messageInput.value.trim() || !currentConversationId;
-                });
-                sendButton.addEventListener("click", sendMessage);
+            const convoId = urlParams.get('id');
+            let chatId = null;
+            let channel = null;
+            let clientUsername = null;
+            
+            if (!convoId) {
+                alert('No conversation ID provided. Redirecting to dashboard.');
+                window.location.href = '/dashboard';
+                return;
             }
-
-            const emojiIcon = document.getElementById("emoji-icon");
-            if (emojiIcon) {
-                const picker = document.createElement("emoji-picker");
-                picker.style.position = "absolute";
-                picker.style.bottom = "60px";
-                picker.style.left = "20px";
-                picker.style.display = "none";
-                document.body.appendChild(picker);
-
-                emojiIcon.addEventListener("click", () => {
-                    picker.style.display = picker.style.display === "none" ? "block" : "none";
-                });
-
-                emojiIcon.addEventListener("keypress", (e) => {
-                    if (e.key === "Enter" || e.keyCode === 13) {
-                        picker.style.display = picker.style.display === "none" ? "block" : "none";
-                    }
-                });
-
-                picker.addEventListener("emoji-click", (event) => {
-                    messageInput.value += event.detail.unicode;
-                    messageInput.focus();
-                    sendButton.disabled = !messageInput.value.trim() || !currentConversationId;
-                    picker.style.display = "none";
-                });
-            }
-
-            const attachIcon = document.getElementById("attach-icon");
-            if (attachIcon) {
-                attachIcon.addEventListener("click", () => {
-                    showToast("File attachment is not yet implemented", "info");
-                });
-
-                attachIcon.addEventListener("keypress", (e) => {
-                    if (e.key === "Enter" || e.keyCode === 13) {
-                        showToast("File attachment is not yet implemented", "info");
-                    }
-                });
-            }
-
-            const logoutButton = document.getElementById("logout-button");
-            if (logoutButton) {
-                logoutButton.addEventListener("click", () => {
-                    fetch("/logout", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        credentials: 'include'
-                    })
-                        .then((response) => response.json())
-                        .then((data) => {
-                            if (data.message === "Logged out successfully") {
-                                window.location.href = "/login";
-                            } else {
-                                showToast(data.message || "Logout failed", "error");
-                            }
-                        })
-                        .catch((error) => {
-                            console.error("Error during logout:", error);
-                            showToast("An error occurred during logout", "error");
-                        });
-                });
-            }
-
-            const INACTIVITY_TIMEOUT = 60 * 60 * 1000;
-            let inactivityTimer;
-
-            function resetInactivityTimer() {
-                console.log("Resetting inactivity timer");
-                clearTimeout(inactivityTimer);
-                inactivityTimer = setTimeout(() => {
-                    console.log("Inactivity timeout reached, logging out");
-                    fetch("/logout", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        credentials: 'include'
-                    })
-                        .then((response) => response.json())
-                        .then((data) => {
-                            if (data.message === "Logged out successfully") {
-                                showToast("Logged out due to inactivity", "info");
-                                window.location.href = "/login";
-                            } else {
-                                showToast(data.message || "Auto-logout failed", "error");
-                            }
-                        })
-                        .catch((error) => {
-                            console.error("Error during auto-logout:", error);
-                            showToast("An error occurred during auto-logout", "error");
-                        });
-                }, INACTIVITY_TIMEOUT);
-            }
-
-            ["mousemove", "mousedown", "keypress", "scroll", "touchstart"].forEach((event) => {
-                document.addEventListener(event, resetInactivityTimer, { passive: true });
+            
+            console.log(`Initializing live messages for conversation ID: ${convoId}`);
+            
+            // Connect to Socket.IO server
+            const socket = io({
+                reconnection: true,
+                reconnectionAttempts: 5,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 20000
             });
-
-            resetInactivityTimer();
-        });
-
-        document.getElementById("ai-toggle").addEventListener("change", async (e) => {
-            const aiEnabled = e.target.checked ? "1" : "0";
-            try {
-                const response = await fetch("/settings", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ key: "ai_enabled", value: aiEnabled }),
-                    credentials: 'include'
-                });
-                if (!response.ok) {
-                    if (response.status === 503 || response.status === 429) {
-                        showToast("Server is under heavy load, please try again later", "error");
-                    }
-                    throw new Error(`Failed to update AI settings: ${response.status}`);
+            
+            // Socket.IO event handlers
+            socket.on('connect', function() {
+                console.log('Connected to Socket.IO server');
+                $('#connection-status')
+                    .text('Connected')
+                    .removeClass('disconnected')
+                    .addClass('connected');
+                
+                // Join the conversation room
+                socket.emit('join_conversation', { conversation_id: convoId });
+                console.log(`Joined conversation room: conversation_${convoId}`);
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from Socket.IO server');
+                $('#connection-status')
+                    .text('Disconnected - Reconnecting...')
+                    .removeClass('connected')
+                    .addClass('disconnected');
+            });
+            
+            socket.on('connect_error', function(err) {
+                console.error('Connection error:', err);
+                $('#connection-status')
+                    .text('Connection Error')
+                    .removeClass('connected')
+                    .addClass('disconnected');
+            });
+            
+            socket.on('room_joined', function(data) {
+                console.log('Room joined confirmation:', data);
+            });
+            
+            // Listen for new messages
+            socket.on('new_message', function(data) {
+                console.log('New message received:', data);
+                appendMessage(data);
+                scrollToBottom();
+                
+                // Store chat_id and channel from the message if available
+                if (data.chat_id && !chatId) chatId = data.chat_id;
+                if (data.channel && !channel) {
+                    channel = data.channel;
+                    $('#conversation-channel').text(channel);
                 }
-                const data = await response.json();
-                if (data.status !== "success") throw new Error(data.error || "Unknown error");
-                showToast(`AI has been ${aiEnabled === "1" ? "enabled" : "disabled"}`, "success");
-            } catch (error) {
-                console.error("Error updating AI settings:", error);
-                e.target.checked = !e.target.checked;
-                showToast(`Error updating AI settings: ${error.message}`, "error");
+            });
+            
+            // Handle errors
+            socket.on('error', function(data) {
+                console.error('Socket.IO error:', data);
+                alert(`Error: ${data.message}`);
+            });
+            
+            // Load message history
+            loadMessageHistory();
+            
+            // Send message when button is clicked or Enter is pressed
+            $('#send-button').click(sendMessage);
+            $('#message-input').keypress(function(e) {
+                if (e.which === 13) { // Enter key
+                    sendMessage();
+                    return false; // Prevent default form submission
+                }
+            });
+            
+            // Back button handler
+            $('#back-btn').click(function() {
+                window.location.href = '/dashboard';
+            });
+            
+            // Function to load message history
+            function loadMessageHistory() {
+                console.log(`Loading message history for conversation ${convoId}`);
+                
+                $.ajax({
+                    url: `/get_messages/${convoId}`,
+                    method: 'GET',
+                    success: function(response) {
+                        console.log('Message history loaded:', response);
+                        
+                        // Clear loading indicator
+                        $('#message-container').empty();
+                        
+                        // Store client username
+                        clientUsername = response.username;
+                        $('#client-username').text(clientUsername);
+                        
+                        if (response.messages && response.messages.length > 0) {
+                            // Display message history
+                            response.messages.forEach(function(msg) {
+                                appendMessage(msg);
+                                
+                                // Store chat_id and channel from the first message if available
+                                if (msg.chat_id && !chatId) chatId = msg.chat_id;
+                                if (msg.channel && !channel) {
+                                    channel = msg.channel;
+                                    $('#conversation-channel').text(channel);
+                                }
+                            });
+                            scrollToBottom();
+                        } else {
+                            // No messages
+                            $('#message-container').html(
+                                '<div class="text-center text-muted p-4">' +
+                                'No messages in this conversation yet.' +
+                                '</div>'
+                            );
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('Error loading message history:', error);
+                        $('#message-container').html(
+                            '<div class="text-center text-danger p-4">' +
+                            'Failed to load message history. Please refresh the page.' +
+                            '</div>'
+                        );
+                    }
+                });
+            }
+            
+            // Function to send a message
+            function sendMessage() {
+                const messageText = $('#message-input').val().trim();
+                if (!messageText) return;
+                
+                if (!chatId) {
+                    alert('Cannot send message: Missing chat ID information');
+                    return;
+                }
+                
+                if (!channel) {
+                    // Default to "webchat" if no channel is specified
+                    channel = "webchat";
+                    $('#conversation-channel').text(channel);
+                }
+                
+                console.log(`Sending message to conversation ${convoId}:`, {
+                    message: messageText,
+                    chat_id: chatId,
+                    channel: channel
+                });
+                
+                // Emit the agent_message event via Socket.IO
+                socket.emit('agent_message', {
+                    convo_id: convoId,
+                    message: messageText,
+                    chat_id: chatId,
+                    channel: channel
+                });
+                
+                // Clear the input field
+                $('#message-input').val('');
+            }
+            
+            // Function to append a message to the container
+            function appendMessage(msg) {
+                // Create message element
+                const messageDiv = $('<div>').addClass('message');
+                
+                // Set class based on sender
+                if (msg.sender === 'user') {
+                    messageDiv.addClass('user-message');
+                } else if (msg.sender === 'agent') {
+                    messageDiv.addClass('agent-message');
+                }
+                
+                // Format timestamp if available
+                let timeDisplay = '';
+                if (msg.timestamp) {
+                    const msgDate = new Date(msg.timestamp);
+                    timeDisplay = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+                
+                // Build message content
+                const senderName = msg.sender === 'user' ? clientUsername || 'Client' : 'Agent';
+                messageDiv.html(`
+                    <div><strong>${senderName}</strong></div>
+                    <div>${msg.message}</div>
+                    <div class="message-metadata">${timeDisplay}</div>
+                `);
+                
+                // Add to container
+                $('#message-container').append(messageDiv);
+            }
+            
+            // Function to scroll to the bottom of the message container
+            function scrollToBottom() {
+                const container = document.getElementById('message-container');
+                container.scrollTop = container.scrollHeight;
             }
         });
     </script>
