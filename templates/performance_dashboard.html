@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HotelChat Performance Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: #333;
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+        }
+        .header button {
+            background-color: #d9534f;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+        .card {
+            background-color: white;
+            border-radius: 5px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .metric-label {
+            font-weight: bold;
+        }
+        .good { color: #5cb85c; }
+        .warning { color: #f0ad4e; }
+        .danger { color: #d9534f; }
+        
+        .chart-container {
+            height: 200px;
+            margin-top: 15px;
+            position: relative;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .update-time {
+            font-size: 0.8em;
+            color: #777;
+            text-align: right;
+            margin-top: 5px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>HotelChat Performance Dashboard</h1>
+            <div>
+                <span id="status-indicator">⚪ Checking status...</span>
+                <button id="reset-metrics">Reset Metrics</button>
+            </div>
+        </div>
+        
+        <div class="dashboard-grid">
+            <div class="card">
+                <h2>OpenAI API</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Total Requests:</span>
+                    <span id="openai-requests">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Response Time:</span>
+                    <span id="openai-response-time">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Token Usage:</span>
+                    <span id="openai-token-usage">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Errors:</span>
+                    <span id="openai-errors">--</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="openai-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>SocketIO</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Current Connections:</span>
+                    <span id="socketio-connections">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Total Messages:</span>
+                    <span id="socketio-messages">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Errors:</span>
+                    <span id="socketio-errors">--</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="socketio-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Database</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Total Queries:</span>
+                    <span id="db-queries">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Query Time:</span>
+                    <span id="db-query-time">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Connection Errors:</span>
+                    <span id="db-errors">--</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="db-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Redis Cache</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Hit Rate:</span>
+                    <span id="redis-hit-rate">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Latency:</span>
+                    <span id="redis-latency">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Errors:</span>
+                    <span id="redis-errors">--</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="redis-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>System Resources</h2>
+                <div class="metric-row">
+                    <span class="metric-label">CPU Usage:</span>
+                    <span id="system-cpu">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Memory Usage:</span>
+                    <span id="system-memory">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Uptime:</span>
+                    <span id="system-uptime">--</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="system-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Event Log</h2>
+                <div id="event-log" style="height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.9em;">
+                    <!-- Events will be added here -->
+                </div>
+            </div>
+        </div>
+        
+        <div class="update-time">Last updated: <span id="last-update">Never</span></div>
+    </div>
+    
+    <script>
+        // Charts for visualization
+        const charts = {};
+        
+        // Initialize charts
+        function initCharts() {
+            charts.openai = new Chart(
+                document.getElementById('openai-chart').getContext('2d'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Response Time (ms)',
+                            data: [],
+                            borderColor: '#5bc0de',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                }
+            );
+            
+            charts.socketio = new Chart(
+                document.getElementById('socketio-chart').getContext('2d'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Connections',
+                            data: [],
+                            borderColor: '#f0ad4e',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                }
+            );
+            
+            charts.system = new Chart(
+                document.getElementById('system-chart').getContext('2d'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [
+                            {
+                                label: 'CPU %',
+                                data: [],
+                                borderColor: '#5cb85c',
+                                tension: 0.1
+                            },
+                            {
+                                label: 'Memory %',
+                                data: [],
+                                borderColor: '#d9534f',
+                                tension: 0.1
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                }
+            );
+            
+            charts.db = new Chart(
+                document.getElementById('db-chart').getContext('2d'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Query Time (ms)',
+                            data: [],
+                            borderColor: '#428bca',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                }
+            );
+            
+            charts.redis = new Chart(
+                document.getElementById('redis-chart').getContext('2d'),
+                {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Hit Rate %',
+                            data: [],
+                            borderColor: '#5cb85c',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                }
+            );
+        }
+        
+        // Format a number to 2 decimal places
+        function formatNumber(num) {
+            return Number(num).toFixed(2);
+        }
+        
+        // Format time duration
+        function formatDuration(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            return `${hours}h ${minutes}m ${secs}s`;
+        }
+        
+        // Add an event to the log
+        function logEvent(message, type = 'info') {
+            const log = document.getElementById('event-log');
+            const now = new Date().toLocaleTimeString();
+            const classType = type === 'error' ? 'danger' : 
+                             type === 'warning' ? 'warning' : '';
+            
+            log.innerHTML = `<div class="${classType}"><b>${now}</b>: ${message}</div>` + log.innerHTML;
+            
+            // Limit the number of log entries
+            const entries = log.children;
+            if (entries.length > 100) {
+                log.removeChild(entries[entries.length - 1]);
+            }
+        }
+        
+        // Update the dashboard with new metrics
+        function updateDashboard(metrics) {
+            // Update OpenAI section
+            document.getElementById('openai-requests').textContent = metrics.openai.total_requests;
+            document.getElementById('openai-response-time').textContent = `${formatNumber(metrics.openai.avg_response_time_ms)} ms`;
+            document.getElementById('openai-token-usage').textContent = formatNumber(metrics.openai.avg_token_usage);
+            document.getElementById('openai-errors').textContent = metrics.openai.error_count;
+            
+            // Update SocketIO section
+            document.getElementById('socketio-connections').textContent = metrics.socketio.current_connections;
+            document.getElementById('socketio-messages').textContent = metrics.socketio.total_messages;
+            document.getElementById('socketio-errors').textContent = metrics.socketio.error_count;
+            
+            // Update Database section
+            document.getElementById('db-queries').textContent = metrics.database.total_queries;
+            document.getElementById('db-query-time').textContent = `${formatNumber(metrics.database.avg_query_time_ms)} ms`;
+            document.getElementById('db-errors').textContent = metrics.database.connection_errors;
+            
+            // Update Redis section
+            document.getElementById('redis-hit-rate').textContent = `${formatNumber(metrics.redis.hit_rate * 100)}%`;
+            document.getElementById('redis-latency').textContent = `${formatNumber(metrics.redis.avg_latency_ms)} ms`;
+            document.getElementById('redis-errors').textContent = metrics.redis.errors;
+            
+            // Update System section
+            document.getElementById('system-cpu').textContent = `${formatNumber(metrics.system.current_cpu_percent)}%`;
+            document.getElementById('system-memory').textContent = `${formatNumber(metrics.system.current_memory_percent)}%`;
+            document.getElementById('system-uptime').textContent = formatDuration(metrics.uptime_seconds);
+            
+            // Update last update time
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            
+            // Update status indicator
+            const statusEl = document.getElementById('status-indicator');
+            if (metrics.system.current_cpu_percent > 90 || metrics.system.current_memory_percent > 90) {
+                statusEl.textContent = '🔴 System Overloaded';
+                statusEl.className = 'danger';
+                logEvent('System resources critical. CPU or memory usage over 90%', 'error');
+            } else if (metrics.openai.error_count > 0) {
+                statusEl.textContent = '🟠 OpenAI API Errors';
+                statusEl.className = 'warning';
+                logEvent(`OpenAI API reported ${metrics.openai.error_count} errors`, 'warning');
+            } else {
+                statusEl.textContent = '🟢 Systems Normal';
+                statusEl.className = 'good';
+            }
+            
+            // Update charts
+            updateCharts(metrics);
+        }
+        
+        // Update chart data
+        function updateCharts(metrics) {
+            const now = new Date().toLocaleTimeString();
+            
+            // Add data to OpenAI chart
+            if (charts.openai.data.labels.length > 20) {
+                charts.openai.data.labels.shift();
+                charts.openai.data.datasets[0].data.shift();
+            }
+            charts.openai.data.labels.push(now);
+            charts.openai.data.datasets[0].data.push(metrics.openai.avg_response_time_ms);
+            charts.openai.update();
+            
+            // Add data to SocketIO chart
+            if (charts.socketio.data.labels.length > 20) {
+                charts.socketio.data.labels.shift();
+                charts.socketio.data.datasets[0].data.shift();
+            }
+            charts.socketio.data.labels.push(now);
+            charts.socketio.data.datasets[0].data.push(metrics.socketio.current_connections);
+            charts.socketio.update();
+            
+            // Add data to System chart
+            if (charts.system.data.labels.length > 20) {
+                charts.system.data.labels.shift();
+                charts.system.data.datasets[0].data.shift();
+                charts.system.data.datasets[1].data.shift();
+            }
+            charts.system.data.labels.push(now);
+            charts.system.data.datasets[0].data.push(metrics.system.current_cpu_percent);
+            charts.system.data.datasets[1].data.push(metrics.system.current_memory_percent);
+            charts.system.update();
+            
+            // Add data to DB chart
+            if (charts.db.data.labels.length > 20) {
+                charts.db.data.labels.shift();
+                charts.db.data.datasets[0].data.shift();
+            }
+            charts.db.data.labels.push(now);
+            charts.db.data.datasets[0].data.push(metrics.database.avg_query_time_ms);
+            charts.db.update();
+            
+            // Add data to Redis chart
+            if (charts.redis.data.labels.length > 20) {
+                charts.redis.data.labels.shift();
+                charts.redis.data.datasets[0].data.shift();
+            }
+            charts.redis.data.labels.push(now);
+            charts.redis.data.datasets[0].data.push(metrics.redis.hit_rate * 100);
+            charts.redis.update();
+        }
+        
+        // Fetch metrics from the server
+        function fetchMetrics() {
+            fetch('/admin/metrics')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    updateDashboard(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching metrics:', error);
+                    document.getElementById('status-indicator').textContent = '❌ Connection Error';
+                    document.getElementById('status-indicator').className = 'danger';
+                    logEvent(`Failed to fetch metrics: ${error.message}`, 'error');
+                });
+        }
+        
+        // Reset metrics
+        document.getElementById('reset-metrics').addEventListener('click', function() {
+            if (confirm('Are you sure you want to reset all metrics?')) {
+                fetch('/admin/metrics/reset', {
+                    method: 'POST'
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    logEvent('Metrics reset successfully');
+                    fetchMetrics(); // Refresh the dashboard
+                })
+                .catch(error => {
+                    console.error('Error resetting metrics:', error);
+                    logEvent(`Failed to reset metrics: ${error.message}`, 'error');
+                });
+            }
+        });
+        
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            fetchMetrics(); // Initial fetch
+            logEvent('Dashboard initialized');
+            
+            // Set up automatic refresh every 5 seconds
+            setInterval(fetchMetrics, 5000);
+        });
+    </script>
+</body>
+</html>

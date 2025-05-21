@@ -4,7 +4,7 @@ from gevent import monkey
 monkey.patch_all()
 
 # Now proceed with other imports
-from flask import Flask, render_template, request, jsonify, session, redirect, Response
+from flask import Flask, render_template, request, jsonify, session, redirect, Response, g
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -24,1848 +24,1299 @@ from googleapiclient.errors import HttpError
 from cachetools import TTLCache
 import openai
 from openai import AsyncOpenAI, OpenAI
-from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
+# Update error imports to match OpenAI v1.x package structure
+from openai.types.error import RateLimitError, APIError, AuthenticationError
+from openai.types.timeout_error import APITimeoutError
 import asyncio
 import redis.asyncio as redis
 import redis as sync_redis  # Add synchronous Redis client
 from concurrent_log_handler import ConcurrentRotatingFileHandler
-from langdetect import detect, DetectorFactory
+from langdetect import detect, DetectorFactoryotatingFileHandler
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 DetectorFactory.seed = 0
-
-# Set up logging with both stream and file handlers
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("chat_server")
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-logger.addHandler(stream_handler)
-file_handler = ConcurrentRotatingFileHandler("chat_server.log", maxBytes=10*1024*1024, backupCount=5)
-file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+DetectorFactory.seed = 0
+# Enhanced Logging Configuration
+LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "chat_server.log")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()erver.log")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# Create a logger instance. Using "chat_server" to potentially share with tasks.py logger.
+logger = logging.getLogger("chat_server")erver" to potentially share with tasks.py logger.
+logger.setLevel(LOG_LEVEL)("chat_server")
+logger.propagate = False # Prevent double logging if root logger is also configured
+logger.propagate = False # Prevent double logging if root logger is also configured
+# Clear existing handlers to avoid duplicate logs if this script is reloaded
+if logger.hasHandlers():s to avoid duplicate logs if this script is reloaded
+    logger.handlers.clear()
+    logger.handlers.clear()
+# Formatter
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s'
+)   '%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s'
+)
+# Console Handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)()
+logger.addHandler(console_handler)tter)
+logger.addHandler(console_handler)
+# File Handler (Rotating)
+file_handler = ConcurrentRotatingFileHandler(LOG_FILE_PATH, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8') # 10MB per file, 5 backups
+file_handler.setFormatter(formatter)eHandler(LOG_FILE_PATH, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8') # 10MB per file, 5 backups
+logger.addHandler(file_handler)tter)
 logger.addHandler(file_handler)
-
+logger.info(f"Logging initialized. Level: {LOG_LEVEL}, File: {LOG_FILE_PATH}")
+logger.info(f"Logging initialized. Level: {LOG_LEVEL}, File: {LOG_FILE_PATH}")
 # Validate critical environment variables
-database_url = os.getenv("DATABASE_URL")
-if not database_url:
+database_url = os.getenv("DATABASE_URL")s
+if not database_url:tenv("DATABASE_URL")
     logger.error("❌ DATABASE_URL environment variable is not set")
     raise ValueError("DATABASE_URL environment variable is not set")
-
+    raise ValueError("DATABASE_URL environment variable is not set")
 SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
+if not SECRET_KEY:tenv("SECRET_KEY")
     logger.error("⚠️ SECRET_KEY not set in environment variables")
+    raise ValueError("SECRET_KEY not set") environment variables")
     raise ValueError("SECRET_KEY not set")
-
 SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com")
-
+SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com")
 # Redis clients
 # Synchronous Redis client for Flask routes
-redis_client = sync_redis.Redis.from_url(
+redis_client = sync_redis.Redis.from_url(es
     os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
-    decode_responses=True,
-    max_connections=20
+    decode_responses=True, 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
+    max_connections=20rue,
+)   max_connections=20
 )
-
 # Async Redis client for ai_respond
 async_redis_client = redis.Redis.from_url(
     os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
-    decode_responses=True,
-    max_connections=20
+    decode_responses=True, 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
+    max_connections=20rue,
+)   max_connections=20
 )
-
 # Simplified Redis sync functions
-def redis_get_sync(key):
-    try:
-        return redis_client.get(key)
+def redis_get_sync(key):functions
+    request_start_time = time.time()
+    logger.debug(f"[Redis GET] Key: {key}")
+    try:er.debug(f"[Redis GET] Key: {key}")
+        value = redis_client.get(key)
+        processing_time = (time.time() - request_start_time) * 1000
+        if value is not None:me.time() - request_start_time) * 1000
+            logger.debug(f"[Redis HIT] Key: {key} - Time: {processing_time:.2f}ms")
+        else:ogger.debug(f"[Redis HIT] Key: {key} - Time: {processing_time:.2f}ms")
+            logger.debug(f"[Redis MISS] Key: {key} - Time: {processing_time:.2f}ms")
+        return valueebug(f"[Redis MISS] Key: {key} - Time: {processing_time:.2f}ms")
+    except redis.exceptions.RedisError as e: # Catch specific Redis errors
+        processing_time = (time.time() - request_start_time) * 1000 errors
+        logger.error(f"[Redis ERROR] GET Key: {key} - Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
+        return Noner(f"[Redis ERROR] GET Key: {key} - Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
     except Exception as e:
-        logger.error(f"❌ Error in redis_get_sync for key {key}: {str(e)}")
+        processing_time = (time.time() - request_start_time) * 1000
+        logger.error(f"[Redis ERROR] GET Key: {key} - Unexpected Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
+        return Noner(f"[Redis ERROR] GET Key: {key} - Unexpected Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
         return None
-
 def redis_setex_sync(key, ttl, value):
-    try:
+    request_start_time = time.time()):
+    value_snippet = str(value)[:100] + ("..." if len(str(value)) > 100 else "")
+    logger.debug(f"[Redis SETEX] Key: {key}, TTL: {ttl}, Value Snippet: '{value_snippet}'")
+    try:er.debug(f"[Redis SETEX] Key: {key}, TTL: {ttl}, Value Snippet: '{value_snippet}'")
         redis_client.setex(key, ttl, value)
-    except Exception as e:
-        logger.error(f"❌ Error in redis_setex_sync for key {key}: {str(e)}")
-
+        processing_time = (time.time() - request_start_time) * 1000
+        logger.debug(f"[Redis SETEX Success] Key: {key} - Time: {processing_time:.2f}ms")
+    except redis.exceptions.RedisError as e: Key: {key} - Time: {processing_time:.2f}ms")
+        processing_time = (time.time() - request_start_time) * 1000
+        logger.error(f"[Redis ERROR] SETEX Key: {key} - Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
+    except Exception as e:dis ERROR] SETEX Key: {key} - Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
+        processing_time = (time.time() - request_start_time) * 1000
+        logger.error(f"[Redis ERROR] SETEX Key: {key} - Unexpected Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
+        logger.error(f"[Redis ERROR] SETEX Key: {key} - Unexpected Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
 app = Flask(__name__, static_folder='static', template_folder='templates')
-app.config["SECRET_KEY"] = SECRET_KEY
+app.config["SECRET_KEY"] = SECRET_KEYstatic', template_folder='templates')
+CORS(app)g["SECRET_KEY"] = SECRET_KEY
 CORS(app)
-
 socketio = SocketIO(
-    app,
+    app, = SocketIO(
     cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
-    async_mode="gevent",
-    ping_timeout=60,
+    async_mode="gevent",=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
+    message_queue=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), # Added message queue for Celery
+    ping_timeout=60,.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), # Added message queue for Celery
     ping_interval=15,
-    logger=True,
+    logger=True,l=15,
     engineio_logger=True
+)   engineio_logger=True
 )
-
 login_manager = LoginManager()
-login_manager.init_app(app)
+login_manager.init_app(app)r()
 login_manager.login_view = 'login'
-
+login_manager.login_view = 'login'
 # Initialize connection pool
-try:
+try:itialize connection pool
     database_url = database_url.replace("postgres://", "postgresql://", 1)
-    logger.info(f"Using DATABASE_URL: {database_url}")
-except NameError:
+    logger.info(f"Using DATABASE_URL: {database_url}") "postgresql://", 1)
+except NameError:"Using DATABASE_URL: {database_url}")
     logger.error("❌ DATABASE_URL environment variable not set")
     raise ValueError("DATABASE_URL environment variable not set")
-
+    raise ValueError("DATABASE_URL environment variable not set")
 # Use sslmode=require
 if "sslmode" not in database_url:
     database_url += "?sslmode=require"
     logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
-
+    logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
 db_pool = SimpleConnectionPool(
     minconn=1,  # Start with 1 connection
     maxconn=5,  # Limit to 5 connections to avoid overloading
-    dsn=database_url,
+    dsn=database_url,it to 5 connections to avoid overloading
     sslmode="require",  # Enforce SSL
     sslrootcert=None,  # Let psycopg2 handle SSL certificates
-    connect_timeout=10,  # 10-second timeout for connections
+    connect_timeout=10,  # 10-second timeout for connectionss
     options="-c statement_timeout=10000"  # Set a 10-second statement timeout
-)
+)   options="-c statement_timeout=10000"  # Set a 10-second statement timeout
 logger.info("✅ Database connection pool initialized with minconn=1, maxconn=5, connect_timeout=10")
-
+logger.info("✅ Database connection pool initialized with minconn=1, maxconn=5, connect_timeout=10")
 # Cache for ai_enabled setting with 5-second TTL
-settings_cache = TTLCache(maxsize=1, ttl=5)
-
+settings_cache = TTLCache(maxsize=1, ttl=5) # type: ignore
+settings_cache = TTLCache(maxsize=1, ttl=5) # type: ignore
 # Import tasks after app and logger are initialized to avoid circular imports
-from tasks import process_whatsapp_message, send_whatsapp_message_task
-
+# logger.debug("Importing tasks module...")tialized to avoid circular imports
+# from tasks import process_whatsapp_message, send_whatsapp_message_task # Commented out global import
+# logger.debug("Tasks module imported.")sage, send_whatsapp_message_task # Commented out global import
+# logger.debug("Tasks module imported.")
 # Validate OpenAI API key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
+if not OPENAI_API_KEY:tenv("OPENAI_API_KEY")
     logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
+    raise ValueError("OPENAI_API_KEY not set") environment variables")
     raise ValueError("OPENAI_API_KEY not set")
-
 # Initialize OpenAI client with a timeout
-openai_client = AsyncOpenAI(
-    api_key=OPENAI_API_KEY,
-    timeout=30.0
-)
+logger.info("Initializing OpenAI client...")
+openai_client = AsyncOpenAI(enAI client...")
+    api_key=OPENAI_API_KEY,(
+    timeout=30.0AI_API_KEY,
+)   timeout=30.0
+logger.info("OpenAI client initialized.")
+logger.info("OpenAI client initialized.")
+# Semaphore for controlling concurrent OpenAI API calls
+OPENAI_CONCURRENCY = int(os.getenv("OPENAI_CONCURRENCY", "5"))
+openai_semaphore = asyncio.Semaphore(OPENAI_CONCURRENCY) "5"))
+logger.info(f"OpenAI concurrency semaphore initialized with limit: {OPENAI_CONCURRENCY}")
+logger.info(f"OpenAI concurrency semaphore initialized with limit: {OPENAI_CONCURRENCY}")
+# Define ai_respond and ai_respond_sync earlier, before SocketIO handlers that might use them
+async def ai_respond(convo_id, username, conversation_history, user_message, chat_id, channel, language="en"):
+    start_time_ai = time.time()username, conversation_history, user_message, chat_id, channel, language="en"):
+    logger.info(f"AI RESPOND (async) initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
+    logger.info(f"AI RESPOND (async) initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
+    # Ensure conversation_history is a list of dicts
+    if not isinstance(conversation_history, list) or not all(isinstance(msg, dict) for msg in conversation_history):
+        logger.warning(f"Invalid conversation_history format for convo_id {convo_id}. Resetting to current message only.")
+        conversation_history = [{"role": "user", "content": user_message}]{convo_id}. Resetting to current message only.")
+    elif not conversation_history: # Ensure it's not empty: user_message}]
+        conversation_history = [{"role": "user", "content": user_message}]
+        conversation_history = [{"role": "user", "content": user_message}]
+    # Add the current user message to the history if it's not already the last message
+    if not conversation_history or conversation_history[-1].get("content") != user_message or conversation_history[-1].get("role") != "user":
+        conversation_history.append({"role": "user", "content": user_message})user_message or conversation_history[-1].get("role") != "user":
+        conversation_history.append({"role": "user", "content": user_message})
+    # Limit history length to avoid excessive token usage (e.g., last 10 messages)
+    MAX_HISTORY_LEN = 10th to avoid excessive token usage (e.g., last 10 messages)
+    if len(conversation_history) > MAX_HISTORY_LEN:
+        conversation_history = conversation_history[-MAX_HISTORY_LEN:]
+        logger.debug(f"Trimmed conversation history to last {MAX_HISTORY_LEN} messages for convo_id {convo_id}")
+        logger.debug(f"Trimmed conversation history to last {MAX_HISTORY_LEN} messages for convo_id {convo_id}")
+    system_prompt = f"You are a helpful assistant for Amapola Resort. Current language for response: {language}. Training document: {TRAINING_DOCUMENT[:200]}..." # Truncate for logging
+    system_prompt = f"You are a helpful assistant for Amapola Resort. Current language for response: {language}. Training document: {TRAINING_DOCUMENT[:200]}..." # Truncate for logging
+    messages_for_openai = [
+        {"role": "system", "content": system_prompt}
+    ] + conversation_historycontent": system_prompt}
+    ] + conversation_history
+    ai_reply = None
+    detected_intent = None # Placeholder for intent detection
+    handoff_triggered = False # Placeholder for handoff logic
+    handoff_triggered = False # Placeholder for handoff logic
+    request_start_time = time.time()
+    logger.info(f"[OpenAI Request] Convo ID: {convo_id} - Model: gpt-4o-mini - User Message: '{user_message[:100]}...'") # Log request details
+    logger.debug(f"[OpenAI Request Details] Convo ID: {convo_id} - Full History: {conversation_history}")ge[:100]}...'") # Log request details
+    logger.debug(f"[OpenAI Request Details] Convo ID: {convo_id} - Full History: {conversation_history}")
+    try:
+        logger.info(f"Calling OpenAI API for convo_id {convo_id}. Model: gpt-4o-mini. History length: {len(messages_for_openai)}")
+        # Call OpenAI API asynchronously with rate limiting (semaphore is defined globally if needed, or remove if not used)ai)}")
+        async with openai_semaphore: # Assuming openai_semaphore is defined elsewhere if used needed, or remove if not used)
+            response = await openai_client.chat.completions.create( defined elsewhere if used
+                model="gpt-4o-mini", # Using the specified modelte(
+                messages=messages_for_openai,the specified model
+                max_tokens=300, # Max tokens for the response
+                temperature=0.7 # Max tokens for the response
+            )   temperature=0.7
+        ai_reply = response.choices[0].message.content.strip()
+        usage = response.usageoices[0].message.content.strip()
+        processing_time = (time.time() - request_start_time) * 1000
+        logger.info(ime = (time.time() - request_start_time) * 1000
+            f"[OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms"
+        )   f"[OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms"
+        logger.debug(f"[OpenAI Response Details] Convo ID: {convo_id} - Full Reply: {ai_reply} - Full Response Object: {response.model_dump_json(indent=2)}")
+        logger.debug(f"[OpenAI Response Details] Convo ID: {convo_id} - Full Reply: {ai_reply} - Full Response Object: {response.model_dump_json(indent=2)}")
+        # Basic intent detection (example - can be expanded)
+        if "book a room" in user_message.lower() or "reservation" in user_message.lower():
+            detected_intent = "booking_inquiry") or "reservation" in user_message.lower():
+        if "human" in user_message.lower() or "agent" in user_message.lower() or "speak to someone" in user_message.lower():
+            handoff_triggered = Trueower() or "agent" in user_message.lower() or "speak to someone" in user_message.lower():
+            logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
+            logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
+    except RateLimitError as e:
+        logger.error(f"❌ OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        ai_reply = "I'm currently experiencing high demand. Please try again in a moment."o=True)
+    except APITimeoutError as e:y experiencing high demand. Please try again in a moment."
+        logger.error(f"❌ OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        ai_reply = "I'm having trouble connecting to my brain right now. Please try again shortly."
+    except APIError as e: # General API errorting to my brain right now. Please try again shortly."
+        logger.error(f"❌ OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        ai_reply = "Sorry, I encountered an issue while processing your request."info=True)
+    except AuthenticationError as e:ered an issue while processing your request."
+        logger.error(f"❌ OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
+        ai_reply = "There's an issue with my configuration. Please notify an administrator." API Key)", exc_info=True)
+    except Exception as e:s an issue with my configuration. Please notify an administrator."
+        logger.error(f"❌ Unexpected error in ai_respond for convo_id {convo_id}: {str(e)}", exc_info=True)
+        ai_reply = "An unexpected error occurred. I've logged the issue."vo_id}: {str(e)}", exc_info=True)
+        ai_reply = "An unexpected error occurred. I've logged the issue."
+    processing_time = time.time() - start_time_ai
+    logger.info(f"AI RESPOND for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
+    return ai_reply, detected_intent, handoff_triggeredmpleted in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
+    return ai_reply, detected_intent, handoff_triggered
 
+def ai_respond_sync(convo_id, username, conversation_history, user_message, chat_id, channel, language):
+    logger.info(f"ai_respond_sync called for convo_id: {convo_id}, user: {username}, lang: {language}"):
+    request_start_time = time.time()lled for convo_id: {convo_id}, user: {username}, lang: {language}")
+    try:est_start_time = time.time()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)p()
+        # Call the async versionoop)
+        result = loop.run_until_complete(ai_respond(convo_id, username, conversation_history, user_message, chat_id, channel, language))
+        loop.close()p.run_until_complete(ai_respond(convo_id, username, conversation_history, user_message, chat_id, channel, language))
+        logger.info(f"ai_respond_sync completed for convo_id: {convo_id}")
+        return result # This will be a tuple (ai_reply, detected_intent, handoff_triggered)
+    except Exception as e:is will be a tuple (ai_reply, detected_intent, handoff_triggered)
+        logger.error(f"Error in ai_respond_sync for convo_id {convo_id}: {e}", exc_info=True)
+        return None, None, False # Ensure it returns a 3-tuple on error to match expected unpacking
+        return None, None, False # Ensure it returns a 3-tuple on error to match expected unpacking
 # Google Calendar setup with Service Account
 GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-if not GOOGLE_SERVICE_ACCOUNT_KEY:
+if not GOOGLE_SERVICE_ACCOUNT_KEY:tenv("GOOGLE_SERVICE_ACCOUNT_KEY")
     logger.error("⚠️ GOOGLE_SERVICE_ACCOUNT_KEY not set in environment variables")
+    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set") environment variables")
     raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
-
 try:
     service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
-except json.JSONDecodeError as e:
+except json.JSONDecodeError as e:oads(GOOGLE_SERVICE_ACCOUNT_KEY)
     logger.error(f"⚠️ Invalid GOOGLE_SERVICE_ACCOUNT_KEY format: {e}")
     raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY must be a valid JSON string")
-
+    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY must be a valid JSON string")
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=SCOPES
-)
+    service_account_info, scopes=SCOPESls.from_service_account_info(
+)   service_account_info, scopes=SCOPES
 service = build('calendar', 'v3', credentials=credentials)
-
+service = build('calendar', 'v3', credentials=credentials)
 # Messaging API tokens
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
-if not TWILIO_ACCOUNT_SID:
+if not TWILIO_ACCOUNT_SID:s.getenv("TWILIO_WHATSAPP_NUMBER")
     logger.error("⚠️ TWILIO_ACCOUNT_SID not set in environment variables")
-    raise ValueError("TWILIO_ACCOUNT_SID not set")
-if not TWILIO_AUTH_TOKEN:
+    raise ValueError("TWILIO_ACCOUNT_SID not set") environment variables")
+if not TWILIO_AUTH_TOKEN:LIO_ACCOUNT_SID not set")
     logger.error("⚠️ TWILIO_AUTH_TOKEN not set in environment variables")
-    raise ValueError("TWILIO_AUTH_TOKEN not set")
-if not TWILIO_WHATSAPP_NUMBER:
+    raise ValueError("TWILIO_AUTH_TOKEN not set") environment variables")
+if not TWILIO_WHATSAPP_NUMBER:UTH_TOKEN not set")
     logger.error("⚠️ TWILIO_WHATSAPP_NUMBER not set in environment variables")
+    raise ValueError("TWILIO_WHATSAPP_NUMBER not set") environment variables")
     raise ValueError("TWILIO_WHATSAPP_NUMBER not set")
-
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN")
-if not WHATSAPP_API_TOKEN:
+if not WHATSAPP_API_TOKEN:tenv("WHATSAPP_API_TOKEN")
     logger.warning("⚠️ WHATSAPP_API_TOKEN not set, some WhatsApp features may not work")
+WHATSAPP_API_URL = "https://api.whatsapp.com" set, some WhatsApp features may not work")
 WHATSAPP_API_URL = "https://api.whatsapp.com"
-
 # Load or define the Q&A reference document
-try:
-    with open("qa_reference.txt", "r") as file:
-        TRAINING_DOCUMENT = file.read()
+try:ad or define the Q&A reference document
+    logger.debug("Attempting to load qa_reference.txt")
+    with open("qa_reference.txt", "r", encoding='utf-8') as file: # Added encoding
+        TRAINING_DOCUMENT = file.read()encoding='utf-8') as file: # Added encoding
     logger.info("✅ Loaded Q&A reference document")
-except FileNotFoundError:
-    TRAINING_DOCUMENT = """
+except FileNotFoundError: Q&A reference document")
+    logger.warning("⚠️ qa_reference.txt not found, using default training document")
+    TRAINING_DOCUMENT = """eference.txt not found, using default training document")
     **Amapola Resort Chatbot Training Document**
-
+    **Amapola Resort Chatbot Training Document**
     You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I’m sorry, that’s a bit complex for me to handle. Let me get a human to assist you."
-
+    You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort’s services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I’m sorry, that’s a bit complex for me to handle. Let me get a human to assist you."
     **Business Information**
     - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
-    - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
-    - **Room Types**:
+    - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM60
+    - **Room Types**:k-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
       - Standard Room: $150/night, 2 guests, 1 queen bed
       - Deluxe Room: $250/night, 4 guests, 2 queen beds, ocean view
       - Suite: $400/night, 4 guests, 1 king bed, living area, oceanfront balcony
-    - **Amenities**:
+    - **Amenities**:night, 4 guests, 1 king bed, living area, oceanfront balcony
       - Beachfront access, outdoor pool, spa, gym, on-site restaurant (Amapola Bistro), free Wi-Fi, parking ($20/day)
-    - **Activities**:
+    - **Activities**:cess, outdoor pool, spa, gym, on-site restaurant (Amapola Bistro), free Wi-Fi, parking ($20/day)
       - Snorkeling ($50/person), kayak rentals ($30/hour), sunset cruises ($100/person)
-    - **Policies**:
+    - **Policies**:($50/person), kayak rentals ($30/hour), sunset cruises ($100/person)
       - Cancellation: Free cancellation up to 48 hours before arrival
-      - Pets: Not allowed
+      - Pets: Not allowede cancellation up to 48 hours before arrival
       - Children: Kids under 12 stay free with an adult
-
+      - Children: Kids under 12 stay free with an adult
     **Common Q&A**
-
+    **Common Q&A**
     Q: What are your room rates?
     A: We offer several room types:
     - Standard Room: $150/night for 2 guests
     - Deluxe Room: $250/night for 4 guests, with an ocean view
     - Suite: $400/night for 4 guests, with an oceanfront balcony
     Would you like to book a room, or do you have questions about a specific room type?
-
+    Would you like to book a room, or do you have questions about a specific room type?
     Q: How do I book a room?
     A: I can help you start the booking process! Please let me know:
-    1. Your preferred dates (e.g., check-in and check-out dates)
-    2. The number of guests
+    1. Your preferred dates (e.g., check-in and check-out dates)now:
+    2. The number of guests (e.g., check-in and check-out dates)
     3. Your preferred room type (Standard, Deluxe, or Suite)
     For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer to speak with a human to finalize your booking, let me know!
-
+    For example, you can say: "I’d like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I’ll check availability and guide you through the next steps. If you’d prefer to speak with a human to finalize your booking, let me know!
     Q: What is the check-in time?
     A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
-
+    A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
     Q: Do you have a pool?
     A: Yes, we have a beautiful outdoor pool with beachfront views! It’s open from 8:00 AM to 8:00 PM daily. We also have a spa and gym if you’re interested in other amenities. Would you like to know more?
-
+    A: Yes, we have a beautiful outdoor pool with beachfront views! It’s open from 8:00 AM to 8:00 PM daily. We also have a spa and gym if you’re interested in other amenities. Would you like to know more?
     Q: Can I bring my pet?
     A: I’m sorry, but pets are not allowed at Amapola Resort. If you need recommendations for pet-friendly accommodations nearby, I can help you find some options!
-
+    A: I’m sorry, but pets are not allowed at Amapola Resort. If you need recommendations for pet-friendly accommodations nearby, I can help you find some options!
     Q: What activities do you offer?
     A: We have a variety of activities for our guests:
-    - Snorkeling: $50 per person
+    - Snorkeling: $50 per personvities for our guests:
     - Kayak rentals: $30 per hour
     - Sunset cruises: $100 per person
     Would you like to book an activity, or do you have questions about any of these?
-
+    Would you like to book an activity, or do you have questions about any of these?
     Q: What are the cancellation policies?
     A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
-
+    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
     Q: Do you have a restaurant?
     A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It’s open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
-
+    A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It’s open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
     **Conversational Guidelines**
     - Always greet new users with: "Thank you for contacting us."
     - For follow-up messages, do not repeat the greeting. Instead, respond based on the context of the conversation.
     - Ask clarifying questions if the user’s intent is unclear (e.g., "Could you tell me your preferred dates for booking?").
-    - Use a friendly and professional tone, and keep responses concise (under 150 tokens, as set by max_tokens).
-    - If the user asks multiple questions in one message, address each question systematically.
+    - Use a friendly and professional tone, and keep responses concise (under 150 tokens, as set by max_tokens).r booking?").
+    - If the user asks multiple questions in one message, address each question systematically.t by max_tokens).
     - If the user provides partial information (e.g., "I want to book a room"), ask for missing details (e.g., dates, number of guests, room type).
-    - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").
+    - If a query is ambiguous, ask for clarification (e.g., "Did you mean you’d like to book a room, or are you asking about our rates?").om type).
     - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
-    """
+    """scalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
     logger.warning("⚠️ qa_reference.txt not found, using default training document")
-
+    logger.warning("⚠️ qa_reference.txt not found, using default training document")
 def get_db_connection():
-    global db_pool
-    try:
+    global db_poolion():
+    try:al db_pool
         conn = db_pool.getconn()
-        if conn.closed:
+        if conn.closed:getconn()
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            db_pool.closeall()
+            db_pool.closeall()nnection retrieved from pool is closed, reinitializing pool")
             db_pool = SimpleConnectionPool(
-                minconn=1,
+                minconn=1,leConnectionPool(
                 maxconn=5,
                 dsn=database_url,
                 sslmode="require",
-                sslrootcert=None,
+                sslrootcert=None,,
                 connect_timeout=10,
                 options="-c statement_timeout=10000"
-            )
+            )   options="-c statement_timeout=10000"
             conn = db_pool.getconn()
         # Test the connection with a simple query
-        with conn.cursor() as c:
+        with conn.cursor() as c:th a simple query
             c.execute("SELECT 1")
         conn.cursor_factory = DictCursor
         logger.info("✅ Retrieved database connection from pool")
-        return conn
+        return conn("✅ Retrieved database connection from pool")
     except Exception as e:
         logger.error(f"❌ Failed to get database connection: {str(e)}", exc_info=True)
-        # If the error is SSL-related, reinitialize the pool
-        error_str = str(e).lower()
+        # If the error is SSL-related, reinitialize the pool{str(e)}", exc_info=True)
+        error_str = str(e).lower()ted, reinitialize the pool
         if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
-            logger.warning("SSL error detected, reinitializing connection pool")
-            try:
+            logger.warning("SSL error detected, reinitializing connection pool") "decryption failed", "bad record mac"]):
+            try:er.warning("SSL error detected, reinitializing connection pool")
                 db_pool.closeall()
                 db_pool = SimpleConnectionPool(
-                    minconn=1,
+                    minconn=1,leConnectionPool(
                     maxconn=5,
                     dsn=database_url,
                     sslmode="require",
-                    sslrootcert=None,
+                    sslrootcert=None,,
                     connect_timeout=10,
                     options="-c statement_timeout=10000"
-                )
+                )   options="-c statement_timeout=10000"
                 conn = db_pool.getconn()
                 with conn.cursor() as c:
                     c.execute("SELECT 1")
                 conn.cursor_factory = DictCursor
                 logger.info("✅ Reinitialized database connection pool and retrieved new connection")
-                return conn
+                return conn("✅ Reinitialized database connection pool and retrieved new connection")
             except Exception as e2:
                 logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}", exc_info=True)
-                raise
+                raiser.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}", exc_info=True)
+        raise e raise
         raise e
-
 def release_db_connection(conn):
-    global db_pool
-    if conn:
+    global db_poolnection(conn):
+    if conn:b_pool
         try:
             if conn.closed:
                 logger.warning("Attempted to release a closed connection")
-            else:
+            else:ogger.warning("Attempted to release a closed connection")
                 db_pool.putconn(conn)
                 logger.info("✅ Database connection returned to pool")
-        except Exception as e:
+        except Exception as e: Database connection returned to pool")
             logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
-
+            logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
 def with_db_retry(func):
     """Decorator to retry database operations on failure."""
-    def wrapper(*args, **kwargs):
-        retries = 5
+    def wrapper(*args, **kwargs):e operations on failure."""
+        retries = 5gs, **kwargs):
         for attempt in range(retries):
-            try:
+            try:mpt in range(retries):
                 return func(*args, **kwargs)
-            except Exception as e:
+            except Exception as e: **kwargs)
                 logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
-                error_str = str(e).lower()
+                error_str = str(e).lower()operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
                 if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac", "connection already closed"]):
-                    global db_pool
-                    try:
+                    global db_poolr_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac", "connection already closed"]):
+                    try:al db_pool
                         db_pool.closeall()
                         db_pool = SimpleConnectionPool(
-                            minconn=5,
+                            minconn=5,leConnectionPool(
                             maxconn=30,
                             dsn=database_url,
                             sslmode="require",
-                            sslrootcert=None
-                        )
+                            sslrootcert=None",
+                        )   sslrootcert=None
                         logger.info("✅ Reinitialized database connection pool due to SSL or connection error")
-                    except Exception as e2:
+                    except Exception as e2:itialized database connection pool due to SSL or connection error")
                         logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
-                if attempt < retries - 1:
-                    time.sleep(2)
-                    continue
-                raise e
+                if attempt < retries - 1:Failed to reinitialize database connection pool: {str(e2)}")
+                    time.sleep(2)ies - 1:
+                    continueep(2)
+                raise etinue
+    return wrapperise e
     return wrapper
-
 # Cache the ai_enabled setting
-@with_db_retry
+@with_db_retry_enabled setting
 def get_ai_enabled():
     if "ai_enabled" in settings_cache:
-        logger.info("✅ Retrieved ai_enabled from cache")
-        return settings_cache["ai_enabled"]
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
+        cached_value, cached_timestamp = settings_cache["ai_enabled"]
+        logger.debug(f"CACHE HIT: ai_enabled='{cached_value}', timestamp='{cached_timestamp}'")
+        return cached_value, cached_timestamp'{cached_value}', timestamp='{cached_timestamp}'")
+    try:return cached_value, cached_timestamp
+        logger.debug("CACHE MISS: Fetching ai_enabled from database.")
+        with get_db_connection() as conn:g ai_enabled from database.")
+            c = conn.cursor()n() as conn:
             c.execute("SELECT value, last_updated FROM settings WHERE key = %s", ("ai_enabled",))
-            result = c.fetchone()
+            result = c.fetchone()ue, last_updated FROM settings WHERE key = %s", ("ai_enabled",))
             global_ai_enabled = result['value'] if result else "1"
             ai_toggle_timestamp = result['last_updated'] if result else "1970-01-01T00:00:00Z"
-            settings_cache["ai_enabled"] = (global_ai_enabled, ai_toggle_timestamp)
+            settings_cache["ai_enabled"] = (global_ai_enabled, ai_toggle_timestamp)T00:00:00Z"
             logger.info(f"✅ Cached ai_enabled: {global_ai_enabled}, last_updated: {ai_toggle_timestamp}")
-            release_db_connection(conn)
-        return settings_cache["ai_enabled"]
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}")
+            # release_db_connection(conn) # Removed as 'with' statement handles it{ai_toggle_timestamp}")
+        return settings_cache["ai_enabled"] Removed as 'with' statement handles it
+    except Exception as e:che["ai_enabled"]
+        logger.error(f"❌ Failed to fetch ai_enabled from database: {str(e)}", exc_info=True)
+        return ("1", "1970-01-01T00:00:00Z")enabled from database: {str(e)}", exc_info=True)
         return ("1", "1970-01-01T00:00:00Z")
-
 @with_db_retry
 def init_db():
     logger.info("Initializing database")
-    with get_db_connection() as conn:
+    with get_db_connection() as conn:e")
+        c = conn.cursor()n() as conn:
         c = conn.cursor()
-
         # Check if tables exist before creating them
-        c.execute("""
+        c.execute("""bles exist before creating them
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'conversations'
-            )
-        """)
+                WHERE table_name = 'conversations'les 
+            )   WHERE table_name = 'conversations'
+        """))
         conversations_table_exists = c.fetchone()[0]
-
+        conversations_table_exists = c.fetchone()[0]
         c.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'messages'
-            )
-        """)
+                WHERE table_name = 'messages'a.tables 
+            )   WHERE table_name = 'messages'
+        """))
         messages_table_exists = c.fetchone()[0]
-
+        messages_table_exists = c.fetchone()[0]
         c.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'agents'
-            )
-        """)
+                WHERE table_name = 'agents'ema.tables 
+            )   WHERE table_name = 'agents'
+        """))
         agents_table_exists = c.fetchone()[0]
-
+        agents_table_exists = c.fetchone()[0]
         c.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'settings'
-            )
-        """)
+                WHERE table_name = 'settings'a.tables 
+            )   WHERE table_name = 'settings'
+        """))
         settings_table_exists = c.fetchone()[0]
-
+        settings_table_exists = c.fetchone()[0]
         # Create tables only if they don't exist
-        if not conversations_table_exists:
+        if not conversations_table_exists: exist
             c.execute('''CREATE TABLE conversations (
-                id SERIAL PRIMARY KEY,
+                id SERIAL PRIMARY KEY,conversations (
                 username TEXT NOT NULL,
-                chat_id TEXT NOT NULL,
+                chat_id TEXT NOT NULL,,
                 channel TEXT NOT NULL,
-S
+S               channel TEXT NOT NULL,
                 assigned_agent TEXT,
                 ai_enabled INTEGER DEFAULT 1,
                 needs_agent INTEGER DEFAULT 0,
-                booking_intent TEXT,
+                booking_intent TEXT,DEFAULT 0,
                 handoff_notified INTEGER DEFAULT 0,
                 visible_in_conversations INTEGER DEFAULT 1,
-                language TEXT DEFAULT 'en',
+                language TEXT DEFAULT 'en',TEGER DEFAULT 1,
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )''')ast_updated TEXT DEFAULT CURRENT_TIMESTAMP
             logger.info("Created conversations table")
-        else:
+        else:ogger.info("Created conversations table")
             # Migration: Add needs_agent, language, and other columns if they don't exist
-            c.execute("""
+            c.execute("""Add needs_agent, language, and other columns if they don't exist
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'conversations' AND column_name = 'needs_agent'
-                )
-            """)
+                )   WHERE table_name = 'conversations' AND column_name = 'needs_agent'
+            """))
             needs_agent_exists = c.fetchone()[0]
-            if not needs_agent_exists:
+            if not needs_agent_exists:chone()[0]
                 c.execute("ALTER TABLE conversations ADD COLUMN needs_agent INTEGER DEFAULT 0")
+                logger.info("Added needs_agent column to conversations table")TEGER DEFAULT 0")
                 logger.info("Added needs_agent column to conversations table")
-
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'conversations' AND column_name = 'language'
-                )
-            """)
+                )   WHERE table_name = 'conversations' AND column_name = 'language'
+            """))
             language_exists = c.fetchone()[0]
-            if not language_exists:
+            if not language_exists:chone()[0]
                 c.execute("ALTER TABLE conversations ADD COLUMN language TEXT DEFAULT 'en'")
+                logger.info("Added language column to conversations table")XT DEFAULT 'en'")
                 logger.info("Added language column to conversations table")
-
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'conversations' AND column_name = 'booking_intent'
-                )
-            """)
+                )   WHERE table_name = 'conversations' AND column_name = 'booking_intent'
+            """))
             booking_intent_exists = c.fetchone()[0]
-            if not booking_intent_exists:
+            if not booking_intent_exists:chone()[0]
                 c.execute("ALTER TABLE conversations ADD COLUMN booking_intent TEXT")
+                logger.info("Added booking_intent column to conversations table")XT"
                 logger.info("Added booking_intent column to conversations table")
-
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'conversations' AND column_name = 'handoff_notified'
-                )
-            """)
+                )   WHERE table_name = 'conversations' AND column_name = 'handoff_notified'
+            """))
             handoff_notified_exists = c.fetchone()[0]
-            if not handoff_notified_exists:
+            if not handoff_notified_exists:chone()[0]
                 c.execute("ALTER TABLE conversations ADD COLUMN handoff_notified INTEGER DEFAULT 0")
+                logger.info("Added handoff_notified column to conversations table")TEGER DEFAULT 0")
                 logger.info("Added handoff_notified column to conversations table")
-
         if not messages_table_exists:
             c.execute('''CREATE TABLE messages (
-                id SERIAL PRIMARY KEY,
+                id SERIAL PRIMARY KEY,messages (
                 convo_id INTEGER NOT NULL,
-                username TEXT NOT NULL,
-                message TEXT NOT NULL,
-                sender TEXT NOT NULL,
+                username TEXT NOT NULL,LL,
+                message TEXT NOT NULL,,
+                sender TEXT NOT NULL,,
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (convo_id) REFERENCES conversations (id)
-            )''')
+            )''')OREIGN KEY (convo_id) REFERENCES conversations (id)
             logger.info("Created messages table")
-
+            logger.info("Created messages table")
         if not agents_table_exists:
             c.execute('''CREATE TABLE agents (
-                id SERIAL PRIMARY KEY,
+                id SERIAL PRIMARY KEY,agents (
                 username TEXT NOT NULL UNIQUE
-            )''')
+            )''')sername TEXT NOT NULL UNIQUE
             logger.info("Created agents table")
-        else:
+        else:ogger.info("Created agents table")
             # Migration: Drop password_hash and password columns if they exist
-            c.execute("""
+            c.execute("""Drop password_hash and password columns if they exist
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'agents' AND column_name = 'password_hash'
-                )
-            """)
+                )   WHERE table_name = 'agents' AND column_name = 'password_hash'
+            """))
             password_hash_exists = c.fetchone()[0]
-            if password_hash_exists:
+            if password_hash_exists:.fetchone()[0]
                 c.execute("ALTER TABLE agents DROP COLUMN password_hash")
                 logger.info("Dropped password_hash column from agents table")
-
+                logger.info("Dropped password_hash column from agents table")
             c.execute("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'agents' AND column_name = 'password'
-                )
-            """)
+                )   WHERE table_name = 'agents' AND column_name = 'password'
+            """))
             password_exists = c.fetchone()[0]
-            if password_exists:
+            if password_exists:.fetchone()[0]
                 c.execute("ALTER TABLE agents DROP COLUMN password")
                 logger.info("Dropped password column from agents table")
-
+                logger.info("Dropped password column from agents table")
         if not settings_table_exists:
             c.execute('''CREATE TABLE settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
+                key TEXT PRIMARY KEY, settings (
+                value TEXT NOT NULL,,
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )''')ast_updated TEXT DEFAULT CURRENT_TIMESTAMP
             logger.info("Created settings table")
-        else:
+        else:ogger.info("Created settings table")
             # Migration: Add last_updated column if it doesn't exist
-            c.execute("""
+            c.execute("""Add last_updated column if it doesn't exist
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns 
                     WHERE table_name = 'settings' AND column_name = 'last_updated'
-                )
-            """)
+                )   WHERE table_name = 'settings' AND column_name = 'last_updated'
+            """))
             last_updated_exists = c.fetchone()[0]
-            if not last_updated_exists:
+            if not last_updated_exists:chone()[0]
                 c.execute("ALTER TABLE settings ADD COLUMN last_updated TEXT DEFAULT CURRENT_TIMESTAMP")
+                logger.info("Added last_updated column to settings table")XT DEFAULT CURRENT_TIMESTAMP")
                 logger.info("Added last_updated column to settings table")
-
         # Create indexes for frequently queried columns
         c.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chat_id ON conversations (chat_id);")
+        logger.info("Created index idx_conversations_chat_id")s_chat_id ON conversations (chat_id);")
         logger.info("Created index idx_conversations_chat_id")
-
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo_id ON messages (convo_id);")
+        logger.info("Created index idx_messages_convo_id")_convo_id ON messages (convo_id);")
         logger.info("Created index idx_messages_convo_id")
-
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp);")
+        logger.info("Created index idx_messages_timestamp")timestamp ON messages (timestamp);")
         logger.info("Created index idx_messages_timestamp")
-
         c.execute("CREATE INDEX IF NOT EXISTS idx_settings_key ON settings (key);")
+        logger.info("Created index idx_settings_key")tings_key ON settings (key);")
         logger.info("Created index idx_settings_key")
-
         # Seed initial data (only in development or if explicitly enabled)
-        if os.getenv("SEED_INITIAL_DATA", "false").lower() == "true":
-            c.execute("SELECT COUNT(*) FROM settings")
-            if c.fetchone()[0] == 0:
-                c.execute(
+        if os.getenv("SEED_INITIAL_DATA", "false").lower() == "true":bled)
+            c.execute("SELECT COUNT(*) FROM settings")er() == "true":
+            if c.fetchone()[0] == 0:*) FROM settings")
+                c.execute()[0] == 0:
                     "INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) ON CONFLICT (key) DO NOTHING",
-                    ('ai_enabled', '1', datetime.now(timezone.utc).isoformat())
-                )
+                    ('ai_enabled', '1', datetime.now(timezone.utc).isoformat()), %s, %s) ON CONFLICT (key) DO NOTHING",
+                )   ('ai_enabled', '1', datetime.now(timezone.utc).isoformat())
                 logger.info("Inserted default settings")
-
+                logger.info("Inserted default settings")
             c.execute("SELECT COUNT(*) FROM agents")
-            if c.fetchone()[0] == 0:
-                c.execute(
+            if c.fetchone()[0] == 0:*) FROM agents")
+                c.execute()[0] == 0:
                     "INSERT INTO agents (username) VALUES (%s) ON CONFLICT (username) DO NOTHING",
-                    ('admin',)
-                )
+                    ('admin',)TO agents (username) VALUES (%s) ON CONFLICT (username) DO NOTHING",
+                )   ('admin',)
                 logger.info("Inserted default admin user")
-
+                logger.info("Inserted default admin user")
             c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('whatsapp',))
-            if c.fetchone()[0] == 0:
+            if c.fetchone()[0] == 0:*) FROM conversations WHERE channel = %s", ('whatsapp',))
                 logger.info("ℹ️ Inserting test conversations")
-                test_timestamp1 = "2025-03-22T00:00:00Z"
-                c.execute(
+                test_timestamp1 = "2025-03-22T00:00:00Z"ions")
+                c.execute(tamp1 = "2025-03-22T00:00:00Z"
                     "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated, language) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",igned_agent, ai_enabled, needs_agent, booking_intent, last_updated, language) "
                     ('TestUser1', '123456789', 'whatsapp', None, 1, 0, None, test_timestamp1, 'en')
-                )
+                )   ('TestUser1', '123456789', 'whatsapp', None, 1, 0, None, test_timestamp1, 'en')
                 convo_id1 = c.fetchone()['id']
-                c.execute(
+                c.execute(= c.fetchone()['id']
                     "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                    (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', test_timestamp1)
-                )
+                    (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', test_timestamp1)ALUES (%s, %s, %s, %s, %s)",
+                )   (convo_id1, 'TestUser1', 'Hello, I need help!', 'user', test_timestamp1)
                 test_timestamp2 = "2025-03-22T00:00:01Z"
-                c.execute(
+                c.execute(tamp2 = "2025-03-22T00:00:01Z"
                     "INSERT INTO conversations (username, chat_id, channel, assigned_agent, ai_enabled, needs_agent, booking_intent, last_updated, language) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",igned_agent, ai_enabled, needs_agent, booking_intent, last_updated, language) "
                     ('TestUser2', '987654321', 'whatsapp', None, 1, 0, None, test_timestamp2, 'es')
-                )
+                )   ('TestUser2', '987654321', 'whatsapp', None, 1, 0, None, test_timestamp2, 'es')
                 convo_id2 = c.fetchone()['id']
-                c.execute(
+                c.execute(= c.fetchone()['id']
                     "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                    (convo_id2, 'TestUser2', 'Hola, ¿puedo reservar una habitación?', 'user', test_timestamp2)
-                )
+                    (convo_id2, 'TestUser2', 'Hola, ¿puedo reservar una habitación?', 'user', test_timestamp2) %s, %s)",
+                )   (convo_id2, 'TestUser2', 'Hola, ¿puedo reservar una habitación?', 'user', test_timestamp2)
                 logger.info("Inserted test conversations")
-
+                logger.info("Inserted test conversations")
         conn.commit()
         logger.info("✅ Database initialized")
+        release_db_connection(conn)tialized")
         release_db_connection(conn)
-
 @with_db_retry
 def add_test_conversations():
     if os.getenv("SEED_INITIAL_DATA", "false").lower() != "true":
         logger.info("Skipping test conversations (SEED_INITIAL_DATA not enabled)")
-        return
-    try:
+        return.info("Skipping test conversations (SEED_INITIAL_DATA not enabled)")
+    try:return
         with get_db_connection() as conn:
-            c = conn.cursor()
+            c = conn.cursor()n() as conn:
             c.execute("SELECT COUNT(*) FROM conversations WHERE channel = %s", ('test',))
-            count = c.fetchone()['count']
-            if count == 0:
+            count = c.fetchone()['count']OM conversations WHERE channel = %s", ('test',))
+            if count == 0:hone()['count']
                 for i in range(1, 6):
-                    c.execute(
+                    c.execute((1, 6):
                         "INSERT INTO conversations (username, chat_id, channel, ai_enabled, needs_agent, visible_in_conversations, last_updated) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",nel, ai_enabled, needs_agent, visible_in_conversations, last_updated) "
                         (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, 0, datetime.now(timezone.utc).isoformat())
-                    )
+                    )   (f"test_user_{i}", f"test_chat_{i}", "test", 1, 0, 0, datetime.now(timezone.utc).isoformat())
                     convo_id = c.fetchone()['id']
-                    c.execute(
+                    c.execute( c.fetchone()['id']
                         "INSERT INTO messages (convo_id, username, sender, message, timestamp) VALUES (%s, %s, %s, %s, %s)",
-                        (convo_id, f"test_user_{i}", "user", f"Test message {i}", datetime.now(timezone.utc).isoformat())
-                    )
+                        (convo_id, f"test_user_{i}", "user", f"Test message {i}", datetime.now(timezone.utc).isoformat()))",
+                    )   (convo_id, f"test_user_{i}", "user", f"Test message {i}", datetime.now(timezone.utc).isoformat())
                 conn.commit()
                 logger.info("✅ Added test conversations")
-            else:
+            else:ogger.info("✅ Added test conversations")
                 logger.info("✅ Test conversations already exist, skipping insertion")
-            release_db_connection(conn)
-    except Exception as e:
+            release_db_connection(conn)versations already exist, skipping insertion")
+    except Exception as e:nection(conn)
         logger.error(f"❌ Error adding test conversations: {e}")
+        raiser.error(f"❌ Error adding test conversations: {e}")
         raise
-
 # Initialize database and add test conversations
-init_db()
+init_db()ize database and add test conversations
 add_test_conversations()
-
+add_test_conversations()
 @with_db_retry
 def log_message(convo_id, username, message, sender):
-    try:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        logger.info(f"Attempting to log message for convo_id {convo_id}: {message} (Sender: {sender}, Timestamp: {timestamp})")
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute("BEGIN")
-                c.execute(
-                    "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
-                    "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                    (convo_id, username, message, sender, timestamp)
-                )
-                message_id = c.fetchone()['id']
-                c.execute("COMMIT")
-                logger.info(f"✅ Logged message for convo_id {convo_id}, message_id {message_id}: {message} (Sender: {sender})")
-                release_db_connection(conn)
-                return timestamp
-            except Exception as e:
-                c.execute("ROLLBACK")
-                logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
-                raise
-    except Exception as e:
-        logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}")
-        raise
-
-class Agent(UserMixin):
-    def __init__(self, id, username):
-        self.id = id
-        self.username = username
-
-@login_manager.user_loader
-@with_db_retry
-def load_user(agent_id):
-    start_time = time.time()
-    logger.info(f"Starting load_user for agent_id {agent_id}")
-    conn = None
-    try:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    logger.info(f"Attempting to log message for convo_id {convo_id}: '{message[:50]}...' (Sender: {sender}, Timestamp: {timestamp})")
+    conn = None(f"Attempting to log message for convo_id {convo_id}: '{message[:50]}...' (Sender: {sender}, Timestamp: {timestamp})")
+    try: = None
         conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT id, username FROM agents WHERE id = %s", (agent_id,))
-        agent = c.fetchone()
-        if agent:
-            logger.info(f"Finished load_user for agent_id {agent_id} in {time.time() - start_time:.2f} seconds")
-            return Agent(agent['id'], agent['username'])
-        logger.info(f"Finished load_user for agent_id {agent_id} (not found) in {time.time() - start_time:.2f} seconds")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error in load_user: {str(e)}")
-        return None
-    finally:
-        release_db_connection(conn)
-
-@app.route("/login", methods=["GET", "POST"])
-@with_db_retry
-def login():
-    logger.info("✅ /login endpoint registered and called")
-    start_time = time.time()
-    logger.info("Starting /login endpoint")
-    try:
-        if request.method == "GET":
-            if current_user.is_authenticated:
-                logger.info(f"User already authenticated, redirecting in {time.time() - start_time:.2f} seconds")
-                return redirect(request.args.get("next", "/conversations"))
-            logger.info(f"Rendering login page in {time.time() - start_time:.2f} seconds")
-            return render_template("login.html")
-        
-        # Log the request headers and content type
-        logger.info(f"Request headers: {request.headers}")
-        logger.info(f"Request content type: {request.content_type}")
-
-        # Try to get JSON data
-        data = request.get_json(silent=True)
-        if data is None:
-            # Fallback to form data
-            logger.info("No JSON data found, trying form data")
-            data = request.form
-            logger.info(f"Form data: {dict(data)}")
-        
-        if not data:
-            logger.error("❌ No valid JSON or form data in /login request")
-            return jsonify({"message": "Invalid request format, expected JSON or form data"}), 400
-
-        username = data.get("username")
-        if not username:
-            logger.error("❌ Missing username in /login request")
-            return jsonify({"message": "Missing username"}), 400
-        
-        logger.info(f"Attempting to log in user: {username}")
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT id, username FROM agents WHERE username = %s",
-                (username,)
-            )
-            agent = c.fetchone()
-            logger.info(f"Agent query result: {agent}")
-            if agent:
-                agent_obj = Agent(agent['id'], agent['username'])
-                login_user(agent_obj)
-                logger.info(f"✅ Login successful for agent: {agent['username']}")
-                next_page = request.args.get("next", "/conversations")
-                release_db_connection(conn)
-                logger.info(f"Finished /login (success) in {time.time() - start_time:.2f} seconds")
-                return jsonify({"message": "Login successful", "agent": agent['username'], "redirect": next_page})
-            logger.error("❌ Invalid username in /login request")
+        c = conn.cursor()nection()
+        c.execute("BEGIN")
+        c.execute("BEGIN")
+            "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",message, sender, timestamp) "
+            (convo_id, username, message, sender, timestamp)
+        )   (convo_id, username, message, sender, timestamp)
+        message_id_tuple = c.fetchone()
+        message_id = message_id_tuple['id'] if message_id_tuple else None
+        message_id = message_id_tuple['id'] if message_id_tuple else None
+        # Update conversation's last_updated timestamp
+        c.execute(onversation's last_updated timestamp
+            "UPDATE conversations SET last_updated = %s WHERE id = %s",
+            (timestamp, convo_id) SET last_updated = %s WHERE id = %s",
+        )   (timestamp, convo_id)
+        )
+        c.execute("COMMIT")
+        logger.info(f"✅ Logged message for convo_id {convo_id}, message_id {message_id}. Sender: {sender}. Updated conversation last_updated.")
+        return timestamp, message_idge for convo_id {convo_id}, message_id {message_id}. Sender: {sender}. Updated conversation last_updated.")
+    except Exception as e:message_id
+        if conn:tion as e:
+            try:
+                # Obtain a new cursor for rollback if the original one is problematic
+                rollback_cursor = conn.cursor()ack if the original one is problematic
+                rollback_cursor.execute("ROLLBACK")
+                rollback_cursor.close()("ROLLBACK")
+                logger.info(f"DB transaction rolled back for convo_id {convo_id} due to error: {str(e)}")
+            except Exception as rb_exc:ction rolled back for convo_id {convo_id} due to error: {str(e)}")
+                logger.error(f"❌ Error during ROLLBACK for convo_id {convo_id}: {rb_exc}", exc_info=True)
+        logger.error(f"❌ Failed to log message for convo_id {convo_id}: {str(e)}", exc_info=True)fo=True)
+        raise  # Re-raise the exception to be handled by caller or @with_db_retry, exc_info=True)
+    finally:e  # Re-raise the exception to be handled by caller or @with_db_retry
+        if conn:
             release_db_connection(conn)
-            logger.info(f"Finished /login (failed) in {time.time() - start_time:.2f} seconds")
-            return jsonify({"message": "Invalid username"}), 401
-    except Exception as e:
-        logger.error(f"❌ Error in /login: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to login due to a server error"}), 500
-
-@app.route("/logout", methods=["POST"])
-@login_required
-def logout():
+            release_db_connection(conn)
+class User(UserMixin):
+    def __init__(self, id, username):
+        self.id = idf, id, username):
+        self.username = username
+        logger.debug(f"User object created: id={id}, username='{username}'")
+        logger.debug(f"User object created: id={id}, username='{username}'")
+@login_manager.user_loader
+def load_user(user_id):der
     start_time = time.time()
-    logger.info("Starting /logout endpoint")
-    try:
-        username = current_user.username
-        logout_user()
-        logger.info(f"✅ Logout successful for agent: {username}")
-        logger.info(f"Finished /logout in {time.time() - start_time:.2f} seconds")
-        return jsonify({"message": "Logged out successfully"})
+    logger.info(f"Starting load_user for user_id {user_id}")
+    conn = None(f"Starting load_user for user_id {user_id}")
+    try: = None
+        logger.debug(f"Attempting to load user with id: {user_id}")
+        conn = get_db_connection()to load user with id: {user_id}")
+        c = conn.cursor()nection()
+        c.execute("SELECT id, username FROM agents WHERE id = %s", (user_id,))
+        user_data = c.fetchone()ername FROM agents WHERE id = %s", (user_id,))
+        if user_data:.fetchone()
+            user = User(id=user_data['id'], username=user_data['username']) # Corrected: Removed unnecessary escapes
+            logger.info(f"✅ User loaded: id={user.id}, username='{user.username}'")cted: Removed unnecessary escapes
+            return user(f"✅ User loaded: id={user.id}, username='{user.username}'")
+        logger.warning(f"⚠️ No user found with id: {user_id}")
+        return Noneing(f"⚠️ No user found with id: {user_id}")
     except Exception as e:
-        logger.error(f"❌ Error in /logout: {e}")
-        return jsonify({"error": "Failed to logout"}), 500
+        logger.error(f"❌ Error loading user {user_id}: {str(e)}", exc_info=True)
+        return Noner(f"❌ Error loading user {user_id}: {str(e)}", exc_info=True)
+    finally:rn None
+        if conn:
+            release_db_connection(conn)
+            release_db_connection(conn)
+@app.route('/')
+def index():/')
+    logger.info(f"Route / accessed by {request.remote_addr}")
+    if current_user.is_authenticated: {request.remote_addr}")
+        logger.debug(f"User {current_user.username} is authenticated, redirecting to /dashboard")
+        return redirect('/dashboard')user.username} is authenticated, redirecting to /dashboard")
+    logger.debug("User not authenticated, redirecting to /login")
+    return redirect('/login')thenticated, redirecting to /login")
+    return redirect('/login')
+@app.route('/login', methods=['GET', 'POST'])
+def login():/login', methods=['GET', 'POST'])
+    logger.info("✅ /login endpoint registered and called")
+    start_time = time.time()dpoint registered and called")
+    logger.info("Starting /login endpoint")
+    # Removed try block that was causing "Try statement must have at least one except or finally clause"
+    if request.method == "GET":s causing "Try statement must have at least one except or finally clause"
+        if current_user.is_authenticated:
+            logger.info(f"User already authenticated, redirecting in {time.time() - start_time:.2f} seconds")
+            return redirect(request.args.get("next", "/conversations"))ime.time() - start_time:.2f} seconds")
+        logger.info(f"Rendering login page in {time.time() - start_time:.2f} seconds")
+        return render_template("login.html")n {time.time() - start_time:.2f} seconds")
+        return render_template("login.html")
+    # Log the request headers and content type
+    logger.info(f"Request headers: {request.headers}")
+    logger.info(f"Request content type: {request.content_type}")
+    logger.info(f"Request content type: {request.content_type}")
+    # Try to get JSON data
+    data = request.get_json(silent=True)
+    if data is None:et_json(silent=True)
+        # Fallback to form data
+        logger.info("No JSON data found, trying form data")
+        data = request.formN data found, trying form data")
+        logger.info(f"Form data: {dict(data)}")
+        logger.info(f"Form data: {dict(data)}")
+    if not data:
+        logger.error("❌ No valid JSON or form data in /login request")
+        return jsonify({"message": "Invalid request format, expected JSON or form data"}), 400
+        return jsonify({"message": "Invalid request format, expected JSON or form data"}), 400
+    username = data.get("username")
+    if not username:get("username")
+        logger.error("❌ Missing username in /login request")
+        return jsonify({"message": "Missing username"}), 400
+        return jsonify({"message": "Missing username"}), 400
+    logger.info(f"Attempting to log in user: {username}")
+    conn = None # Initialize connog in user: {username}")
+    try: = None # Initialize conn
+        with get_db_connection() as conn:
+            c = conn.cursor()n() as conn:
+            c.execute(ursor()
+                "SELECT id, username FROM agents WHERE username = %s",
+                (username,) username FROM agents WHERE username = %s",
+            )   (username,)
+            user_data = c.fetchone()
+            logger.info(f"Agent query result: {user_data}")
+            if user_data:"Agent query result: {user_data}")
+                # No password check, directly log in if user exists
+                user = User(id=user_data['id'], username=user_data['username'])
+                login_user(user)ser_data['id'], username=user_data['username'])
+                session['username'] = user.username # Store username in session
+                logger.info(f"✅ User '{username}' logged in successfully.")sion
+                return redirect('/dashboard')me}' logged in successfully.")
+            else:eturn redirect('/dashboard')
+                logger.warning(f"⚠️ Login failed for username: '{username}'. User not found.")
+                return render_template('login.html', error="Invalid credentials") not found.")
+    except Exception as e:der_template('login.html', error="Invalid credentials")
+        logger.error(f"❌ Error during login for {username}: {str(e)}", exc_info=True)
+        return render_template('login.html', error="An error occurred. Please try again.")
+    # finally: # Removed finally block as 'with' statement handles connection releasein.")
+    #     if conn:emoved finally block as 'with' statement handles connection release
+    # The original return render_template('login.html') was inside the try block,
+    # it should be outside if the POST request fails before the try, or if it's a GET.
+    # For a POST that fails validation before DB, it returns JSON.y, or if it's a GET.
+    # If it's a GET, it's already returned.re DB, it returns JSON.
+    # Adding a fallback for safety, though logically it might be dead code for POST.
+    return render_template('login.html', error="An unexpected error occurred.")POST.
+    return render_template('login.html', error="An unexpected error occurred.")
 
-@app.route("/check-auth", methods=["GET"])
-def check_auth():
-    start_time = time.time()
-    logger.info("Starting /check-auth endpoint")
-    try:
-        result = {
-            "is_authenticated": current_user.is_authenticated,
-            "agent": current_user.username if current_user.is_authenticated else None
-        }
-        logger.info(f"Finished /check-auth in {time.time() - start_time:.2f} seconds")
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"❌ Error in /check-auth: {e}")
-        return jsonify({"error": "Failed to check authentication"}), 500
-
-@app.route("/settings", methods=["GET", "POST"])
-@login_required
-def settings():
-    start_time = time.time()
-    logger.info("Starting /settings endpoint")
-    try:
-        if request.method == "GET":
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("SELECT key, value, last_updated FROM settings")
-                settings = {row['key']: {'value': row['value'], 'last_updated': row['last_updated']} for row in c.fetchall()}
-                release_db_connection(conn)
-                logger.info(f"Finished /settings GET in {time.time() - start_time:.2f} seconds")
-                return jsonify({key: val['value'] for key, val in settings.items()})
-
-        elif request.method == "POST":
-            data = request.get_json()
-            key = data.get("key")
-            value = data.get("value")
-            if not key or value is None:
-                logger.error("Missing key or value in /settings POST")
-                return jsonify({"error": "Missing key or value"}), 400
-
-            current_timestamp = datetime.now(timezone.utc).isoformat()
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute("BEGIN")
-                c.execute(
-                    "INSERT INTO settings (key, value, last_updated) VALUES (%s, %s, %s) "
-                    "ON CONFLICT (key) DO UPDATE SET value = %s, last_updated = %s",
-                    (key, value, current_timestamp, value, current_timestamp)
-                )
-                c.execute("COMMIT")
-                if key == "ai_enabled":
-                    settings_cache.pop("ai_enabled", None)
-                    logger.info("✅ Invalidated ai_enabled cache after update")
-                release_db_connection(conn)
-                socketio.emit("settings_updated", {key: value})
-                logger.info(f"Finished /settings POST in {time.time() - start_time:.2f} seconds")
-                return jsonify({"status": "success"})
-    except Exception as e:
-        logger.error(f"❌ Error in /settings: {str(e)}")
-        return jsonify({"error": "Failed to update settings"}), 500
-
-# Page Endpoints
-@app.route("/live-messages/")
-@login_required
-def live_messages_page():
-    start_time = time.time()
-    logger.info("Starting /live-messages endpoint")
-    try:
-        result = render_template("live-messages.html")
-        logger.info(f"Finished /live-messages in {time.time() - start_time:.2f} seconds")
-        return result
-    except Exception as e:
-        logger.error(f"❌ Error rendering live-messages page: {e}")
-        return jsonify({"error": "Failed to load live-messages page"}), 500
-
-@app.route("/")
-def index():
-    start_time = time.time()
-    logger.info("Starting / endpoint")
-    try:
-        result = render_template("dashboard.html")
-        logger.info(f"Finished / in {time.time() - start_time:.2f} seconds")
-        return result
-    except Exception as e:
-        logger.error(f"❌ Error rendering dashboard page: {e}")
-        return jsonify({"error": "Failed to load dashboard page"}), 500
-
-@app.route("/conversations", methods=["GET"])
-@login_required
+@app.route('/logout')
+@login_requiredgout')
+def logout():ed
+    logger.info(f"User '{current_user.username}' initiated logout from {request.remote_addr}.")
+    logout_user()"User '{current_user.username}' initiated logout from {request.remote_addr}.")
+    logger.info("✅ User logged out successfully.")
+    return redirect('/login')d out successfully.")
+    return redirect('/login')
+@app.route('/dashboard')
+@login_requiredshboard')
+def dashboard():
+    logger.info(f"Route /dashboard accessed by user '{current_user.username}' from {request.remote_addr}")
+    return render_template('dashboard.html', username=current_user.username)' from {request.remote_addr}")
+    return render_template('dashboard.html', username=current_user.username)
+@app.route('/get_conversations')
+@login_requiredt_conversations')
 def get_conversations():
     start_time = time.time()
-    logger.info("Starting /conversations endpoint")
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT id, username, channel, assigned_agent, needs_agent, ai_enabled "
-                "FROM conversations "
-                "WHERE needs_agent = 1 "
-                "ORDER BY last_updated DESC"
-            )
-            conversations = [
-                {
-                    "id": row["id"],
-                    "username": row["username"],
-                    "channel": row["channel"],
-                    "assigned_agent": row["assigned_agent"],
-                    "needs_agent": row["needs_agent"],
-                    "ai_enabled": row["ai_enabled"]
-                }
-                for row in c.fetchall()
-            ]
+    logger.info("Starting /get_conversations endpoint")
+    conn = None("Starting /get_conversations endpoint")
+    try: = None
+        logger.debug(f"User '{current_user.username}' fetching conversations.")
+        conn = get_db_connection()ent_user.username}' fetching conversations.")
+        c = conn.cursor()nection()
+        c.execute(ursor()
+            "SELECT id, username, channel, assigned_agent, needs_agent, ai_enabled "
+            "FROM conversations " channel, assigned_agent, needs_agent, ai_enabled "
+            "WHERE needs_agent = 1 "
+            "ORDER BY last_updated DESC"
+        )   "ORDER BY last_updated DESC"
+        conversations = [
+            {rsations = [
+                "id": row["id"],
+                "username": row["username"],
+                "channel": row["channel"],],
+                "assigned_agent": row["assigned_agent"],
+                "needs_agent": row["needs_agent"],ent"],
+                "ai_enabled": row["ai_enabled"]"],
+            }   "ai_enabled": row["ai_enabled"]
+            for row in c.fetchall()
+        ]   for row in c.fetchall()
+        logger.info(f"✅ Retrieved {len(conversations)} conversations for user '{current_user.username}'.")
+        return jsonify(conversations)n(conversations)} conversations for user '{current_user.username}'.")
+    except Exception as e:versations)
+        logger.error(f"❌ Error fetching conversations for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify([]), 500fetching conversations for {current_user.username}: {str(e)}", exc_info=True)
+    finally:rn jsonify([]), 500
+        if conn:
             release_db_connection(conn)
-            logger.info(f"Finished /conversations in {time.time() - start_time:.2f} seconds")
-            return jsonify(conversations)
-    except Exception as e:
-        logger.error(f"❌ Error in /conversations: {e}")
-        return jsonify({"error": "Failed to fetch conversations"}), 500
-
-@app.route("/messages/<convo_id>", methods=["GET"])
-@login_required
-def get_messages_for_conversation(convo_id):
+            release_db_connection(conn)
+@app.route('/get_messages/<int:convo_id>')
+@login_requiredt_messages/<int:convo_id>')
+def get_messages(convo_id):
     start_time = time.time()
-    logger.info(f"Starting /messages/{convo_id} endpoint")
-    try:
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid convo_id format: {convo_id}")
-            return jsonify({"error": "Invalid conversation ID format"}), 400
-
-        since = request.args.get("since")
-        if since:
-            try:
-                datetime.fromisoformat(since.replace("Z", "+00:00"))
-            except ValueError:
-                logger.error(f"❌ Invalid 'since' timestamp format: {since}")
-                return jsonify({"error": "Invalid 'since' timestamp format"}), 400
-
+    logger.info(f"Starting /get_messages/{convo_id} endpoint")
+    conn = None(f"Starting /get_messages/{convo_id} endpoint")
+    try: = None
+        logger.debug(f"User '{current_user.username}' fetching messages for convo_id: {convo_id}.")
+        conn = get_db_connection()ent_user.username}' fetching messages for convo_id: {convo_id}.")
+        c = conn.cursor()nection()
+        # Check if the conversation exists and is visible
+        c.execute( the conversation exists and is visible
+            "SELECT username, visible_in_conversations FROM conversations WHERE id = %s",
+            (convo_id,)rname, visible_in_conversations FROM conversations WHERE id = %s",
+        )   (convo_id,)
+        convo = c.fetchone()
+        if not convo:chone()
+            logger.error(f"❌ Conversation not found: {convo_id}")
+            release_db_connection(conn)on not found: {convo_id}")
+            return jsonify({"error": "Conversation not found"}), 404
+            return jsonify({"error": "Conversation not found"}), 404
+        if not convo["visible_in_conversations"]:
+            logger.info(f"Conversation {convo_id} is not visible")
+            release_db_connection(conn){convo_id} is not visible")
+            return jsonify({"username": convo["username"], "messages": []})
+            return jsonify({"username": convo["username"], "messages": []})
+        username = convo["username"]
+        username = convo["username"]
         # Check Redis cache first
-        cache_key = f"messages:{convo_id}:{since or 'full'}"
+        cache_key = f"messages:{convo_id}"
         cached_messages = redis_get_sync(cache_key)
-        if cached_messages:
+        if cached_messages:edis_get_sync(cache_key)
             logger.info(f"Returning cached messages for convo_id {convo_id}")
-            cached_data = json.loads(cached_messages)
-            return jsonify({
+            cached_data = json.loads(cached_messages)or convo_id {convo_id}")
+            return jsonify({on.loads(cached_messages)
                 "username": cached_data["username"],
-                "messages": cached_data["messages"]
+                "messages": cached_data["messages"],
+            })  "messages": cached_data["messages"]
             })
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            # Check if the conversation exists and is visible
-            c.execute(
-                "SELECT username, visible_in_conversations FROM conversations WHERE id = %s",
-                (convo_id,)
-            )
-            convo = c.fetchone()
-            if not convo:
-                logger.error(f"❌ Conversation not found: {convo_id}")
-                release_db_connection(conn)
-                return jsonify({"error": "Conversation not found"}), 404
-
-            if not convo["visible_in_conversations"]:
-                logger.info(f"Conversation {convo_id} is not visible")
-                release_db_connection(conn)
-                return jsonify({"username": convo["username"], "messages": []})
-
-            username = convo["username"]
-
-            if since:
-                query = """
-                    SELECT message, sender, timestamp
-                    FROM messages
-                    WHERE convo_id = %s AND timestamp > %s
-                    ORDER BY timestamp ASC
-                """
-                c.execute(query, (convo_id, since))
-                logger.info(f"Fetching messages for convo_id {convo_id} since {since}")
-            else:
-                query = """
-                    SELECT message, sender, timestamp
-                    FROM messages
-                    WHERE convo_id = %s
-                    ORDER BY timestamp ASC
-                    LIMIT 50
-                """
-                c.execute(query, (convo_id,))
-                logger.info(f"Fetching up to 50 messages for convo_id {convo_id}")
-
-            messages = [
-                {
-                    "message": msg["message"],
-                    "sender": msg["sender"],
-                    "timestamp": msg["timestamp"] if isinstance(msg["timestamp"], str) else msg["timestamp"].isoformat()
-                }
-                for msg in c.fetchall()
-            ]
-            logger.info(f"✅ Fetched {len(messages)} messages for convo_id {convo_id}")
-
-            # Cache the result for 300 seconds (5 minutes)
-            cache_data = {"username": username, "messages": messages}
-            redis_setex_sync(cache_key, 300, json.dumps(cache_data))
-            release_db_connection(conn)
-
-            logger.info(f"Finished /messages/{convo_id} in {time.time() - start_time:.2f} seconds")
-            return jsonify({
-                "username": username,
-                "messages": messages
-            })
+        # Fetch messages from database
+        c.execute(ssages from database
+            "SELECT message, sender, timestamp "
+            "FROM messages " sender, timestamp "
+            "WHERE convo_id = %s "
+            "ORDER BY timestamp ASC",
+            (convo_id,)imestamp ASC",
+        )   (convo_id,)
+        messages = [
+            {ges = [
+                "message": msg["message"],
+                "sender": msg["sender"],],
+                "timestamp": msg["timestamp"] if isinstance(msg["timestamp"], str) else msg["timestamp"].isoformat()
+            }   "timestamp": msg["timestamp"] if isinstance(msg["timestamp"], str) else msg["timestamp"].isoformat()
+            for msg in c.fetchall()
+        ]   for msg in c.fetchall()
+        logger.info(f"✅ Retrieved {len(messages)} messages for convo_id {convo_id} for user '{current_user.username}'.")
+        logger.info(f"✅ Retrieved {len(messages)} messages for convo_id {convo_id} for user '{current_user.username}'.")
+        # Cache the result for 300 seconds (5 minutes)
+        cache_data = {"username": username, "messages": messages}
+        redis_setex_sync(cache_key, 300, json.dumps(cache_data))}
+        release_db_connection(conn) 300, json.dumps(cache_data))
+        release_db_connection(conn)
+        logger.info(f"Finished /get_messages/{convo_id} in {time.time() - start_time:.2f} seconds")
+        return jsonify({nished /get_messages/{convo_id} in {time.time() - start_time:.2f} seconds")
+            "username": username,
+            "messages": messages,
+        })  "messages": messages
     except Exception as e:
-        logger.error(f"❌ Error in /messages/{convo_id}: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error in /get_messages/{convo_id}: {str(e)}", exc_info=True)
+        return jsonify({"error": "Failed to fetch messages"}), 500)}", exc_info=True)
         return jsonify({"error": "Failed to fetch messages"}), 500
-
-@app.route("/handoff", methods=["POST"])
-@login_required
-def handoff():
-    start_time = time.time()
-    logger.info("Starting /handoff endpoint")
+@app.route('/send_message', methods=['POST'])
+@login_requirednd_message', methods=['POST'])
+def send_message_route():
+    import tasks # Import tasks module locally
+    start_time = time.time()sks module locally
+    logger.info("Starting /send_message endpoint")
+    data = request.get_json()nd_message endpoint"
+    if not data:st.get_json()
+        logger.error("❌ No JSON data in /send_message request")
+        return jsonify({"error": "Invalid request, JSON data expected"}), 400
+        return jsonify({"error": "Invalid request, JSON data expected"}), 400
+    convo_id = data.get('convo_id')
+    message_body = data.get('message')
+    chat_id = data.get('chat_id') # Assuming chat_id is sent from frontend
+    channel = data.get('channel', 'dashboard') # Default to dashboard if not specified
+    username = current_user.username # Agent's usernamet to dashboard if not specified
+    username = current_user.username # Agent's username
+    if not convo_id or not message_body or not chat_id:
+        logger.error(f"❌ Missing convo_id, message, or chat_id in /send_message. Convo: {convo_id}, ChatID: {chat_id}, Msg: '{message_body}'")
+        return jsonify({"error": "Missing convo_id, message, or chat_id"}), 400. Convo: {convo_id}, ChatID: {chat_id}, Msg: '{message_body}'")
+        return jsonify({"error": "Missing convo_id, message, or chat_id"}), 400
+    logger.info(f"Agent '{username}' sending message to convo_id {convo_id} (chat_id: {chat_id}, channel: {channel}): '{message_body[:50]}...'")
+    logger.info(f"Agent '{username}' sending message to convo_id {convo_id} (chat_id: {chat_id}, channel: {channel}): '{message_body[:50]}...'")
     try:
-        data = request.get_json()
-        convo_id = data.get("conversation_id")
-        disable_ai = data.get("disable_ai", True)
-        if not convo_id:
-            logger.error("Missing conversation_id in /handoff")
-            return jsonify({"error": "Missing conversation_id"}), 400
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
-            return jsonify({"error": "Invalid conversation ID format"}), 400
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("BEGIN")
-            c.execute(
-                "UPDATE conversations SET assigned_agent = %s, ai_enabled = %s, last_updated = %s WHERE id = %s",
-                (current_user.username, 0 if disable_ai else 1, datetime.now(timezone.utc).isoformat(), convo_id)
-            )
-            c.execute("COMMIT")
-            release_db_connection(conn)
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-        logger.info(f"Finished /handoff in {time.time() - start_time:.2f} seconds")
-        return jsonify({"message": "Conversation assigned successfully"})
+        # Log the agent's message
+        timestamp, message_id = log_message(convo_id, username, message_body, "agent")
+        logger.info(f"✅ Agent message logged to DB for convo_id {convo_id}. Message ID: {message_id}")
+        logger.info(f"✅ Agent message logged to DB for convo_id {convo_id}. Message ID: {message_id}")
+        # Emit agent message to SocketIO for real-time update
+        room = f"conversation_{convo_id}"for real-time update
+        socketio.emit('new_message', {d}"
+            'convo_id': convo_id,e', {
+            'message': message_body,
+            'sender': 'agent',_body,
+            'username': username, # Agent's username
+            'timestamp': timestamp, Agent's username
+            'chat_id': chat_id,amp,
+            'channel': channel,
+        }, to=room)l': channel
+        logger.info(f"✅ Emitted 'new_message' (agent) to SocketIO room: {room}")
+        logger.info(f"✅ Emitted 'new_message' (agent) to SocketIO room: {room}")
+        # If the channel is WhatsApp, send the message via Twilio using Celery task
+        if channel == 'whatsapp':App, send the message via Twilio using Celery task
+            logger.info(f"Channel is WhatsApp for convo_id {convo_id}. Dispatching send_whatsapp_message_task.")
+            # Use tasks.send_whatsapp_message_taskconvo_id {convo_id}. Dispatching send_whatsapp_message_task.
+            tasks.send_whatsapp_message_task.delay(
+                to_number=chat_id, # chat_id is the user's phone number for WhatsApp
+                message=message_body,chat_id is the user's phone number for WhatsApp
+                convo_id=convo_id, # Pass convo_id for context if needed by the task
+                username=username, # Agent usernamefor context if needed by the task
+                chat_id=chat_id # Pass chat_id for context
+            )   chat_id=chat_id # Pass chat_id for context
+            logger.info(f"✅ Dispatched send_whatsapp_message_task for convo_id {convo_id} to chat_id {chat_id}")
+            logger.info(f"✅ Dispatched send_whatsapp_message_task for convo_id {convo_id} to chat_id {chat_id}")
+        processing_time = time.time() - start_time
+        logger.info(f"/send_message for convo_id {convo_id} completed in {processing_time:.2f} seconds")
+        return jsonify({"status": "Message sent and logged", "timestamp": timestamp, "message_id": message_id})
+        return jsonify({"status": "Message sent and logged", "timestamp": timestamp, "message_id": message_id})
     except Exception as e:
-        logger.error(f"❌ Error in /handoff: {e}")
-        return jsonify({"error": "Failed to assign conversation"}), 500
-
-@app.route("/handback-to-ai", methods=["POST"])
-@login_required
-def handback_to_ai():
-    start_time = time.time()
-    logger.info("Starting /handback-to-ai endpoint")
-    try:
-        data = request.get_json()
-        convo_id = data.get("conversation_id")
-        enable_ai = data.get("enable_ai", True)
-        clear_needs_agent = data.get("clear_needs_agent", True)
-        if not convo_id:
-            logger.error("Missing conversation_id in /handback-to-ai")
-            return jsonify({"error": "Missing conversation_id"}), 400
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
-            return jsonify({"error": "Invalid conversation ID format"}), 400
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("BEGIN")
-            c.execute(
-                "UPDATE conversations SET assigned_agent = NULL, ai_enabled = %s, needs_agent = %s, last_updated = %s WHERE id = %s",
-                (1 if enable_ai else 0, 0 if clear_needs_agent else 1, datetime.now(timezone.utc).isoformat(), convo_id)
-            )
-            c.execute("COMMIT")
-            release_db_connection(conn)
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-        logger.info(f"Finished /handback-to-ai in {time.time() - start_time:.2f} seconds")
-        return jsonify({"message": "Conversation handed back to AI"})
-    except Exception as e:
-        logger.error(f"❌ Error in /handback-to-ai: {e}")
-        return jsonify({"error": "Failed to hand back to AI"}), 500
-
-@app.route("/check-visibility", methods=["GET"])
-@login_required
-def check_visibility():
-    start_time = time.time()
-    logger.info("Starting /check-visibility endpoint")
-    try:
-        convo_id = request.args.get("conversation_id")
-        if not convo_id:
-            logger.error("Missing conversation_id in /check-visibility")
-            return jsonify({"error": "Missing conversation_id"}), 400
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
-            return jsonify({"error": "Invalid conversation ID format"}), 400
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT needs_agent FROM conversations WHERE id = %s",
-                (convo_id,)
-            )
-            result = c.fetchone()
-            release_db_connection(conn)
-            logger.info(f"Finished /check-visibility in {time.time() - start_time:.2f} seconds")
-            return jsonify({"visible": bool(result["needs_agent"])})
-    except Exception as e:
-        logger.error(f"❌ Error in /check-visibility: {e}")
-        return jsonify({"error": "Failed to check visibility"}), 500
-
-@app.route("/all-whatsapp-messages", methods=["GET"])
-@login_required
-def get_all_whatsapp_messages():
-    start_time = time.time()
-    logger.info("Starting /all-whatsapp-messages endpoint")
-    try:
-        # Check Redis cache first
-        cache_key = "all_whatsapp_conversations"
-        cached_conversations = redis_get_sync(cache_key)
-        if cached_conversations:
-            logger.info("Returning cached WhatsApp conversations")
-            return jsonify({"conversations": json.loads(cached_conversations)})
-
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            logger.info("Executing query to fetch conversations")
-            c.execute(
-                "SELECT id, chat_id, username, last_updated "
-                "FROM conversations "
-                "WHERE channel = 'whatsapp' "
-                "ORDER BY last_updated DESC"
-            )
-            conversations = c.fetchall()
-            logger.info(f"Found {len(conversations)} conversations: {[(c['id'], c['chat_id']) for c in conversations]}")
-            result = [
-                {
-                    "convo_id": convo["id"],
-                    "chat_id": convo["chat_id"],
-                    "username": convo["username"],
-                    "last_updated": convo["last_updated"]
-                }
-                for convo in conversations
-            ]
-            # Cache the result for 10 seconds
-            redis_setex_sync(cache_key, 10, json.dumps(result))
-            release_db_connection(conn)
-            logger.info(f"Finished /all-whatsapp-messages in {time.time() - start_time:.2f} seconds")
-            return jsonify({"conversations": result})
-    except Exception as e:
-        logger.error(f"Error fetching all WhatsApp messages: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to fetch conversations"}), 500
-
-# Messaging Helper Functions
-def send_whatsapp_message(phone_number, text):
-    logger.info(f"Offloading WhatsApp message to Celery task for {phone_number}")
-    return send_whatsapp_message_task.delay(phone_number, text)
-
-def check_availability(check_in, check_out):
-    start_time = time.time()
-    logger.info(f"Starting check_availability from {check_in} to {check_out}")
-    max_retries = 3
-    current_date = check_in
-    while current_date < check_out:
-        start_time_dt = current_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-        end_time_dt = (current_date + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-
-        for attempt in range(max_retries):
-            try:
-                events_result = service.events().list(
-                    calendarId='a33289c61cf358216690e7cc203d116cec4c44075788fab3f2b200f5bbcd89cc@group.calendar.google.com',
-                    timeMin=start_time_dt,
-                    timeMax=end_time_dt,
-                    singleEvents=True,
-                    orderBy='startTime'
-                ).execute()
-                events = events_result.get('items', [])
-
-                if any(event.get('summary') == "Fully Booked" for event in events):
-                    result = f"Sorry, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are not available. We are fully booked on {current_date.strftime('%B %d, %Y')}."
-                    logger.info(f"Finished check_availability (not available) in {time.time() - start_time:.2f} seconds")
-                    return result
-                break
-            except HttpError as e:
-                logger.error(f"❌ Google Calendar API error (Attempt {attempt + 1}/{max_retries}): {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
-            except Exception as e:
-                logger.error(f"❌ Unexpected error in check_availability (Attempt {attempt + 1}/{max_retries}): {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                return "Sorry, I’m having trouble checking availability right now. I’ll connect you with a team member to assist you."
-        current_date += timedelta(days=1)
-
-    result = f"Yes, the dates from {check_in.strftime('%B %d, %Y')} to {(check_out - timedelta(days=1)).strftime('%B %d, %Y')} are available."
-    logger.info(f"Finished check_availability (available) in {time.time() - start_time:.2f} seconds")
-    return result
-
-# Semaphore to limit concurrent OpenAI API requests
-OPENAI_CONCURRENT_LIMIT = 20
-openai_semaphore = asyncio.Semaphore(OPENAI_CONCURRENT_LIMIT)
-
-def detect_language(message, convo_id):
-    start_time = time.time()
-    logger.info(f"Starting detect_language for convo_id {convo_id}")
-    try:
-        # First, check if the conversation has a stored language
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT language FROM conversations WHERE id = %s",
-                (convo_id,)
-            )
-            result = c.fetchone()
-            if result and result['language']:
-                logger.info(f"Using stored language for convo_id {convo_id}: {result['language']}")
-                release_db_connection(conn)
-                return result['language']
-
-        # If no stored language, detect the language of the current message
-        detected_lang = detect(message)
-        logger.info(f"Detected language for message '{message}': {detected_lang}")
-
-        # If detection confidence is low, check conversation history
-        if detected_lang not in ['en', 'es']:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT message FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 5",
-                    (convo_id,)
-                )
-                messages = c.fetchall()
-                release_db_connection(conn)
-                for msg in messages:
-                    try:
-                        hist_lang = detect(msg['message'])
-                        if hist_lang in ['en', 'es']:
-                            detected_lang = hist_lang
-                            logger.info(f"Using language from history for convo_id {convo_id}: {detected_lang}")
-                            break
-                    except:
-                        continue
-
-        # Default to English if still undetermined
-        if detected_lang not in ['en', 'es']:
-            detected_lang = 'en'
-            logger.info(f"Defaulting to English for convo_id {convo_id}")
-
-        # Store the detected language in the conversations table
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "UPDATE conversations SET language = %s WHERE id = %s",
-                (detected_lang, convo_id)
-            )
-            conn.commit()
-            release_db_connection(conn)
-            logger.info(f"Stored detected language for convo_id {convo_id}: {detected_lang}")
-
-        logger.info(f"Finished detect_language in {time.time() - start_time:.2f} seconds")
-        return detected_lang
-    except Exception as e:
-        logger.error(f"Error in detect_language for convo_id {convo_id}: {str(e)}")
-        return 'en'
-
-# Update the ai_respond function with tenacity for retries
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type((RateLimitError, asyncio.TimeoutError))
-)
-async def ai_respond(message, convo_id):
-    start_time = time.time()
-    logger.info(f"Starting ai_respond for convo_id {convo_id}: {message}")
-    try:
-        # Detect language
-        language = detect_language(message, convo_id)
-        is_spanish = (language == "es")
-
-        # Check cache for common messages
-        cache_key = f"ai_response:{message}:{convo_id}"
-        cached_response = await async_redis_client.get(cache_key)
-        if cached_response:
-            logger.info(f"Returning cached response for message: {message}")
-            return cached_response
-
-        # Enhanced date parsing logic
-        date_match = re.search(
-            r'(?:are rooms available|availability|do you have any rooms|rooms available|what about|next week|this|'
-            r'¿hay habitaciones disponibles?|disponibilidad|¿tienen habitaciones?|habitaciones disponibles?|qué tal|la próxima semana|este)?\s*'
-            r'(?:from|on|de|el)?\s*'
-            r'(?:(?:([A-Za-z]{3,9})\s+(\d{1,2}(?:st|nd|rd|th)?))|(?:(\d{1,2})\s*(?:de)?\s*([A-Za-z]{3,9})))'
-            r'(?:\s*(?:to|a|al|until|hasta)?\s*'
-            r'(?:(?:([A-Za-z]{3,9})\s+(\d{1,2}(?:st|nd|rd|th)?))|(?:(\d{1,2})\s*(?:de)?\s*([A-Za-z]{3,9}))))?',
-            message.lower()
-        )
-        if date_match or "next week" in message.lower() or "la próxima semana" in message.lower() or "this" in message.lower() or "este" in message.lower():
-            spanish_to_english_months = {
-                "enero": "January", "febrero": "February", "marzo": "March", "abril": "April",
-                "mayo": "May", "junio": "June", "julio": "July", "agosto": "August",
-                "septiembre": "September", "octubre": "October", "noviembre": "November", "diciembre": "December"
-            }
-            current_year = datetime.now().year
-            today = datetime.now()
-
-            if "next week" in message.lower() or "la próxima semana" in message.lower():
-                # Calculate next week's Monday as check-in and Sunday as check-out
-                days_until_monday = (7 - today.weekday()) % 7 or 7
-                check_in = today + timedelta(days=days_until_monday)
-                check_out = check_in + timedelta(days=6)
-            elif "this" in message.lower() or "este" in message.lower():
-                # Parse "this Friday" or "este viernes"
-                day_match = re.search(r'(this|este)\s*(monday|lunes|Tuesday|martes|wednesday|miércoles|thursday|jueves|friday|viernes|saturday|sábado|sunday|domingo)', message.lower())
-                if day_match:
-                    day_name = day_match.group(2)
-                    day_mapping = {
-                        "monday": 0, "lunes": 0, "tuesday": 1, "martes": 1, "wednesday": 2, "miércoles": 2,
-                        "thursday": 3, "jueves": 3, "friday": 4, "viernes": 4, "saturday": 5, "sábado": 5,
-                        "sunday": 6, "domingo": 6
-                    }
-                    target_day = day_mapping.get(day_name)
-                    days_until_target = (target_day - today.weekday()) % 7
-                    if days_until_target == 0 and today.hour >= 12:
-                        days_until_target = 7  # If it's already that day past noon, assume next week
-                    check_in = today + timedelta(days=days_until_target)
-                    check_out = check_in + timedelta(days=1)
-                else:
-                    result = "I’m not sure which day you meant by 'this'. Can you specify, like 'this Friday' or 'este viernes'?" if not is_spanish else \
-                             "No estoy seguro de qué día te refieres con 'este'. ¿Puedes especificar, como 'este viernes' o 'this Friday'?"
-                    await async_redis_client.setex(cache_key, 3600, result)
-                    logger.info(f"Finished ai_respond (ambiguous 'this' date) in {time.time() - start_time:.2f} seconds")
-                    return result
-            else:
-                month1_en, day1_en, day1_es, month1_es, month2_en, day2_en, day2_es, month2_es = date_match.groups()
-
-                if month1_en and day1_en:
-                    check_in_str = f"{month1_en} {day1_en}"
-                    check_in_str = re.sub(r'(st|nd|rd|th)', '', check_in_str).strip()
-                    check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
-                elif day1_es and month1_es:
-                    month1_en = spanish_to_english_months.get(month1_es.lower(), month1_es)
-                    check_in_str = f"{month1_en} {day1_es}"
-                    check_in = datetime.strptime(f"{check_in_str} {current_year}", '%B %d %Y')
-                else:
-                    result = "Sorry, I couldn’t understand the dates. Please use a format like 'March 20' or '20 de marzo'." if not is_spanish else \
-                           "Lo siento, no entendí las fechas. Por favor, usa un formato como '20 de marzo' o 'March 20'."
-                    await async_redis_client.setex(cache_key, 3600, result)
-                    logger.info(f"Finished ai_respond (date error) in {time.time() - start_time:.2f} seconds")
-                    return result
-
-                if month2_en and day2_en:
-                    check_out_str = f"{month2_en} {day2_en}"
-                    check_out_str = re.sub(r'(st|nd|rd|th)', '', check_out_str).strip()
-                    check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
-                elif day2_es and month2_es:
-                    month2_en = spanish_to_english_months.get(month2_es.lower(), month2_es)
-                    check_out_str = f"{month2_en} {day2_es}"
-                    check_out = datetime.strptime(f"{check_out_str} {current_year}", '%B %d %Y')
-                else:
-                    check_out = check_in + timedelta(days=1)
-
-            if check_out < check_in:
-                check_out = check_out.replace(year=check_out.year + 1)
-
-            if check_out <= check_in:
-                result = "The check-out date must be after the check-in date. Please provide a valid range." if not is_spanish else \
-                       "La fecha de salida debe ser posterior a la fecha de entrada. Por favor, proporciona un rango válido."
-                await async_redis_client.setex(cache_key, 3600, result)
-                logger.info(f"Finished ai_respond (invalid date range) in {time.time() - start_time:.2f} seconds")
-                return result
-
-            availability = check_availability(check_in, check_out)
-            if "are available" in availability.lower():
-                booking_intent = f"{check_in.strftime('%Y-%m-%d')} to {check_out.strftime('%Y-%m-%d')}"
-                with get_db_connection() as conn:
-                    try:
-                        c = conn.cursor()
-                        c.execute("BEGIN")
-                        c.execute(
-                            "UPDATE conversations SET booking_intent = %s WHERE id = %s",
-                            (booking_intent, convo_id)
-                        )
-                        c.execute("COMMIT")
-                    finally:
-                        release_db_connection(conn)
-                response = f"{availability} Would you like to proceed with the booking? I’ll need to connect you with a team member to finalize it." if not is_spanish else \
-                           f"{availability.replace('are available', 'están disponibles')} ¿Te gustaría proceder con la reserva? Necesitaré conectarte con un miembro del equipo para finalizarla."
-            else:
-                response = availability if not is_spanish else \
-                           availability.replace("are not available", "no están disponibles").replace("fully booked", "completamente reservado")
-            await async_redis_client.setex(cache_key, 3600, response)
-            logger.info(f"Finished ai_respond (availability check) in {time.time() - start_time:.2f} seconds")
-            return response
-
-        # Check for booking intent with partial information
-        booking_match = re.search(
-            r'(?:book|booking|reserve|reservar)\s*(?:a\s*)?(room|habitación)?\s*(?:for\s*)?(\d+)\s*(?:people|personas|guests|huéspedes)?',
-            message.lower()
-        )
-        if booking_match or "book" in message.lower() or "booking" in message.lower() or "reservar" in message.lower():
-            # Check if we have partial booking info
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT booking_intent FROM conversations WHERE id = %s",
-                    (convo_id,)
-                )
-                result = c.fetchone()
-                booking_intent = result['booking_intent'] if result else None
-                release_db_connection(conn)
-
-            if booking_match:
-                _, num_guests = booking_match.groups()
-                if num_guests:
-                    # Store the number of guests in booking_intent
-                    booking_intent = f"guests:{num_guests}" if not booking_intent else f"{booking_intent},guests:{num_guests}"
-                    with get_db_connection() as conn:
-                        c = conn.cursor()
-                        c.execute(
-                            "UPDATE conversations SET booking_intent = %s WHERE id = %s",
-                            (booking_intent, convo_id)
-                        )
-                        conn.commit()
-                        release_db_connection(conn)
-
-            if not booking_intent or "guests" not in booking_intent or "to" not in booking_intent:
-                missing_info = []
-                if not booking_intent or "to" not in booking_intent:
-                    missing_info.append("your preferred dates (like March 10 to March 15)" if not is_spanish else "tus fechas preferidas (como del 10 al 15 de marzo)")
-                if not booking_intent or "guests" not in booking_intent:
-                    missing_info.append("the number of guests" if not is_spanish else "el número de huéspedes")
-                missing_info.append("the room type you’d like (Standard, Deluxe, or Suite)" if not is_spanish else "el tipo de habitación que te gustaría (Estándar, Deluxe o Suite)")
-
-                result = f"I’d love to help with your booking! Can you tell me {', '.join(missing_info)}?" if not is_spanish else \
-                         f"¡Me encantaría ayudarte con tu reserva! ¿Me puedes decir {', '.join(missing_info)}?"
-                await async_redis_client.setex(cache_key, 3600, result)
-                logger.info(f"Finished ai_respond (partial booking info) in {time.time() - start_time:.2f} seconds")
-                return result
-
-            with get_db_connection() as conn:
-                try:
-                    c = conn.cursor()
-                    c.execute("BEGIN")
-                    c.execute(
-                        "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                        (datetime.now(timezone.utc).isoformat(), convo_id)
-                    )
-                    c.execute("COMMIT")
-                finally:
-                    release_db_connection(conn)
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-            result = "I have all the details for your booking! I’ll connect you with a team member to finalize it for you." if not is_spanish else \
-                   "¡Tengo todos los detalles para tu reserva! Te conectaré con un miembro del equipo para que la finalice por ti."
-            await async_redis_client.setex(cache_key, 3600, result)
-            logger.info(f"Finished ai_respond (booking intent, needs agent) in {time.time() - start_time:.2f} seconds")
-            return result
-
-        # Fetch conversation history from cache or database
-        history_cache_key = f"conversation_history:{convo_id}"
-        cached_history = await async_redis_client.get(history_cache_key)
-        if cached_history:
-            messages = json.loads(cached_history)
-            logger.info(f"Retrieved conversation history from cache for convo_id {convo_id}")
-        else:
-            with get_db_connection() as conn:
-                try:
-                    c = conn.cursor()
-                    c.execute(
-                        "SELECT message, sender, timestamp FROM messages WHERE convo_id = %s ORDER BY timestamp DESC LIMIT 10",
-                        (convo_id,)
-                    )
-                    messages = c.fetchall()
-                    await async_redis_client.setex(history_cache_key, 300, json.dumps([dict(msg) for msg in messages]))
-                    logger.info(f"Cached conversation history for convo_id {convo_id}")
-                finally:
-                    release_db_connection(conn)
-
-        # Build conversation history
-        conversation_history = [
-            {"role": "system", "content": TRAINING_DOCUMENT}
-        ]
-        for msg in messages:
-            message_text, sender, timestamp = msg['message'], msg['sender'], msg['timestamp']
-            role = "user" if sender == "user" else "assistant"
-            conversation_history.append({"role": role, "content": message_text})
-        conversation_history.append({"role": "user", "content": message})
-
-        # Call OpenAI API asynchronously with rate limiting
-        async with openai_semaphore:
-            response = await openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=conversation_history,
-                max_tokens=300,
-                temperature=0.7
-            )
-            ai_reply = response.choices[0].message.content.strip()
-            logger.info(f"✅ AI reply: {ai_reply}")
-            if "sorry" in ai_reply.lower() or "lo siento" in ai_reply.lower():
-                with get_db_connection() as conn:
-                    try:
-                        c = conn.cursor()
-                        c.execute("BEGIN")
-                        c.execute(
-                            "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                            (datetime.now(timezone.utc).isoformat(), convo_id)
-                        )
-                        c.execute("COMMIT")
-                    finally:
-                        release_db_connection(conn)
-                socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-                await async_redis_client.setex(cache_key, 3600, ai_reply)
-                logger.info(f"Finished ai_respond (AI sorry, needs agent) in {time.time() - start_time:.2f} seconds")
-                return ai_reply
-            await async_redis_client.setex(cache_key, 3600, ai_reply)
-            logger.info(f"Finished ai_respond (AI success) in {time.time() - start_time:.2f} seconds")
-            return ai_reply
-
-    except RateLimitError as e:
-        logger.error(f"❌ OpenAI RateLimitError: {str(e)}")
-        raise
-    except asyncio.TimeoutError as e:
-        logger.error(f"❌ OpenAI API request timed out: {str(e)}")
-        raise
-    except APIError as e:
-        logger.error(f"❌ OpenAI APIError: {str(e)}")
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute("BEGIN")
-                c.execute(
-                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                )
-                c.execute("COMMIT")
-            finally:
-                release_db_connection(conn)
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-        result = "I’m sorry, I’m having trouble processing your request right now due to an API error. I’ll connect you with a team member to assist you." if not is_spanish else \
-               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo debido a un error de API. Te conectaré con un miembro del equipo para que te ayude."
-        await async_redis_client.setex(cache_key, 3600, result)
-        logger.info(f"Finished ai_respond (APIError, needs agent) in {time.time() - start_time:.2f} seconds")
-        return result
-    except AuthenticationError as e:
-        logger.error(f"❌ OpenAI AuthenticationError: {str(e)}")
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute("BEGIN")
-                c.execute(
-                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                )
-                c.execute("COMMIT")
-            finally:
-                release_db_connection(conn)
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-        result = "I’m sorry, I’m having trouble authenticating with the AI service. I’ll connect you with a team member to assist you." if not is_spanish else \
-               "Lo siento, tengo problemas para autenticarme con el servicio de IA. Te conectaré con un miembro del equipo para que te ayude."
-        await async_redis_client.setex(cache_key, 3600, result)
-        logger.info(f"Finished ai_respond (AuthenticationError, needs agent) in {time.time() - start_time:.2f} seconds")
-        return result
-    except Exception as e:
-        logger.error(f"❌ Error in ai_respond for convo_id {convo_id}: {str(e)}")
-        with get_db_connection() as conn:
-            try:
-                c = conn.cursor()
-                c.execute("BEGIN")
-                c.execute(
-                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                )
-                c.execute("COMMIT")
-            finally:
-                release_db_connection(conn)
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-        result = "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you." if not is_spanish else \
-               "Lo siento, tengo problemas para procesar tu solicitud ahora mismo. Te conectaré con un miembro del equipo para que te ayude."
-        await async_redis_client.setex(cache_key, 3600, result)
-        logger.info(f"Finished ai_respond (general error, needs agent) in {time.time() - start_time:.2f} seconds")
-        return result
-
-def ai_respond_sync(message, convo_id):
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(ai_respond(message, convo_id))
-            return result
-        finally:
-            loop.close()
-    except Exception as e:
-        logger.error(f"❌ Error in ai_respond_sync for convo_id {convo_id}: {str(e)}")
-        return "I’m sorry, I’m having trouble processing your request right now. I’ll connect you with a team member to assist you."
-
-# Export both ai_respond and ai_respond_sync for use in tasks.py
-__all__ = ['ai_respond', 'ai_respond_sync']
-
-@app.route("/whatsapp", methods=["GET", "POST"])
-def whatsapp():
-    start_time = time.time()
-    logger.info("Starting /whatsapp endpoint")
-    try:
-        if request.method == "GET":
-            logger.error("❌ GET method not allowed for /whatsapp")
-            return Response("Method not allowed", status=405)
-
-        form = request.form
-        message_body = form.get("Body", "").strip()
-        from_number = form.get("From", "")
-        chat_id = from_number.replace("whatsapp:", "")
-        if not message_body or not chat_id:
-            logger.error("❌ Missing message body or chat_id in WhatsApp request")
-            return Response("Missing required fields", status=400)
-
+        logger.error(f"❌ Error in /send_message for convo_id {convo_id}: {str(e)}", exc_info=True)
+        return jsonify({"error": "Failed to send message"}), 500nvo_id}: {str(e)}", exc_info=True)
+        return jsonify({"error": "Failed to send message"}), 500
+@app.route('/twilio_webhook', methods=['POST'])
+def twilio_webhook():ebhook', methods=['POST'])
+    import tasks # Import tasks module locally
+    start_time = time.time()sks module locally
+    logger.info("Starting /twilio_webhook endpoint")
+    try:er.info("Starting /twilio_webhook endpoint")
+        data = request.form
+        from_number_raw = data.get('From')
+        message_body = data.get('Body')m')
+        profile_name = data.get('ProfileName') # User's WhatsApp profile name
+        profile_name = data.get('ProfileName') # User's WhatsApp profile name
+        if not from_number_raw or not message_body:
+            logger.warning(f"⚠️ Missing 'From' or 'Body' in Twilio webhook data: {data}")
+            return jsonify({"status": "error", "message": "Missing From or Body"}), 400")
+            return jsonify({"status": "error", "message": "Missing From or Body"}), 400
+        # Normalize from_number: remove "whatsapp:" prefix if present, then ensure it has it for chat_id consistency
+        chat_id = from_number_raw.replace("whatsapp:", "") if present, then ensure it has it for chat_id consistency
+        from_number_normalized = f"whatsapp:{chat_id}" # This is the ID used with Twilio API
+        from_number_normalized = f"whatsapp:{chat_id}" # This is the ID used with Twilio API
         user_timestamp = datetime.now(timezone.utc).isoformat()
-        logger.info(f"Queuing process_whatsapp_message task: from_number={from_number}, chat_id={chat_id}, message_body={message_body}, user_timestamp={user_timestamp}")
-        task = process_whatsapp_message.delay(from_number, chat_id, message_body, user_timestamp)
-        logger.info(f"Task queued successfully: task_id={task.id}")
-        logger.info(f"Finished /whatsapp (queued) in {time.time() - start_time:.2f} seconds")
-        return Response("Message queued for processing", status=202)
+        logger.info(f"Received WhatsApp message. From: {from_number_normalized} (Profile: {profile_name}), Body: '{message_body[:50]}...'")
+        logger.info(f"Received WhatsApp message. From: {from_number_normalized} (Profile: {profile_name}), Body: '{message_body[:50]}...'")
+        # Dispatch to Celery task for processing
+        # Use tasks.process_whatsapp_messagesing
+        tasks.process_whatsapp_message.delay(
+            from_number=from_number_normalized, # Send the full "whatsapp:+123..." number
+            chat_id=chat_id,                   # Send the plain number as chat_id" number
+            message_body=message_body,         # Send the plain number as chat_id
+            user_timestamp=user_timestamp
+        )   user_timestamp=user_timestamp
+        logger.info(f"✅ Dispatched process_whatsapp_message task for chat_id {chat_id}")
+        logger.info(f"✅ Dispatched process_whatsapp_message task for chat_id {chat_id}")
+        processing_time = time.time() - start_time
+        logger.info(f"/twilio_webhook for chat_id {chat_id} completed in {processing_time:.2f} seconds")
+        return Response(status=204) # Twilio expects a 204 No Content or an empty <Response/> TwiMLnds")
+        return Response(status=204) # Twilio expects a 204 No Content or an empty <Response/> TwiML
     except Exception as e:
-        logger.error(f"❌ Error in /whatsapp: {str(e)}", exc_info=True)
-        return Response("Failed to process WhatsApp message", status=500)
-
-@app.route("/refresh_conversations", methods=["POST"])
-def refresh_conversations():
-    start_time = time.time()
-    logger.info("Starting /refresh_conversations endpoint")
-    try:
-        data = request.get_json()
-        convo_id = data.get("conversation_id")
-        if not convo_id:
-            logger.error("Missing conversation_id in /refresh_conversations")
-            return jsonify({"error": "Missing conversation_id"}), 400
-        socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-        logger.info(f"Finished /refresh_conversations in {time.time() - start_time:.2f} seconds")
-        return jsonify({"message": "Conversations refresh triggered"})
-    except Exception as e:
-        logger.error(f"❌ Error in /refresh_conversations: {str(e)}")
-        return jsonify({"error": "Failed to trigger refresh"}), 500
-
+        logger.error(f"❌ Error processing Twilio webhook: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
 # SocketIO Events
 @socketio.on("connect")
 def handle_connect():
-    logger.info("✅ Client connected to SocketIO")
-    if current_user.is_authenticated:
-        emit("connection_status", {"status": "connected", "agent": current_user.username})
-    else:
-        emit("connection_status", {"status": "connected", "agent": None})
-
-@socketio.on("disconnect")
-def handle_disconnect():
-    logger.info("ℹ️ Client disconnected from SocketIO")
-
-@socketio.on("join_conversation")
-def handle_join_conversation(data):
-    convo_id = data.get("conversation_id")
-    if not convo_id:
-        logger.error("Missing conversation_id in join_conversation")
-        emit("error", {"message": "Missing conversation_id"})
-        return
-    room = f"conversation_{convo_id}"
-    join_room(room)
-    logger.info(f"Agent joined room: {room} for convo_id: {convo_id}")
-    emit("room_joined", {"room": room, "convo_id": convo_id}, room=room)
-
-@socketio.on("leave_conversation")
-def handle_leave_conversation(data):
-    convo_id = data.get("conversation_id")
-    if not convo_id:
-        logger.error("Missing conversation_id in leave_conversation")
-        emit("error", {"message": "Missing conversation_id"})
-        return
-    room = f"conversation_{convo_id}"
-    leave_room(room)
-    logger.info(f"Agent left room: {room}")
-    emit("room_left", {"room": room, "convo_id": convo_id})
-
-@socketio.on("agent_message")
-def handle_agent_message(data):
-    start_time = time.time()
-    logger.info("Starting handle_agent_message")
+    """Handle new Socket.IO connections with proper authentication."""
     try:
         if not current_user.is_authenticated:
-            logger.error("Unauthorized agent message attempt")
-            emit("error", {"message": "Unauthorized"})
-            return
-
-        convo_id = data.get("conversation_id")
-        message = data.get("message")
-        if not convo_id or not message:
-            logger.error("Missing conversation_id or message in agent_message")
-            emit("error", {"message": "Missing conversation_id or message"})
-            return
-
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
-            emit("error", {"message": "Invalid conversation ID format"})
-            return
-
-        # Verify the conversation exists and get the chat_id and channel
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT chat_id, channel, username FROM conversations WHERE id = %s",
-                (convo_id,)
-            )
-            convo = c.fetchone()
-            if not convo:
-                logger.error(f"Conversation not found: {convo_id}")
-                emit("error", {"message": "Conversation not found"})
-                return
-
-            chat_id = convo["chat_id"]
-            channel = convo["channel"]
-            username = convo["username"]
-            release_db_connection(conn)
-
-        # Log the agent's message
-        timestamp = log_message(convo_id, username, message, "agent")
-
-        # Invalidate message cache for this conversation
-        cache_key = f"messages:{convo_id}:*"
-        keys = redis_client.keys(cache_key)
-        if keys:
-            redis_client.delete(*keys)
-            logger.info(f"Invalidated message cache for convo_id {convo_id}")
-
-        # Emit the message to the room
-        room = f"conversation_{convo_id}"
-        emit(
-            "new_message",
-            {
-                "convo_id": convo_id,
-                "message": message,
-                "sender": "agent",
-                "timestamp": timestamp,
-                "username": username
-            },
-            room=room
-        )
-
-        # If the channel is WhatsApp, send the message to the user
-        if channel == "whatsapp":
-            send_whatsapp_message(chat_id, message)
-
-        logger.info(f"Finished handle_agent_message in {time.time() - start_time:.2f} seconds")
+            logger.warning(f"Unauthenticated Socket.IO connection attempt from {request.remote_addr}")
+            return False  # Reject the connection
+            
+        sid = request.sid
+        logger.info(f"SOCKETIO Client connected: session_id={sid}, user='{current_user.username}', ip={request.remote_addr}")
+        emit('status', {
+            'msg': f'Connected as {current_user.username}',
+            'username': current_user.username
+        }, to=sid)
     except Exception as e:
-        logger.error(f"❌ Error in handle_agent_message: {str(e)}")
-        emit("error", {"message": "Failed to send message"})
+        logger.error(f"❌ Error in Socket.IO connect handler: {str(e)}", exc_info=True)
+        return False
+    return True
 
-@socketio.on("message")
-def handle_user_message(data):
+@socketio.on("disconnect")
+def handle_disconnect():")
+    sid = request.sid():
+    logger.info(f"SOCKETIO Client disconnected: session_id={sid}")
+    logger.info(f"SOCKETIO Client disconnected: session_id={sid}")
+@socketio.on("join_conversation")
+@login_required # Ensure only logged-in users can join
+def handle_join_conversation(data):d-in users can join
+    sid = request.sidrsation(data):
+    convo_id = data.get("conversation_id")
+    agent_username = current_user.username
+    logger.info(f"SOCKETIO 'join_conversation' received. Agent: {agent_username}, Convo ID: {convo_id}, SID: {sid}")
+    if not convo_id:CKETIO 'join_conversation' received. Agent: {agent_username}, Convo ID: {convo_id}, SID: {sid}")
+        logger.error("❌ Attempted to join conversation with no convo_id")
+        emit("error", {"message": "conversation_id is required"}, to=sid)
+        returnerror", {"message": "conversation_id is required"}, to=sid)
+    room = f"conversation_{convo_id}"
+    join_room(room) # SID is implicitly used by join_room for the current client
+    logger.info(f"Agent '{agent_username}' (SID: {sid}) joined room: {room}")ent
+    emit("room_joined", {"room": room, "convo_id": convo_id}, to=room) # Notify others in the room (or just the client: to=sid)
+    emit("room_joined", {"room": room, "convo_id": convo_id}, to=room) # Notify others in the room (or just the client: to=sid)
+@socketio.on("leave_conversation")
+@login_requiredeave_conversation"
+def handle_leave_conversation(data):
+    sid = request.sidersation(data):
+    convo_id = data.get("conversation_id")
+    agent_username = current_user.username
+    logger.info(f"SOCKETIO 'leave_conversation' received. Agent: {agent_username}, Convo ID: {convo_id}, SID: {sid}")
+    if not convo_id:CKETIO 'leave_conversation' received. Agent: {agent_username}, Convo ID: {convo_id}, SID: {sid}")
+        logger.error("❌ Attempted to leave conversation with no convo_id")
+        emit("error", {"message": "conversation_id is required"}, to=sid))
+        returnerror", {"message": "conversation_id is required"}, to=sid)
+    room = f"conversation_{convo_id}"
+    leave_room(room) # SID is implicitly used
+    logger.info(f"Agent '{agent_username}' (SID: {sid}) left room: {room}")
+    emit("room_left", {"room": room, "convo_id": convo_id}, to=room) # Notify others in the room
+    emit("room_left", {"room": room, "convo_id": convo_id}, to=room) # Notify others in the room
+@socketio.on("agent_message")
+@login_required
+def handle_agent_message(data):
+    """Handle incoming agent messages via Socket.IO with improved error handling."""
+    import tasks # Import tasks module locally
     start_time = time.time()
-    logger.info("Starting handle_user_message")
+    
+    sid = request.sid
+    logger.info(f"SocketIO 'agent_message' received from {current_user.username} (SID: {sid})")
+    
     try:
-        convo_id = data.get("conversation_id")
-        message = data.get("message")
-        if not convo_id or not message:
-            logger.error("Missing conversation_id or message in user_message")
-            emit("error", {"message": "Missing conversation_id or message"})
+        # Validate required fields
+        required_fields = ['convo_id', 'message', 'chat_id', 'channel']
+        missing_fields = [field for field in required_fields if not data.get(field)]
+        
+        if missing_fields:
+            error_msg = f"Missing required fields: {', '.join(missing_fields)}"
+            logger.error(f"❌ {error_msg}")
+            emit('error', {'message': error_msg}, to=sid)
             return
-
-        try:
-            convo_id = int(convo_id)
-            if convo_id <= 0:
-                raise ValueError("Conversation ID must be a positive integer")
-        except ValueError:
-            logger.error(f"❌ Invalid conversation_id format: {convo_id}")
-            emit("error", {"message": "Invalid conversation ID format"})
-            return
-
-        # Verify the conversation exists and get the username, ai_enabled, and channel
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT username, ai_enabled, channel, needs_agent, handoff_notified FROM conversations WHERE id = %s",
-                (convo_id,)
-            )
-            convo = c.fetchone()
-            if not convo:
-                logger.error(f"Conversation not found: {convo_id}")
-                emit("error", {"message": "Conversation not found"})
-                return
-
-            username = convo["username"]
-            ai_enabled = convo["ai_enabled"]
-            channel = convo["channel"]
-            needs_agent = convo["needs_agent"]
-            handoff_notified = convo["handoff_notified"]
-            release_db_connection(conn)
-
-        # Log the user's message
-        timestamp = log_message(convo_id, username, message, "user")
-
-        # Invalidate message cache for this conversation
-        cache_key = f"messages:{convo_id}:*"
-        keys = redis_client.keys(cache_key)
-        if keys:
-            redis_client.delete(*keys)
-            logger.info(f"Invalidated message cache for convo_id {convo_id}")
-
-        # Emit the user's message to the room
+            
+        convo_id = data.get('convo_id')
+        message_body = data.get('message')
+        chat_id = data.get('chat_id')
+        channel = data.get('channel')
+        username = current_user.username
+        
+        logger.info(f"Agent '{username}' sending message via Socket.IO to convo_id {convo_id} (chat_id: {chat_id}, channel: {channel}): '{message_body[:50]}...'")
+        
+        # Log the agent's message to the database
+        timestamp, message_id = log_message(convo_id, username, message_body, "agent")
+        logger.info(f"✅ Agent message logged to DB for convo_id {convo_id}. Message ID: {message_id}")
+        
+        # Emit the message to the specific conversation room
         room = f"conversation_{convo_id}"
-        emit(
-            "new_message",
-            {
-                "convo_id": convo_id,
-                "message": message,
-                "sender": "user",
-                "timestamp": timestamp,
-                "username": username
-            },
-            room=room
-        )
-
-        # Check if the conversation needs an agent and hasn't been notified yet
-        if needs_agent and not handoff_notified:
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
-                    "UPDATE conversations SET handoff_notified = 1, last_updated = %s WHERE id = %s",
-                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                )
-                conn.commit()
-                release_db_connection(conn)
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-            logger.info(f"Notified agent for convo_id {convo_id} due to needs_agent")
-
-        # Check if AI is enabled for this conversation
-        if not ai_enabled:
-            logger.info(f"AI is disabled for convo_id {convo_id}, skipping AI response")
-            return
-
-        # Get global AI enabled setting
-        global_ai_enabled, _ = get_ai_enabled()
-        if global_ai_enabled != "1":
-            logger.info(f"Global AI is disabled, skipping AI response for convo_id {convo_id}")
-            with get_db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
-                    "UPDATE conversations SET needs_agent = 1, last_updated = %s WHERE id = %s",
-                    (datetime.now(timezone.utc).isoformat(), convo_id)
-                )
-                conn.commit()
-                release_db_connection(conn)
-            socketio.emit("refresh_conversations", {"conversation_id": convo_id})
-            return
-
-        # Generate AI response
-        ai_reply = ai_respond_sync(message, convo_id)
-
-        # Log the AI's response
-        ai_timestamp = log_message(convo_id, username, ai_reply, "ai")
-
-        # Invalidate message cache again after AI response
-        cache_key = f"messages:{convo_id}:*"
-        keys = redis_client.keys(cache_key)
-        if keys:
-            redis_client.delete(*keys)
-            logger.info(f"Invalidated message cache for convo_id {convo_id} after AI response")
-
-        # Emit the AI's response to the room
-        emit(
-            "new_message",
-            {
-                "convo_id": convo_id,
-                "message": ai_reply,
-                "sender": "ai",
-                "timestamp": ai_timestamp,
-                "username": username
-            },
-            room=room
-        )
-
-        # If the channel is WhatsApp, send the AI's response to the user
-        if channel == "whatsapp":
-            chat_id = f"whatsapp:{username}"
-            send_whatsapp_message(chat_id, ai_reply)
-
-        logger.info(f"Finished handle_user_message in {time.time() - start_time:.2f} seconds")
+        message_data = {
+            'convo_id': convo_id,
+            'message': message_body,
+            'sender': 'agent',
+            'username': username,
+            'timestamp': timestamp,
+            'chat_id': chat_id,
+            'channel': channel
+        }
+        
+        emit('new_message', message_data, to=room)
+        logger.info(f"✅ Emitted 'new_message' (agent) to Socket.IO room: {room}")
+        
+        # If the channel is WhatsApp, also send the message via Twilio using Celery task
+        if channel == 'whatsapp':
+            logger.info(f"Channel is WhatsApp for convo_id {convo_id}. Dispatching send_whatsapp_message_task.")
+            tasks.send_whatsapp_message_task.delay(
+                to_number=chat_id,
+                message=message_body,
+                convo_id=convo_id,
+                username=username,
+                chat_id=chat_id
+            )
+            logger.info(f"✅ Dispatched send_whatsapp_message_task for convo_id {convo_id} to chat_id {chat_id}")
+        
+        processing_time = (time.time() - start_time) * 1000
+        logger.info(f"'agent_message' for convo_id {convo_id} processed in {processing_time:.2f}ms.")
+        
     except Exception as e:
-        logger.error(f"❌ Error in handle_user_message: {str(e)}", exc_info=True)
-        emit("error", {"message": "Failed to process message"})
+        error_msg = f"Error processing 'agent_message': {str(e)}"
+        logger.error(f"❌ {error_msg}", exc_info=True)
+        emit('error', {'message': f"Server error: {str(e)}"}, to=sid)
 
-# Run the application
-if __name__ == "__main__":
-    logger.info("Starting Flask-SocketIO server")
-    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
+# Middleware for Flask route logging
+@app.before_requestask route logging
+def log_request_info():
+    g.start_time = time.time() # Store start time in g
+    logger.debug(f"Request: {request.method} {request.url} from {request.remote_addr}")
+    logger.debug(f"Headers: {request.headers}")equest.url} from {request.remote_addr}")
+    if request.data:eaders: {request.headers}")
+        logger.debug(f"Body: {request.get_data(as_text=True)}")
+        logger.debug(f"Body: {request.get_data(as_text=True)}")
+@app.after_request
+def log_response_info(response):
+    processing_time = (time.time() - g.start_time) * 1000 # Calculate processing time in ms
+    logger.info(ime = (time.time() - g.start_time) * 1000 # Calculate processing time in ms
+        f"Response: {request.method} {request.url} - Status: {response.status_code} - Size: {response.content_length} bytes - Time: {processing_time:.2f}ms"
+    )   f"Response: {request.method} {request.url} - Status: {response.status_code} - Size: {response.content_length} bytes - Time: {processing_time:.2f}ms"
+    # Consider logging response data for errors or specific debug needs, be cautious with sensitive data
+    # if response.status_code >= 400:for errors or specific debug needs, be cautious with sensitive data
+    #     logger.error(f"Response Data for Error: {response.get_data(as_text=True)}")
+    return responseror(f"Response Data for Error: {response.get_data(as_text=True)}")
+    return response
+@app.route('/live-messages')
+@login_required
+def live_messages():
+    """Serve the live messages page for a specific conversation."""
+    convo_id = request.args.get('id')
+    if not convo_id:
+        logger.warning(f"User '{current_user.username}' attempted to access live messages without conversation ID")
+        return redirect('/dashboard')
+    return render_template('live_messages.html', convo_id=convo_id)    logger.info(f"Starting Flask-SocketIO server on host 0.0.0.0, port {os.getenv('PORT', 5000)}")if __name__ == "__main__":    return render_template('live-messages.html', convo_id=convo_id)    logger.info(f"User '{current_user.username}' accessing live messages for conversation ID {convo_id}")            return redirect('/dashboard')        logger.warning(f"User '{current_user.username}' attempted to access live messages without conversation ID")    if not convo_id:    convo_id = request.args.get('id')    """Serve the live messages page for a specific conversation."""def live_messages():    # Pass the app logger to SocketIO if not done during initialization{os.getenv('PORT', 5000)}")
+    # socketio.init_app(app, logger=logger, engineio_logger=logger) # Alternative way
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False, use_reloader=False)
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False, use_reloader=False)
