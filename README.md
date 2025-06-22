@@ -146,3 +146,139 @@ You can exercise the full stack without valid third-party keys:
 ## 13  Environment Files
 `.env.example` (already in repo) lists every variable used in production.  
 Create a local `.env` in the project root; it is auto-loaded via `python-dotenv`.
+
+# Hotel Chatbot – Deployment & Launch Guide
+
+## Overview
+
+This guide provides step-by-step instructions to deploy, launch, and verify the Hotel Chatbot application. It includes environment setup, launch commands, and troubleshooting tips.
+
+---
+
+## 1. Prerequisites
+
+- Python 3.9+ (recommended: use the provided `env/` virtual environment)
+- Redis server running and accessible
+- OpenAI API key (set as an environment variable)
+- Render.com account (for cloud deployment)
+- Git for version control
+
+---
+
+## 2. Local Setup
+
+### a. Clone the Repository
+
+```bash
+git clone <your-repo-url>
+cd hotelchat-1
+```
+
+### b. Activate the Virtual Environment
+
+```bash
+source env/bin/activate
+```
+
+### c. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 3. Environment Variables
+
+Set the following environment variables (you can use a `.env` file or export them in your shell):
+
+```bash
+export OPENAI_API_KEY="your-openai-api-key"
+export REDIS_URL="redis://localhost:6379/0"
+export OPENAI_CONCURRENCY=5
+```
+
+---
+
+## 4. Launch Script (Local Development)
+
+To run the server locally with Gunicorn and Gevent:
+
+```bash
+gunicorn -k gevent -w 4 chat_server:app --config gunicorn.conf.py
+```
+
+Or use the following launch script (`launch.sh`):
+
+```bash
+#!/bin/bash
+source env/bin/activate
+export OPENAI_API_KEY="your-openai-api-key"
+export REDIS_URL="redis://localhost:6379/0"
+export OPENAI_CONCURRENCY=5
+gunicorn -k gevent -w 4 chat_server:app --config gunicorn.conf.py
+```
+
+Make it executable:
+
+```bash
+chmod +x launch.sh
+```
+
+Then run:
+
+```bash
+./launch.sh
+```
+
+---
+
+## 5. Deployment to Render.com
+
+### a. Prepare for Deployment
+
+- Ensure all changes are committed to your git repository.
+- Update `render.yaml` as follows:
+
+```yaml
+startCommand: gunicorn -k gevent -w 4 chat_server:app --config gunicorn.conf.py
+```
+
+- Remove any `eventlet` dependency from `requirements.txt`.
+
+### b. Deploy
+
+1. Push your changes to your remote repository.
+2. Log in to Render.com and create a new Web Service.
+3. Connect your repository.
+4. Set the build and start commands as above.
+5. Add the required environment variables in the Render dashboard.
+6. Deploy the service.
+
+---
+
+## 6. Verification
+
+After deployment:
+
+- Use the `verification_checklist.md` to test all chatbot features.
+- Check logs for errors via the Render dashboard or local terminal.
+
+---
+
+## 7. Troubleshooting
+
+- **Import errors:** Ensure all imports are correct and not duplicated.
+- **Function errors:** Update all references to removed/renamed functions.
+- **OpenAI/Redis/DB errors:** Verify credentials, service status, and network access.
+- **Logs:** Check `chat_server.log` and Render logs for details.
+
+---
+
+## 8. Additional Notes
+
+- For updates, repeat the deployment steps.
+- For local development, use the provided launch script.
+- For production, always use Gunicorn with Gevent as shown.
+
+---

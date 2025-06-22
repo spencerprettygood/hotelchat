@@ -12,6 +12,7 @@ from twilio.rest import Client
 from langdetect import detect, LangDetectException
 from openai.types.error import RateLimitError, APIError, AuthenticationError
 from openai.types.timeout_error import APITimeoutError
+import socketio
 
 # Configure logging
 logger = logging.getLogger("chat_server")
@@ -48,6 +49,10 @@ redis_client = redis.Redis.from_url(
     decode_responses=True,
     max_connections=10
 )
+
+# Create a SocketIO client for Celery to emit messages
+# This client only writes to the message queue and doesn't run a server.
+sio = socketio.KombuManager(BROKER_URL, write_only=True)
 
 # Twilio client for WhatsApp
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -89,7 +94,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
     Process an incoming WhatsApp message.
     This task handles message processing, conversation management, and AI response generation.
     """
-    from chat_server import ai_respond_sync
+    from chat_server import get_ai_response
     
     start_time = time.time()
     logger.info(f"Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
@@ -173,7 +178,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
             logger.info(f"AI is enabled for conversation {convo_id}. Generating response...")
             
             # Call the AI response function from chat_server.py
-            ai_reply, detected_intent, handoff_triggered = ai_respond_sync(
+            ai_reply, detected_intent, handoff_triggered = get_ai_response(
                 convo_id=convo_id,
                 username=username,
                 conversation_history=conversation_history,
@@ -216,17 +221,22 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         
         # Emit to Socket.IO that a new message arrived (for dashboard)
         try:
-            from chat_server import socketio
-            room = f"conversation_{convo_id}"
-            socketio.emit('new_message', {
-                'convo_id': convo_id,
-                'message': message_body,
-                'sender': 'user',
-                'username': username,
-                'timestamp': user_timestamp,
-                'chat_id': chat_id,
-                'channel': 'whatsapp'
-            }, to=room)
+            # Emit to Socket.IO using the write-only KombuManager
+            try:
+                room = f"conversation_{convo_id}"
+                # Use the 'sio' object to emit the message
+                sio.emit('new_message', {
+                    'convo_id': convo_id,
+                    'message': message_body,
+                    'sender': 'user',
+                    'username': username,
+                    'timestamp': user_timestamp,
+                    'chat_id': chat_id,
+                    'channel': 'whatsapp'
+                }, to=room)
+                logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
+            except Exception as e:
+                logger.error(f"Failed to emit Socket.IO event: {str(e)}")
             logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
         except Exception as e:
             logger.error(f"Failed to emit Socket.IO event: {str(e)}")

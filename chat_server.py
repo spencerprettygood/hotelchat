@@ -23,12 +23,10 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
 import openai
-from openai import AsyncOpenAI, OpenAI
+from openai import OpenAI
 # Update error imports to match OpenAI v1.x package structure
 from openai.types.error import RateLimitError, APIError, AuthenticationError
 from openai.types.timeout_error import APITimeoutError
-import asyncio
-import redis.asyncio as redis
 import redis as sync_redis  # Add synchronous Redis client
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactoryotatingFileHandler
@@ -189,7 +187,10 @@ if not OPENAI_API_KEY:tenv("OPENAI_API_KEY")
     raise ValueError("OPENAI_API_KEY not set")
 # Initialize OpenAI client with a timeout
 logger.info("Initializing OpenAI client...")
-openai_client = AsyncOpenAI(enAI client...")
+openai_client = OpenAI(
+    api_key=OPENAI_API_KEY,
+    timeout=30.0
+)
     api_key=OPENAI_API_KEY,(
     timeout=30.0AI_API_KEY,
 )   timeout=30.0
@@ -197,106 +198,90 @@ logger.info("OpenAI client initialized.")
 logger.info("OpenAI client initialized.")
 # Semaphore for controlling concurrent OpenAI API calls
 OPENAI_CONCURRENCY = int(os.getenv("OPENAI_CONCURRENCY", "5"))
-openai_semaphore = asyncio.Semaphore(OPENAI_CONCURRENCY) "5"))
+logger.info(f"OpenAI concurrency limit: {OPENAI_CONCURRENCY}") "5"))
 logger.info(f"OpenAI concurrency semaphore initialized with limit: {OPENAI_CONCURRENCY}")
 logger.info(f"OpenAI concurrency semaphore initialized with limit: {OPENAI_CONCURRENCY}")
-# Define ai_respond and ai_respond_sync earlier, before SocketIO handlers that might use them
-async def ai_respond(convo_id, username, conversation_history, user_message, chat_id, channel, language="en"):
-    start_time_ai = time.time()username, conversation_history, user_message, chat_id, channel, language="en"):
-    logger.info(f"AI RESPOND (async) initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
-    logger.info(f"AI RESPOND (async) initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
-    # Ensure conversation_history is a list of dicts
-    if not isinstance(conversation_history, list) or not all(isinstance(msg, dict) for msg in conversation_history):
-        logger.warning(f"Invalid conversation_history format for convo_id {convo_id}. Resetting to current message only.")
-        conversation_history = [{"role": "user", "content": user_message}]{convo_id}. Resetting to current message only.")
-    elif not conversation_history: # Ensure it's not empty: user_message}]
-        conversation_history = [{"role": "user", "content": user_message}]
-        conversation_history = [{"role": "user", "content": user_message}]
+# Define the AI response function
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError))
+)
+def get_ai_response(convo_id, username, conversation_history, user_message, chat_id, channel, language="en"):
+    """
+    Generates an AI response using the synchronous OpenAI client.
+    This version is compatible with gevent and Celery.
+    """
+    start_time_ai = time.time()
+    logger.info(f"AI_RESPOND initiated for convo_id: {convo_id}, user: {username}. Message: '{user_message[:50]}...'")
+
+    # Ensure history is a list of dicts, and add the latest user message
+    if not isinstance(conversation_history, list):
+        conversation_history = []
+    if not conversation_history or conversation_history[-1].get("content") != user_message:
+        conversation_history.append({"role": "user", "content": user_message})
+    
     # Add the current user message to the history if it's not already the last message
     if not conversation_history or conversation_history[-1].get("content") != user_message or conversation_history[-1].get("role") != "user":
-        conversation_history.append({"role": "user", "content": user_message})user_message or conversation_history[-1].get("role") != "user":
         conversation_history.append({"role": "user", "content": user_message})
+    
     # Limit history length to avoid excessive token usage (e.g., last 10 messages)
-    MAX_HISTORY_LEN = 10th to avoid excessive token usage (e.g., last 10 messages)
+    MAX_HISTORY_LEN = 10
     if len(conversation_history) > MAX_HISTORY_LEN:
         conversation_history = conversation_history[-MAX_HISTORY_LEN:]
         logger.debug(f"Trimmed conversation history to last {MAX_HISTORY_LEN} messages for convo_id {convo_id}")
-        logger.debug(f"Trimmed conversation history to last {MAX_HISTORY_LEN} messages for convo_id {convo_id}")
-    system_prompt = f"You are a helpful assistant for Amapola Resort. Current language for response: {language}. Training document: {TRAINING_DOCUMENT[:200]}..." # Truncate for logging
+    
     system_prompt = f"You are a helpful assistant for Amapola Resort. Current language for response: {language}. Training document: {TRAINING_DOCUMENT[:200]}..." # Truncate for logging
     messages_for_openai = [
         {"role": "system", "content": system_prompt}
-    ] + conversation_historycontent": system_prompt}
     ] + conversation_history
+    
     ai_reply = None
     detected_intent = None # Placeholder for intent detection
     handoff_triggered = False # Placeholder for handoff logic
-    handoff_triggered = False # Placeholder for handoff logic
+    
     request_start_time = time.time()
     logger.info(f"[OpenAI Request] Convo ID: {convo_id} - Model: gpt-4o-mini - User Message: '{user_message[:100]}...'") # Log request details
-    logger.debug(f"[OpenAI Request Details] Convo ID: {convo_id} - Full History: {conversation_history}")ge[:100]}...'") # Log request details
     logger.debug(f"[OpenAI Request Details] Convo ID: {convo_id} - Full History: {conversation_history}")
+    
     try:
         logger.info(f"Calling OpenAI API for convo_id {convo_id}. Model: gpt-4o-mini. History length: {len(messages_for_openai)}")
-        # Call OpenAI API asynchronously with rate limiting (semaphore is defined globally if needed, or remove if not used)ai)}")
-        async with openai_semaphore: # Assuming openai_semaphore is defined elsewhere if used needed, or remove if not used)
-            response = await openai_client.chat.completions.create( defined elsewhere if used
-                model="gpt-4o-mini", # Using the specified modelte(
-                messages=messages_for_openai,the specified model
-                max_tokens=300, # Max tokens for the response
-                temperature=0.7 # Max tokens for the response
-            )   temperature=0.7
+        
+        # Call OpenAI API synchronously
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini", # Using the specified model
+            messages=messages_for_openai,
+            max_tokens=300, # Max tokens for the response
+            temperature=0.7
+        )
+        
         ai_reply = response.choices[0].message.content.strip()
-        usage = response.usageoices[0].message.content.strip()
+        usage = response.usage
         processing_time = (time.time() - request_start_time) * 1000
-        logger.info(ime = (time.time() - request_start_time) * 1000
-            f"[OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms"
-        )   f"[OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms"
+        logger.info(
+            f"[OpenAI Response] Convo ID: {convo_id} - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens} - Reply: '{ai_reply[:50]}...'"
+        )
         logger.debug(f"[OpenAI Response Details] Convo ID: {convo_id} - Full Reply: {ai_reply} - Full Response Object: {response.model_dump_json(indent=2)}")
-        logger.debug(f"[OpenAI Response Details] Convo ID: {convo_id} - Full Reply: {ai_reply} - Full Response Object: {response.model_dump_json(indent=2)}")
+        
         # Basic intent detection (example - can be expanded)
         if "book a room" in user_message.lower() or "reservation" in user_message.lower():
-            detected_intent = "booking_inquiry") or "reservation" in user_message.lower():
+            detected_intent = "booking_inquiry"
         if "human" in user_message.lower() or "agent" in user_message.lower() or "speak to someone" in user_message.lower():
-            handoff_triggered = Trueower() or "agent" in user_message.lower() or "speak to someone" in user_message.lower():
+            handoff_triggered = True
             logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
-            logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
-    except RateLimitError as e:
-        logger.error(f"❌ OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "I'm currently experiencing high demand. Please try again in a moment."o=True)
-    except APITimeoutError as e:y experiencing high demand. Please try again in a moment."
-        logger.error(f"❌ OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "I'm having trouble connecting to my brain right now. Please try again shortly."
-    except APIError as e: # General API errorting to my brain right now. Please try again shortly."
-        logger.error(f"❌ OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "Sorry, I encountered an issue while processing your request."info=True)
-    except AuthenticationError as e:ered an issue while processing your request."
-        logger.error(f"❌ OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
-        ai_reply = "There's an issue with my configuration. Please notify an administrator." API Key)", exc_info=True)
-    except Exception as e:s an issue with my configuration. Please notify an administrator."
-        logger.error(f"❌ Unexpected error in ai_respond for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "An unexpected error occurred. I've logged the issue."vo_id}: {str(e)}", exc_info=True)
-        ai_reply = "An unexpected error occurred. I've logged the issue."
-    processing_time = time.time() - start_time_ai
-    logger.info(f"AI RESPOND for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
-    return ai_reply, detected_intent, handoff_triggeredmpleted in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
+            
+    except (RateLimitError, APITimeoutError, APIError, AuthenticationError) as e:
+        logger.error(f"❌ OpenAI API Error for convo_id {convo_id}: {e}", exc_info=True)
+        # Return a user-friendly error and allow unpacking
+        return "I'm having some trouble connecting to my systems right now. Please give me a moment and try again.", None, False
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in get_ai_response for convo_id {convo_id}: {e}", exc_info=True)
+        # Return a user-friendly error and allow unpacking
+        return "An unexpected error occurred. I've logged the issue for review.", None, False
+    
+    # No need for this section as we're returning directly in the try/except blocks
     return ai_reply, detected_intent, handoff_triggered
 
-def ai_respond_sync(convo_id, username, conversation_history, user_message, chat_id, channel, language):
-    logger.info(f"ai_respond_sync called for convo_id: {convo_id}, user: {username}, lang: {language}"):
-    request_start_time = time.time()lled for convo_id: {convo_id}, user: {username}, lang: {language}")
-    try:est_start_time = time.time()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)p()
-        # Call the async versionoop)
-        result = loop.run_until_complete(ai_respond(convo_id, username, conversation_history, user_message, chat_id, channel, language))
-        loop.close()p.run_until_complete(ai_respond(convo_id, username, conversation_history, user_message, chat_id, channel, language))
-        logger.info(f"ai_respond_sync completed for convo_id: {convo_id}")
-        return result # This will be a tuple (ai_reply, detected_intent, handoff_triggered)
-    except Exception as e:is will be a tuple (ai_reply, detected_intent, handoff_triggered)
-        logger.error(f"Error in ai_respond_sync for convo_id {convo_id}: {e}", exc_info=True)
-        return None, None, False # Ensure it returns a 3-tuple on error to match expected unpacking
-        return None, None, False # Ensure it returns a 3-tuple on error to match expected unpacking
 # Google Calendar setup with Service Account
 GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
 if not GOOGLE_SERVICE_ACCOUNT_KEY:tenv("GOOGLE_SERVICE_ACCOUNT_KEY")

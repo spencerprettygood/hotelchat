@@ -1,0 +1,84 @@
+services:
+  # Web service - Flask application with SocketIO
+  - type: web
+    name: hotelchat-web
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn chat_server:app --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker --config gunicorn.conf.py
+    plan: standard
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.13
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WEB_CONCURRENCY
+        value: 4
+      - key: OPENAI_CONCURRENCY
+        value: 5
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hotelchat-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: hotelchat-redis
+          type: redis
+          property: connectionString
+      - key: SECRET_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_KEY
+        sync: false
+
+  # Celery worker
+  - type: worker
+    name: hotelchat-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A tasks worker -l INFO -Q default,whatsapp --concurrency=3
+    plan: standard
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.13
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hotelchat-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: hotelchat-redis
+          type: redis
+          property: connectionString
+      - key: SECRET_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_KEY
+        sync: false
+
+# Database and Redis
+databases:
+  - name: hotelchat-db
+    plan: standard
+    
+services:
+  - type: redis
+    name: hotelchat-redis
+    plan: standard
+    ipAllowList: []
