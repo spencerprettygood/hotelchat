@@ -133,10 +133,12 @@ except ImportError:
 
 # --- REDIS CLIENT VALIDATION ---
 try:
-    # Ensure redis_client is defined
-    global redis_client
-    redis_client.ping()
-    logger.info("✅ Redis connection validated.")
+    if redis_client is not None:
+        redis_client.ping()
+        logger.info("✅ Redis connection validated.")
+    else:
+        logger.error("❌ Redis client is not initialized.")
+        raise RuntimeError("Redis client is not initialized.")
 except Exception as e:
     logger.error(f"❌ Redis connection failed: {e}")
     raise
