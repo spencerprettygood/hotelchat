@@ -116,6 +116,7 @@ try:
     openai_client = OpenAI(
         api_key=os.getenv("OPENAI_API_KEY"),
         timeout=30.0
+        # proxies argument removed; use HTTP_PROXY/HTTPS_PROXY env vars if needed
     )
     logger.info("OpenAI client (v1.x) initialized.")
 except ImportError:
