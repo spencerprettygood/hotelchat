@@ -4,7 +4,7 @@ Flask-SocketIO==5.3.6
 Flask-Cors==5.0.0
 Flask-Login==0.6.3
 gunicorn==21.2.0
-gevent==23.9.1
+gevent==22.10.2
 
 # Database
 psycopg2-binary==2.9.9
