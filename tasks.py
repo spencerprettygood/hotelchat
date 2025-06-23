@@ -10,8 +10,7 @@ import time
 import redis
 from twilio.rest import Client
 from langdetect import detect, LangDetectException
-from openai.types.error import RateLimitError, APIError, AuthenticationError
-from openai.types.timeout_error import APITimeoutError
+from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
 import socketio
 
 # Configure logging
