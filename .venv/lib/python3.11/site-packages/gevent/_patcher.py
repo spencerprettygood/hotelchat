@@ -12,7 +12,7 @@ from __future__ import absolute_import, print_function
 import importlib
 import sys
 
-
+from gevent._compat import PY3
 from gevent._compat import iteritems
 from gevent._compat import imp_acquire_lock
 from gevent._compat import imp_release_lock
@@ -25,20 +25,23 @@ MAPPING = {
     'gevent.local': '_threading_local',
     'gevent.socket': 'socket',
     'gevent.select': 'select',
-    'gevent.selectors': 'selectors',
+    'gevent.selectors': 'selectors' if PY3 else 'selectors2',
     'gevent.ssl': 'ssl',
-    'gevent.thread': '_thread',
+    'gevent.thread': '_thread' if PY3 else 'thread',
     'gevent.subprocess': 'subprocess',
     'gevent.os': 'os',
     'gevent.threading': 'threading',
-    'gevent.builtins': 'builtins',
+    'gevent.builtins': 'builtins' if PY3 else '__builtin__',
     'gevent.signal': 'signal',
     'gevent.time': 'time',
-    'gevent.queue': 'queue',
+    'gevent.queue': 'queue' if PY3 else 'Queue',
     'gevent.contextvars': 'contextvars',
 }
 
-OPTIONAL_STDLIB_MODULES = frozenset()
+OPTIONAL_STDLIB_MODULES = frozenset() if PY3 else frozenset([
+    'selectors2',
+])
+
 _PATCH_PREFIX = '__g_patched_module_'
 
 def _collect_stdlib_gevent_modules():

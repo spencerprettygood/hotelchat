@@ -108,11 +108,6 @@ class TestCoroutinePool(unittest.TestCase):
             sys.stderr = FakeFile()
             waiter = pool.spawn(crash)
             with gevent.Timeout(2):
-                # Without the timeout, we can get caught...doing something?
-                # If we call PyErr_WriteUnraisable at a certain point,
-                # we appear to switch back to the hub and do nothing,
-                # meaning we sit forever. The timeout at least keeps us from
-                # doing that and fails the test if we mess up error handling.
                 self.assertRaises(RuntimeError, waiter.get)
             # the pool should have something free at this point since the
             # waiter returned
@@ -131,13 +126,13 @@ class TestCoroutinePool(unittest.TestCase):
 
 
 def crash(*_args, **_kw):
-    raise RuntimeError("Raising an error from the crash() function")
+    raise RuntimeError("Whoa")
 
 
 class FakeFile(object):
 
     def write(self, *_args):
-        raise RuntimeError('Writing to the file failed')
+        raise RuntimeError('Whaaa')
 
 
 class PoolBasicTests(greentest.TestCase):

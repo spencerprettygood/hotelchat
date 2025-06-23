@@ -21,6 +21,9 @@ class Test(unittest.TestCase):
     # NOTE that we extend unittest.TestCase, not greentest.TestCase
     # Extending the later causes the wrong hub to get used.
 
+    assertRaisesRegex = getattr(unittest.TestCase, 'assertRaisesRegex',
+                                getattr(unittest.TestCase, 'assertRaisesRegexp'))
+
     BACKENDS_THAT_SUCCEED_WHEN_FD_CLOSED = (
         'kqueue',
         'epoll',

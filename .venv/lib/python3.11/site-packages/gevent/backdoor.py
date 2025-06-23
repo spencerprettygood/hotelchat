@@ -18,7 +18,8 @@ from gevent.greenlet import Greenlet
 from gevent.hub import getcurrent
 from gevent.server import StreamServer
 from gevent.pool import Pool
-
+from gevent._compat import PY36
+from gevent._compat import exc_clear
 
 __all__ = [
     'BackdoorServer',
@@ -173,13 +174,15 @@ class BackdoorServer(StreamServer):
         getcurrent().switch_in()
         try:
             console = InteractiveConsole(self._create_interactive_locals())
-            # Beginning in 3.6, the console likes to print "now exiting <class>"
-            # but probably our socket is already closed, so this just causes problems.
-            console.interact(banner=self.banner, exitmsg='') # pylint:disable=unexpected-keyword-arg
-
+            if PY36:
+                # Beginning in 3.6, the console likes to print "now exiting <class>"
+                # but probably our socket is already closed, so this just causes problems.
+                console.interact(banner=self.banner, exitmsg='') # pylint:disable=unexpected-keyword-arg
+            else:
+                console.interact(banner=self.banner)
         except SystemExit:
             # raised by quit(); obviously this cannot propagate.
-            pass
+            exc_clear() # Python 2
         finally:
             raw_file.close()
             conn.close()

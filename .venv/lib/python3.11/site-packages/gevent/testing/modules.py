@@ -82,7 +82,7 @@ def walk_modules(
         if modpath is None:
             modpath = 'gevent.'
     else:
-        if modpath is None: # pylint:disable=else-if-used
+        if modpath is None:
             modpath = ''
 
     for fn in sorted(os.listdir(basedir)):

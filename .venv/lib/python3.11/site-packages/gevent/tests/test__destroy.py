@@ -32,8 +32,7 @@ class TestDestroyHub(unittest.TestCase):
         hub.destroy(destroy_loop=True)
 
         # Create new hub and explicitly request creation of a new default loop.
-        # (using default=True, but that's no longer possible.)
-        hub = gevent.get_hub()
+        hub = gevent.get_hub(default=True)
         self.assertTrue(hub.loop.default)
 
         # `gevent.core.loop` objects as well as libev loop pointers must differ.

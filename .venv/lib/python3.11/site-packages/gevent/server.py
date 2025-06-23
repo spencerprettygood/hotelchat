@@ -4,6 +4,8 @@ from __future__ import print_function
 from __future__ import absolute_import
 from __future__ import division
 
+from contextlib import closing
+
 import sys
 
 from _socket import error as SocketError
@@ -15,6 +17,7 @@ from _socket import SOCK_DGRAM
 from gevent.baseserver import BaseServer
 from gevent.socket import EWOULDBLOCK
 from gevent.socket import socket as GeventSocket
+from gevent._compat import PYPY, PY3
 
 __all__ = ['StreamServer', 'DatagramServer']
 
@@ -26,9 +29,13 @@ else:
     DEFAULT_REUSE_ADDR = 1
 
 
-# sockets and SSL sockets are context managers on Python 3
-def _closing_socket(sock):
-    return sock
+if PY3:
+    # sockets and SSL sockets are context managers on Python 3
+    def _closing_socket(sock):
+        return sock
+else:
+    # but they are not guaranteed to be so on Python 2
+    _closing_socket = closing
 
 
 class StreamServer(BaseServer):
@@ -184,21 +191,38 @@ class StreamServer(BaseServer):
             backlog = cls.backlog
         return _tcp_listener(address, backlog=backlog, reuse_addr=cls.reuse_addr, family=family)
 
-    def do_read(self):
-        sock = self.socket
-        try:
-            fd, address = sock._accept()
-        except BlockingIOError: # python 2: pylint: disable=undefined-variable
-            if not sock.timeout:
-                return
-            raise
+    if PY3:
+        def do_read(self):
+            sock = self.socket
+            try:
+                fd, address = sock._accept()
+            except BlockingIOError: # python 2: pylint: disable=undefined-variable
+                if not sock.timeout:
+                    return
+                raise
 
-        sock = GeventSocket(sock.family, sock.type, sock.proto, fileno=fd)
-        # XXX Python issue #7995? "if no default timeout is set
-        # and the listening socket had a (non-zero) timeout, force
-        # the new socket in blocking mode to override
-        # platform-specific socket flags inheritance."
-        return sock, address
+            sock = GeventSocket(sock.family, sock.type, sock.proto, fileno=fd)
+            # XXX Python issue #7995? "if no default timeout is set
+            # and the listening socket had a (non-zero) timeout, force
+            # the new socket in blocking mode to override
+            # platform-specific socket flags inheritance."
+            return sock, address
+
+    else:
+        def do_read(self):
+            try:
+                client_socket, address = self.socket.accept()
+            except SocketError as err:
+                if err.args[0] == EWOULDBLOCK:
+                    return
+                raise
+
+            sockobj = GeventSocket(_sock=client_socket)
+            if PYPY:
+                # Undo the ref-count bump that the constructor
+                # did. We gave it ownership.
+                client_socket._drop()
+            return sockobj, address
 
     def do_close(self, sock, *args):
         # pylint:disable=arguments-differ

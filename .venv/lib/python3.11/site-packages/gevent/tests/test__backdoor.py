@@ -67,14 +67,14 @@ class Test(greentest.TestCase):
 
     def _create_connection(self, server):
         conn = SocketWithBanner()
-        conn.connect((DEFAULT_CONNECT, server.server_port)) # pylint:disable=not-callable
+        conn.connect((DEFAULT_CONNECT, server.server_port))
         try:
             banner = self._wait_for_prompt(conn)
         except:
             conn.close()
             raise
-
-        conn.banner = banner
+        else:
+            conn.banner = banner
         return conn
 
     def _wait_for_prompt(self, conn):

@@ -18,7 +18,6 @@ class TestPickle(greentest.TestCase):
         dumped = pickle.dumps(r, protocol)
         loaded = pickle.loads(dumped)
         self.assertEqual(r, loaded)
-        # pylint:disable=no-member
         self.assertEqual(r.family, loaded.family)
 
 
