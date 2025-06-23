@@ -24,9 +24,8 @@ from googleapiclient.errors import HttpError
 from cachetools import TTLCache
 import openai
 from openai import OpenAI
-# Update error imports to match OpenAI v1.x package structure
-from openai.types.error import RateLimitError, APIError, AuthenticationError
-from openai.types.timeout_error import APITimeoutError
+# Import error types from OpenAI v1.x package
+from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
 import redis as sync_redis  # Add synchronous Redis client
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
