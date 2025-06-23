@@ -1,4 +1,4 @@
-#!/Users/spencerpro/hotelchat-1/.venv/bin/python3.13
+#!/Users/spencerpro/hotelchat-1/.venv/bin/python3.11
 # -*- coding: utf-8 -*-
 import re
 import sys

@@ -1,1 +1,20 @@
 
+2025-06-22 23:30:34,695 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:30:34,695 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:30:34,695 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:30:34,696 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:30:34,696 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:30:34,696 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:30:34,697 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:30:34,697 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:38:30,575 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:38:30,575 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:38:30,575 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:38:30,575 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: INFO, File: chat_server.log
+2025-06-22 23:38:30,576 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:38:30,576 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:38:30,577 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:38:30,577 - chat_server - ERROR - chat_server:68 - <module> - ❌ DATABASE_URL environment variable is not set
+2025-06-22 23:38:55,160 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-22 23:38:55,165 - chat_server - INFO - chat_server:144 - <module> - Using DATABASE_URL: postgresql://hoteladmin:lqvCwuuGMXJcSYjticnMw0w6VbQlDVRo@dpg-d1cbr9be5dus73fdcueg-a/hotelchat
+2025-06-22 23:38:55,165 - chat_server - INFO - chat_server:152 - <module> - Added sslmode=require to DATABASE_URL: postgresql://hoteladmin:lqvCwuuGMXJcSYjticnMw0w6VbQlDVRo@dpg-d1cbr9be5dus73fdcueg-a/hotelchat?sslmode=require

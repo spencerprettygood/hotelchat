@@ -3,7 +3,14 @@ import gevent
 from gevent import monkey
 monkey.patch_all()
 
-# Now proceed with other imports
+# --- ALL IMPORTS AT THE TOP ---
+import os
+import sys
+import logging
+import json
+import time
+import re
+from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, request, jsonify, session, redirect, Response, g
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -11,113 +18,159 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 import psycopg2
 from psycopg2.extras import DictCursor
 from psycopg2.pool import SimpleConnectionPool
-import os
 import requests
-import json
-from datetime import datetime, timezone, timedelta
-import time
-import logging
-import re
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
 import openai
-from openai import OpenAI
-# Import error types from OpenAI v1.x package
-from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
-import redis as sync_redis  # Add synchronous Redis client
+from openai import OpenAI, RateLimitError, APIError, AuthenticationError, APITimeoutError
+import redis as sync_redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 DetectorFactory.seed = 0
 
-# Enhanced Logging Configuration
+# --- ENVIRONMENT VARIABLES & GLOBALS ---
+# Validate and load all required environment variables at the very top
+REQUIRED_ENV_VARS = [
+    "DATABASE_URL",
+    "SECRET_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_SERVICE_ACCOUNT_KEY",
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_WHATSAPP_NUMBER"
+]
+missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+if missing_vars:
+    print(f"❌ Missing required environment variables: {', '.join(missing_vars)}", file=sys.stderr)
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# --- LOGGER SETUP (moved up to ensure all errors are logged) ---
 LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "chat_server.log")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-# Create a logger instance. Using "chat_server" to potentially share with tasks.py logger.
 logger = logging.getLogger("chat_server")
 logger.setLevel(LOG_LEVEL)
-logger.propagate = False # Prevent double logging if root logger is also configured
-
-# Clear existing handlers to avoid duplicate logs if this script is reloaded
+logger.propagate = False
 if logger.hasHandlers():
     logger.handlers.clear()
-
-# Formatter
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s'
 )
-
-# Console Handler
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-
-# File Handler (Rotating)
-file_handler = ConcurrentRotatingFileHandler(LOG_FILE_PATH, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8') # 10MB per file, 5 backups
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
+try:
+    from concurrent_log_handler import ConcurrentRotatingFileHandler
+    file_handler = ConcurrentRotatingFileHandler(LOG_FILE_PATH, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+except ImportError:
+    logger.warning("concurrent_log_handler not installed; file logging disabled.")
 logger.info(f"Logging initialized. Level: {LOG_LEVEL}, File: {LOG_FILE_PATH}")
 
-# Validate critical environment variables
-database_url = os.getenv("DATABASE_URL")
-if not database_url:
-    logger.error("❌ DATABASE_URL environment variable is not set")
-    raise ValueError("DATABASE_URL environment variable is not set")
+# --- REDIS CLIENT ---
+try:
+    redis_client = redis.Redis.from_url(REDIS_URL)
+    redis_client.ping()
+    logger.info("Redis client initialized and connection verified.")
+except Exception as e:
+    logger.error(f"Redis connection failed: {e}")
+    redis_client = None
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    logger.error("⚠️ SECRET_KEY not set in environment variables")
-    raise ValueError("SECRET_KEY not set")
+# --- DATABASE CONNECTION POOL ---
+database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+db_pool = None
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, database_url)
+    test_conn = db_pool.getconn()
+    db_pool.putconn(test_conn)
+    logger.info("PostgreSQL connection pool initialized and connection verified.")
+except Exception as e:
+    logger.error(f"PostgreSQL connection failed: {e}")
+    db_pool = None
 
-SERVER_URL = os.getenv("SERVER_URL", "https://hotel-chatbot-1qj5.onrender.com")
+# --- CELERY TASKS ---
+try:
+    from tasks import process_whatsapp_message, send_whatsapp_message_task
+except Exception as e:
+    logger.error(f"Celery tasks import failed: {e}")
+    process_whatsapp_message = None
+    send_whatsapp_message_task = None
 
-# Redis clients
-# Synchronous Redis client for Flask routes
-redis_client = sync_redis.Redis.from_url(
-    os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
-    decode_responses=True,
-    max_connections=20
-)
+# --- OPENAI CLIENT INITIALIZATION (v1.x COMPATIBLE) ---
+try:
+    # Try v1.x import and usage
+    from openai import OpenAI, RateLimitError, APIError, AuthenticationError, APITimeoutError
+    openai_client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        timeout=30.0
+    )
+    logger.info("OpenAI client (v1.x) initialized.")
+except ImportError:
+    # Fallback for v0.x
+    import openai
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    openai_client = openai
+    # Define error types for v0.x
+    class RateLimitError(Exception): pass
+    class APIError(Exception): pass
+    class AuthenticationError(Exception): pass
+    class APITimeoutError(Exception): pass
+    logger.info("OpenAI client (v0.x) initialized.")
 
-# Simplified Redis sync functions
-def redis_get_sync(key):
-    request_start_time = time.time()
-    logger.debug(f"[Redis GET] Key: {key}")
+# --- REDIS CLIENT VALIDATION ---
+try:
+    # Ensure redis_client is defined
+    global redis_client
+    redis_client.ping()
+    logger.info("✅ Redis connection validated.")
+except Exception as e:
+    logger.error(f"❌ Redis connection failed: {e}")
+    raise
+
+# --- DATABASE CONNECTION POOL VALIDATION ---
+if db_pool is not None:
     try:
-        value = redis_client.get(key)
-        processing_time = (time.time() - request_start_time) * 1000
-        if value is not None:
-            logger.debug(f"[Redis HIT] Key: {key} - Time: {processing_time:.2f}ms")
-        else:
-            logger.debug(f"[Redis MISS] Key: {key} - Time: {processing_time:.2f}ms")
-        return value
-    except sync_redis.exceptions.RedisError as e: # Catch specific Redis errors
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.error(f"[Redis ERROR] GET Key: {key} - Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
-        return None
+        test_conn = db_pool.getconn()
+        with test_conn.cursor() as c:
+            c.execute("SELECT 1")
+        db_pool.putconn(test_conn)
+        logger.info("✅ Database connection pool validated.")
     except Exception as e:
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.error(f"[Redis ERROR] GET Key: {key} - Unexpected Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
-        return None
+        logger.error(f"❌ Database connection pool failed: {e}")
+        raise
+else:
+    logger.error("❌ db_pool is not initialized.")
+    raise RuntimeError("db_pool is not initialized.")
 
-def redis_setex_sync(key, ttl, value):
-    request_start_time = time.time()
-    value_snippet = str(value)[:100] + ("..." if len(str(value)) > 100 else "")
-    logger.debug(f"[Redis SETEX] Key: {key}, TTL: {ttl}, Value Snippet: '{value_snippet}'")
-    try:
-        redis_client.setex(key, ttl, value)
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.debug(f"[Redis SETEX Success] Key: {key} - Time: {processing_time:.2f}ms")
-    except sync_redis.exceptions.RedisError as e:
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.error(f"[Redis ERROR] SETEX Key: {key} - Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
-    except Exception as e:
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.error(f"[Redis ERROR] SETEX Key: {key} - Unexpected Error: {e} - Time: {processing_time:.2f}ms", exc_info=True)
+# --- GOOGLE SERVICE ACCOUNT KEY VALIDATION ---
+try:
+    # Check GOOGLE_SERVICE_ACCOUNT_KEY is not None before json.loads
+    google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+    if not google_key:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
+    service_account_info = json.loads(google_key)
+    SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info, scopes=SCOPES
+    )
+    service = build('calendar', 'v3', credentials=credentials)
+    logger.info("✅ Google service account credentials loaded.")
+except Exception as e:
+    logger.error(f"❌ Google service account credentials failed: {e}")
+    raise
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
@@ -137,6 +190,61 @@ socketio = SocketIO(
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+
+# --- ENVIRONMENT VARIABLES ---
+SECRET_KEY = os.getenv("SECRET_KEY", "dev_secret_key")
+app.config["SECRET_KEY"] = SECRET_KEY
+
+# --- DEPENDENCY CHECKS ---
+# Ensure required packages are installed: redis, psycopg2
+try:
+    import redis
+except ImportError:
+    logger.error("Missing dependency: redis. Please install with 'pip install redis'.")
+    raise
+try:
+    import psycopg2
+    import psycopg2.pool
+except ImportError:
+    logger.error("Missing dependency: psycopg2. Please install with 'pip install psycopg2-binary'.")
+    raise
+
+# --- REDIS CLIENT ---
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    logger.error("REDIS_URL not set in environment variables")
+    raise ValueError("REDIS_URL not set")
+try:
+    redis_client = redis.Redis.from_url(REDIS_URL)
+    redis_client.ping()
+    logger.info("Redis client initialized and connection verified.")
+except Exception as e:
+    logger.error(f"Redis connection failed: {e}")
+    redis_client = None
+
+# --- DATABASE CONNECTION POOL ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    logger.error("DATABASE_URL not set in environment variables")
+    raise ValueError("DATABASE_URL not set")
+database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, database_url)
+    test_conn = db_pool.getconn()
+    db_pool.putconn(test_conn)
+    logger.info("PostgreSQL connection pool initialized and connection verified.")
+except Exception as e:
+    logger.error(f"PostgreSQL connection failed: {e}")
+    db_pool = None
+
+# --- CELERY TASKS ---
+# Import Celery tasks at the top to avoid shadowing and ensure proper initialization
+try:
+    from tasks import process_whatsapp_message, send_whatsapp_message_task
+except Exception as e:
+    logger.error(f"Celery tasks import failed: {e}")
+    process_whatsapp_message = None
+    send_whatsapp_message_task = None
 
 # Initialize connection pool
 try:
@@ -176,16 +284,28 @@ if not OPENAI_API_KEY:
     logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
     raise ValueError("OPENAI_API_KEY not set")
 
-# Initialize OpenAI client with a timeout
+# OpenAI client initialization (v1.x and v0.x compatibility)
 logger.info("Initializing OpenAI client...")
-openai_client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    timeout=30.0
-)
-logger.info("OpenAI client initialized.")
+try:
+    # Try v1.x style
+    openai_client = OpenAI(
+        api_key=OPENAI_API_KEY,
+        timeout=30.0
+    )
+    # Test attribute to ensure v1.x
+    _ = openai_client.chat.completions
+    logger.info("OpenAI client (v1.x) initialized.")
+except AttributeError:
+    # Fallback to v0.x style
+    openai.api_key = OPENAI_API_KEY
+    openai_client = openai
+    logger.info("OpenAI client (v0.x) initialized.")
 
 # Semaphore for controlling concurrent OpenAI API calls
-OPENAI_CONCURRENCY = int(os.getenv("OPENAI_CONCURRENCY", "5"))
+try:
+    OPENAI_CONCURRENCY = int(os.getenv("OPENAI_CONCURRENCY", "5"))
+except Exception:
+    OPENAI_CONCURRENCY = 5
 logger.info(f"OpenAI concurrency limit: {OPENAI_CONCURRENCY}")
 
 # Define the AI response function
@@ -318,76 +438,9 @@ try:
     with open("qa_reference.txt", "r", encoding='utf-8') as file: # Added encoding
         TRAINING_DOCUMENT = file.read()
     logger.info("✅ Loaded Q&A reference document")
-except FileNotFoundError:
-    logger.warning("⚠️ qa_reference.txt not found, using default training document")
-    TRAINING_DOCUMENT = """
-    **Amapola Resort Chatbot Training Document**
-    You are a friendly and professional chatbot for Amapola Resort, a luxury beachfront hotel. Your role is to assist guests with inquiries, help with bookings, and provide information about the resort's services and amenities. Below is a set of common questions and answers to guide your responses. Always maintain conversation context, ask follow-up questions to clarify user intent, and provide helpful, concise answers. If a query is too complex or requires human assistance (e.g., specific booking modifications, complaints, or detailed itinerary planning), escalate to a human by saying: "I'm sorry, that's a bit complex for me to handle. Let me get a human to assist you."
-    
-    **Business Information**
-    - **Location**: Amapola Resort, 123 Ocean Drive, Sunny Beach, FL 33160
-    - **Check-In/Check-Out**: Check-in at 3:00 PM, Check-out at 11:00 AM
-    - **Room Types**:
-      - Standard Room: $150/night, 2 guests, 1 queen bed
-      - Deluxe Room: $250/night, 4 guests, 2 queen beds, ocean view
-      - Suite: $400/night, 4 guests, 1 king bed, living area, oceanfront balcony
-    - **Amenities**:
-      - Beachfront access, outdoor pool, spa, gym, on-site restaurant (Amapola Bistro), free Wi-Fi, parking ($20/day)
-    - **Activities**:
-      - Snorkeling ($50/person), kayak rentals ($30/hour), sunset cruises ($100/person)
-    - **Policies**:
-      - Cancellation: Free cancellation up to 48 hours before arrival
-      - Pets: Not allowed
-      - Children: Kids under 12 stay free with an adult
-    
-    **Common Q&A**
-    
-    Q: What are your room rates?
-    A: We offer several room types:
-    - Standard Room: $150/night for 2 guests
-    - Deluxe Room: $250/night for 4 guests, with an ocean view
-    - Suite: $400/night for 4 guests, with an oceanfront balcony
-    Would you like to book a room, or do you have questions about a specific room type?
-    
-    Q: How do I book a room?
-    A: I can help you start the booking process! Please let me know:
-    1. Your preferred dates (e.g., check-in and check-out dates)
-    2. The number of guests
-    3. Your preferred room type (Standard, Deluxe, or Suite)
-    For example, you can say: "I'd like a Deluxe Room for 2 guests from March 10 to March 15." Once I have this information, I'll check availability and guide you through the next steps. If you'd prefer to speak with a human to finalize your booking, let me know!
-    
-    Q: What is the check-in time?
-    A: Check-in at Amapola Resort is at 3:00 PM, and check-out is at 11:00 AM. If you need an early check-in or late check-out, I can check availability for you—just let me know your dates!
-    
-    Q: Do you have a pool?
-    A: Yes, we have a beautiful outdoor pool with beachfront views! It's open from 8:00 AM to 8:00 PM daily. We also have a spa and gym if you're interested in other amenities. Would you like to know more?
-    
-    Q: Can I bring my pet?
-    A: I'm sorry, but pets are not allowed at Amapola Resort. If you need recommendations for pet-friendly accommodations nearby, I can help you find some options!
-    
-    Q: What activities do you offer?
-    A: We have a variety of activities for our guests:
-    - Snorkeling: $50 per person
-    - Kayak rentals: $30 per hour
-    - Sunset cruises: $100 per person
-    Would you like to book an activity, or do you have questions about any of these?
-    
-    Q: What are the cancellation policies?
-    A: You can cancel your reservation for free up to 48 hours before your arrival. After that, you may be charged for the first night. If you need to modify or cancel a booking, I can get a human to assist you with the details.
-    
-    Q: Do you have a restaurant?
-    A: Yes, Amapola Bistro is our on-site restaurant, serving breakfast, lunch, and dinner with a focus on fresh seafood and local flavors. It's open from 7:00 AM to 10:00 PM. Would you like to make a reservation or see the menu?
-    
-    **Conversational Guidelines**
-    - Always greet new users with: "Thank you for contacting us."
-    - For follow-up messages, do not repeat the greeting. Instead, respond based on the context of the conversation.
-    - Ask clarifying questions if the user's intent is unclear (e.g., "Could you tell me your preferred dates for booking?").
-    - Use a friendly and professional tone, and keep responses concise (under 150 tokens, as set by max_tokens).
-    - If the user asks multiple questions in one message, address each question systematically.
-    - If the user provides partial information (e.g., "I want to book a room"), ask for missing details (e.g., dates, number of guests, room type).
-    - If a query is ambiguous, ask for clarification (e.g., "Did you mean you'd like to book a room, or are you asking about our rates?").
-    - Escalate to a human for complex requests, such as modifying an existing booking, handling complaints, or providing detailed recommendations.
-    """
+except Exception as e:
+    logger.warning(f"⚠️ qa_reference.txt not found or failed to load: {e}")
+    TRAINING_DOCUMENT = "Amapola Resort Chatbot Training Document... (default)"
 
 def get_db_connection():
     global db_pool
@@ -824,14 +877,14 @@ def send_message():
             'message': message,
             'sender': 'agent',
             'timestamp': timestamp
-        }, room=f"convo_{convo_id}")
+        }, to=f"convo_{convo_id}")  # Changed 'room' to 'to' for Flask-SocketIO compatibility
         
         logger.info(f"Agent message sent to conversation {convo_id} by {current_user.username}")
         
         # Forward message to WhatsApp if the conversation is from WhatsApp
         if conversation['channel'] == 'whatsapp' and conversation['chat_id']:
             try:
-                # Import here to avoid circular imports
+                # Ensure send_whatsapp_message_task is a Celery task
                 from tasks import send_whatsapp_message_task
                 send_whatsapp_message_task.delay(
                     conversation['chat_id'],
@@ -1142,12 +1195,10 @@ def health_check():
         with conn.cursor() as c:
             c.execute("SELECT 1")
         release_db_connection(conn)
-        
         # Check Redis connection
         redis_client.ping()
-        
         # Check OpenAI API key
-        if not OPENAI_API_KEY or OPENAI_API_KEY == "dummy":
+        if not os.getenv("OPENAI_API_KEY"):
             return jsonify({
                 "status": "warning",
                 "database": "ok",
@@ -1155,13 +1206,28 @@ def health_check():
                 "openai": "not configured",
                 "message": "OpenAI API key not configured"
             })
-        
+        # Check Google credentials
+        try:
+            # Check GOOGLE_SERVICE_ACCOUNT_KEY is not None before json.loads
+            google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+            if not google_key:
+                raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
+            _ = service_account.Credentials.from_service_account_info(json.loads(google_key), scopes=SCOPES)
+        except Exception:
+            return jsonify({
+                "status": "warning",
+                "database": "ok",
+                "redis": "ok",
+                "openai": "ok",
+                "google": "not configured"
+            })
         return jsonify({
             "status": "ok",
             "database": "ok",
             "redis": "ok",
             "openai": "ok",
-            "uptime": "unknown"  # Could be enhanced with uptime tracking
+            "google": "ok",
+            "uptime": "unknown"
         })
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}", exc_info=True)
