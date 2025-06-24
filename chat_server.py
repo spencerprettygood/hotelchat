@@ -104,6 +104,11 @@ except Exception as e:
 # --- CELERY TASKS ---
 try:
     from tasks import process_whatsapp_message, send_whatsapp_message_task
+    # Ensure these are Celery tasks (should have .delay)
+    if not (hasattr(process_whatsapp_message, 'delay') and hasattr(send_whatsapp_message_task, 'delay')):
+        logger.error("Celery tasks are not properly decorated. Check @celery_app.task in tasks.py.")
+        process_whatsapp_message = None
+        send_whatsapp_message_task = None
 except Exception as e:
     logger.error(f"Celery tasks import failed: {e}")
     process_whatsapp_message = None
@@ -244,6 +249,11 @@ except Exception as e:
 # Import Celery tasks at the top to avoid shadowing and ensure proper initialization
 try:
     from tasks import process_whatsapp_message, send_whatsapp_message_task
+    # Ensure these are Celery tasks (should have .delay)
+    if not (hasattr(process_whatsapp_message, 'delay') and hasattr(send_whatsapp_message_task, 'delay')):
+        logger.error("Celery tasks are not properly decorated. Check @celery_app.task in tasks.py.")
+        process_whatsapp_message = None
+        send_whatsapp_message_task = None
 except Exception as e:
     logger.error(f"Celery tasks import failed: {e}")
     process_whatsapp_message = None
@@ -447,11 +457,15 @@ except Exception as e:
 
 def get_db_connection():
     global db_pool
+    if db_pool is None:
+        logger.error("db_pool is not initialized.")
+        raise RuntimeError("db_pool is not initialized.")
     try:
         conn = db_pool.getconn()
         if conn.closed:
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            db_pool.closeall()
+            if db_pool is not None and hasattr(db_pool, 'closeall'):
+                db_pool.closeall()
             db_pool = SimpleConnectionPool(
                 minconn=1,
                 maxconn=5,
@@ -475,7 +489,8 @@ def get_db_connection():
         if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
             logger.warning("SSL error detected, reinitializing connection pool")
             try:
-                db_pool.closeall()
+                if db_pool is not None and hasattr(db_pool, 'closeall'):
+                    db_pool.closeall()
                 db_pool = SimpleConnectionPool(
                     minconn=1,
                     maxconn=5,
@@ -497,6 +512,9 @@ def get_db_connection():
 
 def release_db_connection(conn):
     global db_pool
+    if db_pool is None:
+        logger.error("db_pool is not initialized.")
+        return
     if conn:
         try:
             if conn.closed:
@@ -1199,7 +1217,8 @@ def health_check():
             c.execute("SELECT 1")
         release_db_connection(conn)
         # Check Redis connection
-        redis_client.ping()
+        if redis_client is not None:
+            redis_client.ping()
         # Check OpenAI API key
         if not os.getenv("OPENAI_API_KEY"):
             return jsonify({
