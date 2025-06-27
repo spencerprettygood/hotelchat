@@ -57,7 +57,11 @@ GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    error_message = "❌ REDIS_URL environment variable is not set."
+    print(error_message, file=sys.stderr)
+    raise ValueError(error_message)
 
 # --- LOGGER SETUP ---
 LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "chat_server.log")

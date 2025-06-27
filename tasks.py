@@ -24,7 +24,9 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 # Initialize Celery
-BROKER_URL = os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
+BROKER_URL = os.getenv('REDIS_URL')
+if not BROKER_URL:
+    raise ValueError("REDIS_URL environment variable not set for Celery broker/backend")
 celery_app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)
 celery_app.conf.update(
     task_serializer='json',
@@ -45,7 +47,7 @@ celery_app.conf.update(
 
 # Redis client for caching
 redis_client = redis.Redis.from_url(
-    os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
+    BROKER_URL,
     decode_responses=True,
     max_connections=10
 )
@@ -114,14 +116,12 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
     correlation_id = str(uuid.uuid4())
     start_time = time.time()
     logger.info(f"[CID:{correlation_id}] Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
+    
+    conn = None
     try:
-        conn = None
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-        except Exception as db_init_err:
-            logger.error(f"[CID:{correlation_id}] DB connection failed: {str(db_init_err)}", exc_info=True)
-            raise
+        conn = get_db_connection()
+        c = conn.cursor()
+        
         # Check if conversation exists for this chat_id
         c.execute(
             "SELECT id, username, ai_enabled, language FROM conversations WHERE chat_id = %s AND channel = %s",
@@ -242,9 +242,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                 send_whatsapp_message_task.delay(
                     to_number=chat_id,
                     message=ai_reply,
-                    convo_id=convo_id,
-                    username="AI Bot",
-                    chat_id=chat_id
+                    convo_id=convo_id
                 )
                 
                 # Update conversation with intent and needs_agent if handoff triggered
@@ -321,9 +319,13 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         except Exception:
             pass
         raise self.retry(exc=e, countdown=120, max_retries=3)
+    finally:
+        if conn:
+            conn.close()
+            logger.info(f"[CID:{correlation_id}] Database connection closed.")
 
 @celery_app.task(name="tasks.send_whatsapp_message_task", bind=True, max_retries=3)
-def send_whatsapp_message_task(self, to_number, message, convo_id=None, username=None, chat_id=None):
+def send_whatsapp_message_task(self, to_number, message, convo_id=None):
     """
     Send a WhatsApp message using Twilio.
     """
