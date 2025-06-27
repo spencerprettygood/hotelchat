@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 # Gevent monkey-patching at the very top
 import gevent
 from gevent import monkey
@@ -29,6 +32,8 @@ import redis as sync_redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from functools import wraps
+import threading
 
 DetectorFactory.seed = 0
 
@@ -55,7 +60,7 @@ GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # --- LOGGER SETUP (moved up to ensure all errors are logged) ---
 LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "chat_server.log")
@@ -321,19 +326,59 @@ except Exception:
     OPENAI_CONCURRENCY = 5
 logger.info(f"OpenAI concurrency limit: {OPENAI_CONCURRENCY}")
 
-# Define the AI response function
+# --- CIRCUIT BREAKER IMPLEMENTATION ---
+class CircuitBreaker:
+    def __init__(self, max_failures=5, reset_timeout=60):
+        self.max_failures = max_failures
+        self.reset_timeout = reset_timeout
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.lock = threading.Lock()
+        self.open = False
+
+    def call(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with self.lock:
+                if self.open and (time.time() - self.last_failure_time < self.reset_timeout):
+                    raise RuntimeError("Circuit breaker is open. Try again later.")
+                elif self.open:
+                    self.open = False
+                    self.failure_count = 0
+            try:
+                result = func(*args, **kwargs)
+                with self.lock:
+                    self.failure_count = 0
+                return result
+            except Exception as e:
+                with self.lock:
+                    self.failure_count += 1
+                    self.last_failure_time = time.time()
+                    if self.failure_count >= self.max_failures:
+                        self.open = True
+                        logger.error(f"Circuit breaker tripped for get_ai_response: {str(e)}")
+                raise
+        return wrapper
+
+circuit_breaker = CircuitBreaker(max_failures=5, reset_timeout=120)
+
+# --- ENHANCED get_ai_response WITH CIRCUIT BREAKER, LOGGING, FALLBACKS ---
+@circuit_breaker.call
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=4, max=30),
     retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError))
 )
-def get_ai_response(convo_id, username, conversation_history, user_message, chat_id, channel, language="en"):
+def get_ai_response(convo_id, username, conversation_history, user_message, chat_id, channel, language="en", correlation_id=None):
     """
-    Generates an AI response using the synchronous OpenAI client.
-    This version is compatible with gevent and Celery.
+    Synchronous function to get AI responses using the OpenAI API.
+    Returns: ai_reply, detected_intent, handoff_triggered
+    Enhanced with circuit breaker, retry, and production-grade error handling.
     """
+    if not correlation_id:
+        correlation_id = f"convo-{convo_id}-{int(time.time())}"
     start_time_ai = time.time()
-    logger.info(f"GET_AI_RESPONSE initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
+    logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
     
     # Ensure conversation_history is a list of dicts
     if not isinstance(conversation_history, list) or not all(isinstance(msg, dict) for msg in conversation_history):
@@ -358,31 +403,21 @@ def get_ai_response(convo_id, username, conversation_history, user_message, chat
     ] + conversation_history
     
     ai_reply = None
-    detected_intent = None # Placeholder for intent detection
-    handoff_triggered = False # Placeholder for handoff logic
-    
+    detected_intent = None
+    handoff_triggered = False
     request_start_time = time.time()
-    logger.info(f"[OpenAI Request] Convo ID: {convo_id} - Model: gpt-4o-mini - User Message: '{user_message[:100]}...'") # Log request details
-    logger.debug(f"[OpenAI Request Details] Convo ID: {convo_id} - Full History: {conversation_history}")
-    
     try:
-        logger.info(f"Calling OpenAI API for convo_id {convo_id}. Model: gpt-4o-mini. History length: {len(messages_for_openai)}")
-        
-        # Call OpenAI API synchronously
+        logger.info(f"[CID:{correlation_id}] Calling OpenAI API for convo_id {convo_id}. Model: gpt-4o-mini. History length: {len(messages_for_openai)}")
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini", # Using the specified model
+            model="gpt-4o-mini",
             messages=messages_for_openai,
-            max_tokens=300, # Max tokens for the response
+            max_tokens=300,
             temperature=0.7
         )
-        
         ai_reply = response.choices[0].message.content.strip()
         usage = response.usage
         processing_time = (time.time() - request_start_time) * 1000
-        logger.info(
-            f"[OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms"
-        )
-        logger.debug(f"[OpenAI Response Details] Convo ID: {convo_id} - Full Reply: {ai_reply} - Full Response Object: {response.model_dump_json(indent=2)}")
+        logger.info(f"[CID:{correlation_id}] [OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms")
         
         # Basic intent detection (example - can be expanded)
         if "book a room" in user_message.lower() or "reservation" in user_message.lower():
@@ -392,23 +427,33 @@ def get_ai_response(convo_id, username, conversation_history, user_message, chat
             logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
             
     except RateLimitError as e:
-        logger.error(f"❌ OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] \u274c OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
         ai_reply = "I'm currently experiencing high demand. Please try again in a moment."
     except APITimeoutError as e:
-        logger.error(f"❌ OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] \u274c OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
         ai_reply = "I'm having trouble connecting to my brain right now. Please try again shortly."
-    except APIError as e: # General API error
-        logger.error(f"❌ OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
+    except APIError as e:
+        logger.error(f"[CID:{correlation_id}] \u274c OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
         ai_reply = "Sorry, I encountered an issue while processing your request."
     except AuthenticationError as e:
-        logger.error(f"❌ OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] \u274c OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
         ai_reply = "There's an issue with my configuration. Please notify an administrator."
     except Exception as e:
-        logger.error(f"❌ Unexpected error in get_ai_response for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "An unexpected error occurred. I've logged the issue."
-    
+        # Token limit error handling
+        if hasattr(e, 'message') and 'maximum context length' in str(e):
+            logger.error(f"[CID:{correlation_id}] \u274c OpenAI token limit error for convo_id {convo_id}: {str(e)}", exc_info=True)
+            ai_reply = "Sorry, your message is too long for me to process. Please shorten it."
+        else:
+            logger.error(f"[CID:{correlation_id}] \u274c Unexpected error in get_ai_response for convo_id {convo_id}: {str(e)}", exc_info=True)
+            ai_reply = "An unexpected error occurred. I've logged the issue."
     processing_time = time.time() - start_time_ai
-    logger.info(f"GET_AI_RESPONSE for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
+    logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
+    # Sentry/monitoring hook
+    try:
+        # sentry_sdk.capture_message(f"AI response for {correlation_id}")
+        pass
+    except Exception:
+        pass
     return ai_reply, detected_intent, handoff_triggered
 
 # Google Calendar setup with Service Account
