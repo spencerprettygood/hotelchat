@@ -157,7 +157,7 @@ This guide provides step-by-step instructions to deploy, launch, and verify the 
 
 ## 1. Prerequisites
 
-- Python 3.9+ (recommended: use the provided `env/` virtual environment)
+- Python 3.9+ (recommended: use the provided `.venv/` virtual environment)
 - Redis server running and accessible
 - OpenAI API key (set as an environment variable)
 - Render.com account (for cloud deployment)
@@ -171,13 +171,14 @@ This guide provides step-by-step instructions to deploy, launch, and verify the 
 
 ```bash
 git clone <your-repo-url>
-cd hotelchat-1
+cd hotelchat
 ```
 
 ### b. Activate the Virtual Environment
 
 ```bash
-source env/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 ### c. Install Dependencies
@@ -212,7 +213,7 @@ Or use the following launch script (`launch.sh`):
 
 ```bash
 #!/bin/bash
-source env/bin/activate
+source .venv/bin/activate
 export OPENAI_API_KEY="your-openai-api-key"
 export REDIS_URL="redis://localhost:6379/0"
 export OPENAI_CONCURRENCY=5
