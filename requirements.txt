@@ -1,13 +1,11 @@
 # Web Framework and Extensions
 Flask==2.0.3
-Werkzeug==2.0.3
 Flask-SocketIO==5.3.6
 Flask-Cors==5.0.0
 Flask-Login==0.6.3
 gunicorn==21.2.0
-gevent==22.10.2
-greenlet==2.0.2
-gevent-websocket==0.10.1
+gevent==23.9.1
+geventwebsocket==0.10.1
 
 # Database
 psycopg2-binary==2.9.9
@@ -16,7 +14,6 @@ psycopg2-pool==1.1
 # Message Queue & Background Tasks
 redis==4.5.5
 celery==5.3.6
-python-socketio==5.8.0
 
 # API Clients
 openai==1.6.1

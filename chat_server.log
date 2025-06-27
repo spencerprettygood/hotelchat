@@ -18,3 +18,195 @@
 2025-06-22 23:38:55,160 - chat_server - INFO - chat_server:63 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
 2025-06-22 23:38:55,165 - chat_server - INFO - chat_server:144 - <module> - Using DATABASE_URL: postgresql://hoteladmin:lqvCwuuGMXJcSYjticnMw0w6VbQlDVRo@dpg-d1cbr9be5dus73fdcueg-a/hotelchat
 2025-06-22 23:38:55,165 - chat_server - INFO - chat_server:152 - <module> - Added sslmode=require to DATABASE_URL: postgresql://hoteladmin:lqvCwuuGMXJcSYjticnMw0w6VbQlDVRo@dpg-d1cbr9be5dus73fdcueg-a/hotelchat?sslmode=require
+2025-06-27 03:16:15,038 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:15,038 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:16,095 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:16,163 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:16,192 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:16,192 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:16,192 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:55,700 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,701 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,701 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,702 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,700 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,703 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,708 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,707 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,709 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,709 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,710 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,717 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,718 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,737 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,747 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,738 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,763 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,812 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:55,813 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:55,824 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,824 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:55,836 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,836 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,839 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,868 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,879 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,917 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:55,917 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:55,918 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:55,920 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:55,921 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,921 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:55,922 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:55,921 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:55,928 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:55,929 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:55,958 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:55,974 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:55,975 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:55,975 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:55,986 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:55,987 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:55,990 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:55,991 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:55,995 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:55,992 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,103 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,104 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,104 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,177 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,186 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,198 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,293 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,413 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,414 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,414 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,529 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,530 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,535 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,557 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,558 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,562 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,576 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,610 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,618 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,619 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,620 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,690 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,691 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,691 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,691 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,692 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,701 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,702 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,699 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,708 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,750 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,758 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,759 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,763 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,772 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,791 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,792 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,792 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,797 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,797 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,798 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,813 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,847 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,847 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,865 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,865 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,869 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,873 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,873 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,874 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,874 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,875 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,875 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,877 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,912 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,913 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,914 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,917 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,936 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,939 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:56,961 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,961 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,965 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,966 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,966 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,967 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,975 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,975 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,976 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,989 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:56,989 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:56,992 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:56,992 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:56,993 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:56,994 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:56,997 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:57,023 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:57,024 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:57,027 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:57,029 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:57,032 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:16:57,032 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:16:57,036 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:16:57,045 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:57,046 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:57,046 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:57,050 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:57,066 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:57,066 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:57,067 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:57,080 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:57,099 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:57,099 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:57,100 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:57,132 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:16:57,151 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:57,151 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:57,152 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:16:57,170 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:16:57,171 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:16:57,172 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:20:37,608 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:20:37,609 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:20:37,652 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:20:37,719 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:20:37,752 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:20:37,752 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:20:37,752 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.
+2025-06-27 03:21:07,061 - chat_server - INFO - chat_server:86 - <module> - Logging initialized. Level: DEBUG, File: chat_server.log
+2025-06-27 03:21:07,061 - chat_server - ERROR - chat_server:94 - <module> - Redis connection failed: name 'redis' is not defined
+2025-06-27 03:21:07,065 - chat_server - ERROR - chat_server:106 - <module> - PostgreSQL connection failed: could not translate host name "dpg-d1cbr9be5dus73fdcueg-a" to address: nodename nor servname provided, or not known
+
+2025-06-27 03:21:07,122 - chat_server - INFO - tasks:64 - <module> - ✅ Twilio client initialized
+2025-06-27 03:21:07,151 - chat_server - INFO - chat_server:131 - <module> - OpenAI client (v1.x) initialized.
+2025-06-27 03:21:07,152 - chat_server - ERROR - chat_server:150 - <module> - ❌ Redis client is not initialized.
+2025-06-27 03:21:07,152 - chat_server - ERROR - chat_server:153 - <module> - ❌ Redis connection failed: Redis client is not initialized.

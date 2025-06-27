@@ -12,6 +12,7 @@ from twilio.rest import Client
 from langdetect import detect, LangDetectException
 from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
 import socketio
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Configure logging
 logger = logging.getLogger("chat_server")
@@ -87,21 +88,41 @@ def get_db_connection():
         logger.error(f"❌ Database connection failed: {str(e)}", exc_info=True)
         raise
 
+# --- DEAD LETTER QUEUE (DLQ) SETUP ---
+DLQ_KEY = os.getenv('DLQ_KEY', 'dead_letter_queue')
+
+def send_to_dead_letter_queue(message, reason, correlation_id=None):
+    dlq_entry = {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'message': message,
+        'reason': reason,
+        'correlation_id': correlation_id
+    }
+    try:
+        redis_client.rpush(DLQ_KEY, json.dumps(dlq_entry))
+        logger.error(f"[DLQ][CID:{correlation_id}] Message sent to dead letter queue: {reason}")
+    except Exception as e:
+        logger.critical(f"[DLQ][CID:{correlation_id}] Failed to write to DLQ: {str(e)}")
+
 @celery_app.task(name="tasks.process_whatsapp_message", bind=True, max_retries=3)
 def process_whatsapp_message(self, from_number, chat_id, message_body, user_timestamp):
     """
     Process an incoming WhatsApp message.
-    This task handles message processing, conversation management, and AI response generation.
+    Enhanced: error categorization, retry, DLQ, correlation ID, Sentry hook.
     """
     from chat_server import get_ai_response
-    
+    import uuid
+    correlation_id = str(uuid.uuid4())
     start_time = time.time()
-    logger.info(f"Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
-    
+    logger.info(f"[CID:{correlation_id}] Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
     try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        
+        conn = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+        except Exception as db_init_err:
+            logger.error(f"[CID:{correlation_id}] DB connection failed: {str(db_init_err)}", exc_info=True)
+            raise
         # Check if conversation exists for this chat_id
         c.execute(
             "SELECT id, username, ai_enabled, language FROM conversations WHERE chat_id = %s AND channel = %s",
@@ -174,19 +195,33 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         
         # Process with AI if enabled
         if global_ai_enabled == "1" and ai_enabled == 1:
-            logger.info(f"AI is enabled for conversation {convo_id}. Generating response...")
-            
-            # Call the AI response function from chat_server.py
-            ai_reply, detected_intent, handoff_triggered = get_ai_response(
-                convo_id=convo_id,
-                username=username,
-                conversation_history=conversation_history,
-                user_message=message_body,
-                chat_id=chat_id,
-                channel="whatsapp",
-                language=language
-            )
-            
+            logger.info(f"[CID:{correlation_id}] AI is enabled for conversation {convo_id}. Generating response...")
+            try:
+                ai_reply, detected_intent, handoff_triggered = get_ai_response(
+                    convo_id=convo_id,
+                    username=username,
+                    conversation_history=conversation_history,
+                    user_message=message_body,
+                    chat_id=chat_id,
+                    channel="whatsapp",
+                    language=language,
+                    correlation_id=correlation_id
+                )
+            except Exception as ai_err:
+                logger.error(f"[CID:{correlation_id}] AI response failed: {str(ai_err)}", exc_info=True)
+                send_to_dead_letter_queue({
+                    'from_number': from_number,
+                    'chat_id': chat_id,
+                    'message_body': message_body,
+                    'user_timestamp': user_timestamp
+                }, reason=f"AI error: {str(ai_err)}", correlation_id=correlation_id)
+                # Sentry/monitoring hook
+                try:
+                    # sentry_sdk.capture_exception(ai_err)
+                    pass
+                except Exception:
+                    pass
+                raise
             # Log AI response
             if ai_reply:
                 c.execute(
@@ -241,14 +276,50 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
             logger.error(f"Failed to emit Socket.IO event: {str(e)}")
         
         processing_time = time.time() - start_time
-        logger.info(f"WhatsApp message processed in {processing_time:.2f} seconds")
+        logger.info(f"[CID:{correlation_id}] WhatsApp message processed in {processing_time:.2f} seconds")
         return {"status": "success", "convo_id": convo_id, "processing_time": processing_time}
-        
+    except psycopg2.OperationalError as db_op_err:
+        logger.error(f"[CID:{correlation_id}] Database operational error: {str(db_op_err)}", exc_info=True)
+        try:
+            send_to_dead_letter_queue({
+                'from_number': from_number,
+                'chat_id': chat_id,
+                'message_body': message_body,
+                'user_timestamp': user_timestamp
+            }, reason=f"DB operational error: {str(db_op_err)}", correlation_id=correlation_id)
+        except Exception:
+            pass
+        raise self.retry(exc=db_op_err, countdown=60, max_retries=3)
+    except redis.ConnectionError as redis_err:
+        logger.error(f"[CID:{correlation_id}] Redis connection error: {str(redis_err)}", exc_info=True)
+        try:
+            send_to_dead_letter_queue({
+                'from_number': from_number,
+                'chat_id': chat_id,
+                'message_body': message_body,
+                'user_timestamp': user_timestamp
+            }, reason=f"Redis error: {str(redis_err)}", correlation_id=correlation_id)
+        except Exception:
+            pass
+        raise self.retry(exc=redis_err, countdown=60, max_retries=3)
     except Exception as e:
-        logger.error(f"❌ Error processing WhatsApp message: {str(e)}", exc_info=True)
-        # Retry with exponential backoff
-        retry_delay = 60 * (2 ** self.request.retries)  # 60s, 120s, 240s
-        raise self.retry(exc=e, countdown=retry_delay, max_retries=3)
+        logger.error(f"[CID:{correlation_id}] \u274c Error processing WhatsApp message: {str(e)}", exc_info=True)
+        try:
+            send_to_dead_letter_queue({
+                'from_number': from_number,
+                'chat_id': chat_id,
+                'message_body': message_body,
+                'user_timestamp': user_timestamp
+            }, reason=f"General error: {str(e)}", correlation_id=correlation_id)
+        except Exception:
+            pass
+        # Sentry/monitoring hook
+        try:
+            # sentry_sdk.capture_exception(e)
+            pass
+        except Exception:
+            pass
+        raise self.retry(exc=e, countdown=120, max_retries=3)
 
 @celery_app.task(name="tasks.send_whatsapp_message_task", bind=True, max_retries=3)
 def send_whatsapp_message_task(self, to_number, message, convo_id=None, username=None, chat_id=None):
