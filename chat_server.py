@@ -84,6 +84,7 @@ try:
 except ImportError:
     logger.warning("concurrent_log_handler not installed; file logging disabled.")
 logger.info(f"Logging initialized. Level: {LOG_LEVEL}, File: {LOG_FILE_PATH}")
+logger.info(f"Using Redis URL: {REDIS_URL}")
 
 # --- REDIS CLIENT ---
 try:

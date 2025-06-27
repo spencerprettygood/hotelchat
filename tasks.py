@@ -27,6 +27,7 @@ if not logger.handlers:
 BROKER_URL = os.getenv('REDIS_URL')
 if not BROKER_URL:
     raise ValueError("REDIS_URL environment variable not set for Celery broker/backend")
+logger.info(f"Celery using broker: {BROKER_URL}")
 celery_app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)
 celery_app.conf.update(
     task_serializer='json',
@@ -118,6 +119,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
     logger.info(f"[CID:{correlation_id}] Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
     
     conn = None
+    room = None  # Initialize room to None to prevent potential NameError in logging
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -239,7 +241,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                     logger.info(f"Logged AI response with ID {ai_message_id} for convo_id {convo_id}")
                 
                 # Send AI response via WhatsApp
-                send_whatsapp_message_task.delay(
+                send_whatsapp_message_task.delay(  # type: ignore
                     to_number=chat_id,
                     message=ai_reply,
                     convo_id=convo_id
@@ -302,30 +304,25 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
             pass
         raise self.retry(exc=redis_err, countdown=60, max_retries=3)
     except Exception as e:
-        logger.error(f"[CID:{correlation_id}] \u274c Error processing WhatsApp message: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] ❌ Error processing WhatsApp message: {str(e)}", exc_info=True)
         try:
             send_to_dead_letter_queue({
                 'from_number': from_number,
                 'chat_id': chat_id,
                 'message_body': message_body,
                 'user_timestamp': user_timestamp
-            }, reason=f"General error: {str(e)}", correlation_id=correlation_id)
+            }, reason=f"Unhandled error: {str(e)}", correlation_id=correlation_id)
         except Exception:
             pass
-        # Sentry/monitoring hook
-        try:
-            # sentry_sdk.capture_exception(e)
-            pass
-        except Exception:
-            pass
-        raise self.retry(exc=e, countdown=120, max_retries=3)
+
     finally:
         if conn:
             conn.close()
             logger.info(f"[CID:{correlation_id}] Database connection closed.")
 
+
 @celery_app.task(name="tasks.send_whatsapp_message_task", bind=True, max_retries=3)
-def send_whatsapp_message_task(self, to_number, message, convo_id=None):
+def send_whatsapp_message_task(self, to_number, message, convo_id):
     """
     Send a WhatsApp message using Twilio.
     """
