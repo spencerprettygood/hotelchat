@@ -1,17 +1,17 @@
 from celery import Celery
 import os
-import psycopg2
-from psycopg2.extras import DictCursor
 import logging
-import requests
 import json
-from datetime import datetime, timezone
 import time
+import uuid
 import redis
+import psycopg2
+import socketio
+from psycopg2.extras import DictCursor
+from datetime import datetime, timezone
 from twilio.rest import Client
 from langdetect import detect, LangDetectException
 from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
-import socketio
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Configure logging
@@ -110,8 +110,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
     Process an incoming WhatsApp message.
     Enhanced: error categorization, retry, DLQ, correlation ID, Sentry hook.
     """
-    from chat_server import get_ai_response
-    import uuid
+    from get_ai_response import get_ai_response
     correlation_id = str(uuid.uuid4())
     start_time = time.time()
     logger.info(f"[CID:{correlation_id}] Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
@@ -131,10 +130,10 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         conversation = c.fetchone()
         
         if conversation:
-            convo_id = conversation['id']
-            username = conversation['username']
-            ai_enabled = conversation['ai_enabled']
-            language = conversation['language']
+            convo_id = conversation['id']  # type: ignore
+            username = conversation['username']  # type: ignore
+            ai_enabled = conversation['ai_enabled']  # type: ignore
+            language = conversation['language']  # type: ignore
             logger.info(f"Found existing conversation for {chat_id}: ID {convo_id}, user '{username}'")
         else:
             # Create a new conversation
@@ -154,7 +153,10 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                 "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
                 (username, chat_id, "whatsapp", 1, language, user_timestamp)
             )
-            convo_id = c.fetchone()['id']
+            new_convo = c.fetchone()
+            if not new_convo:
+                raise Exception("Failed to create new conversation.")
+            convo_id = new_convo['id']  # type: ignore
             ai_enabled = 1
             logger.info(f"Created new conversation for {chat_id}: ID {convo_id}, language: {language}")
         
@@ -164,7 +166,10 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
             "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (convo_id, username, message_body, "user", user_timestamp)
         )
-        message_id = c.fetchone()['id']
+        new_message = c.fetchone()
+        if not new_message:
+            raise Exception("Failed to log user message.")
+        message_id = new_message['id']  # type: ignore
         logger.info(f"Logged user message with ID {message_id} for convo_id {convo_id}")
         
         # Update conversation timestamp
@@ -185,13 +190,13 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         # Format conversation history for OpenAI
         conversation_history = []
         for msg in history:
-            role = "user" if msg['sender'] == "user" else "assistant"
-            conversation_history.append({"role": role, "content": msg['message']})
+            role = "user" if msg['sender'] == "user" else "assistant"  # type: ignore
+            conversation_history.append({"role": role, "content": msg['message']})  # type: ignore
         
         # Check if AI is globally enabled
         c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
         setting = c.fetchone()
-        global_ai_enabled = setting['value'] if setting else "1"
+        global_ai_enabled = setting['value'] if setting else "1"  # type: ignore
         
         # Process with AI if enabled
         if global_ai_enabled == "1" and ai_enabled == 1:
@@ -204,8 +209,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                     user_message=message_body,
                     chat_id=chat_id,
                     channel="whatsapp",
-                    language=language,
-                    correlation_id=correlation_id
+                    language=language
                 )
             except Exception as ai_err:
                 logger.error(f"[CID:{correlation_id}] AI response failed: {str(ai_err)}", exc_info=True)
@@ -229,8 +233,10 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                     "VALUES (%s, %s, %s, %s, %s) RETURNING id",
                     (convo_id, "AI Bot", ai_reply, "bot", datetime.now(timezone.utc).isoformat())
                 )
-                ai_message_id = c.fetchone()['id']
-                logger.info(f"Logged AI response with ID {ai_message_id} for convo_id {convo_id}")
+                ai_message = c.fetchone()
+                if ai_message:
+                    ai_message_id = ai_message['id']  # type: ignore
+                    logger.info(f"Logged AI response with ID {ai_message_id} for convo_id {convo_id}")
                 
                 # Send AI response via WhatsApp
                 send_whatsapp_message_task.delay(
@@ -254,23 +260,18 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         conn.commit()
         
         # Emit to Socket.IO that a new message arrived (for dashboard)
+        room = f"convo_{convo_id}"
         try:
             # Emit to Socket.IO using the write-only KombuManager
-            try:
-                room = f"conversation_{convo_id}"
-                # Use the 'sio' object to emit the message
-                sio.emit('new_message', {
-                    'convo_id': convo_id,
-                    'message': message_body,
-                    'sender': 'user',
-                    'username': username,
-                    'timestamp': user_timestamp,
-                    'chat_id': chat_id,
-                    'channel': 'whatsapp'
-                }, to=room)
-                logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
-            except Exception as e:
-                logger.error(f"Failed to emit Socket.IO event: {str(e)}")
+            sio.emit('new_message', {
+                'convo_id': convo_id,
+                'message': message_body,
+                'sender': 'user',
+                'username': username,
+                'timestamp': user_timestamp,
+                'chat_id': chat_id,
+                'channel': 'whatsapp'
+            }, room=room)
             logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
         except Exception as e:
             logger.error(f"Failed to emit Socket.IO event: {str(e)}")
