@@ -19,7 +19,7 @@ fi
 
 # Set environment variables (edit as needed)
 export OPENAI_API_KEY="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"
-export REDIS_URL="redis://localhost:6379/0"
+export REDIS_URL="redis://localhost:6379"
 export OPENAI_CONCURRENCY=5
 
 # Launch the server using the venv's python and gunicorn
