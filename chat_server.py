@@ -136,26 +136,12 @@ except Exception as e:
     logger.error(f"❌ Celery tasks import failed: {e}")
     raise
 
-# --- OPENAI CLIENT INITIALIZATION ---
-import openai  # Use the OpenAI module directly
-
-try:
-    # Attempt to initialize client with timeout parameter
-    openai_client = openai.OpenAI(
-        api_key=OPENAI_API_KEY,
-        timeout=30.0
-    )
-    logger.info("OpenAI client initialized with timeout.")
-except TypeError as e:
-    # Fallback if timeout parameter is not supported
-    logger.warning(f"OpenAI client init TypeError ({e.__class__.__name__}): retrying without timeout")
-    openai_client = openai.OpenAI(
-        api_key=OPENAI_API_KEY
-    )
-    logger.info("OpenAI client initialized without timeout.")
-except Exception as e:
-    logger.error(f"❌ OpenAI client initialization failed: {e}")
-    raise
+# --- OPENAI CLIENT CONFIGURATION ---
+# Configure OpenAI API key
+import openai
+openai.api_key = OPENAI_API_KEY
+openai_client = openai
+logger.info("OpenAI client module configured with API key.")
 
 # --- GOOGLE SERVICE ACCOUNT KEY VALIDATION ---
 try:
