@@ -9,31 +9,27 @@ monkey.patch_all()
 # --- ALL IMPORTS AT THE TOP ---
 import os
 import sys
-import logging
 import json
-import time
-import re
+import logging
+import redis
+import psycopg2
 from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, request, jsonify, session, redirect, Response, g
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
-import psycopg2
 from psycopg2.extras import DictCursor
 from psycopg2.pool import SimpleConnectionPool
-import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
-import openai
 from openai import OpenAI, RateLimitError, APIError, AuthenticationError, APITimeoutError
-import redis as sync_redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from functools import wraps
-import threading
+import time
 
 DetectorFactory.seed = 0
 
@@ -50,8 +46,9 @@ REQUIRED_ENV_VARS = [
 ]
 missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 if missing_vars:
-    print(f"❌ Missing required environment variables: {', '.join(missing_vars)}", file=sys.stderr)
-    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+    error_message = f"❌ Missing required environment variables: {', '.join(missing_vars)}"
+    print(error_message, file=sys.stderr)
+    raise ValueError(error_message)
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -62,7 +59,7 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# --- LOGGER SETUP (moved up to ensure all errors are logged) ---
+# --- LOGGER SETUP ---
 LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "chat_server.log")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger("chat_server")
@@ -77,7 +74,6 @@ console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 try:
-    from concurrent_log_handler import ConcurrentRotatingFileHandler
     file_handler = ConcurrentRotatingFileHandler(LOG_FILE_PATH, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -89,35 +85,50 @@ logger.info(f"Logging initialized. Level: {LOG_LEVEL}, File: {LOG_FILE_PATH}")
 try:
     redis_client = redis.Redis.from_url(REDIS_URL)
     redis_client.ping()
-    logger.info("Redis client initialized and connection verified.")
+    logger.info("✅ Redis client initialized and connection verified.")
 except Exception as e:
-    logger.error(f"Redis connection failed: {e}")
+    logger.error(f"❌ Redis connection failed: {e}")
     redis_client = None
+    raise
 
 # --- DATABASE CONNECTION POOL ---
-database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if DATABASE_URL:
+    database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    if "sslmode" not in database_url:
+        database_url += "?sslmode=require"
+else:
+    database_url = None
+
 db_pool = None
-try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, database_url)
-    test_conn = db_pool.getconn()
-    db_pool.putconn(test_conn)
-    logger.info("PostgreSQL connection pool initialized and connection verified.")
-except Exception as e:
-    logger.error(f"PostgreSQL connection failed: {e}")
-    db_pool = None
+if database_url:
+    try:
+        db_pool = SimpleConnectionPool(
+            minconn=1, maxconn=10, dsn=database_url,
+            connect_timeout=10, options="-c statement_timeout=10000"
+        )
+        with db_pool.getconn() as test_conn:
+            with test_conn.cursor() as c:
+                c.execute("SELECT 1")
+        logger.info("✅ PostgreSQL connection pool initialized and connection verified.")
+    except Exception as e:
+        logger.error(f"❌ PostgreSQL connection pool failed: {e}")
+        db_pool = None
+        raise
+else:
+    logger.error("❌ DATABASE_URL is not set. Database connection pool cannot be created.")
+    raise ValueError("DATABASE_URL is not set.")
+
 
 # --- CELERY TASKS ---
 try:
     from tasks import process_whatsapp_message, send_whatsapp_message_task
-    # Ensure these are Celery tasks (should have .delay)
     if not (hasattr(process_whatsapp_message, 'delay') and hasattr(send_whatsapp_message_task, 'delay')):
         logger.error("Celery tasks are not properly decorated. Check @celery_app.task in tasks.py.")
-        process_whatsapp_message = None
-        send_whatsapp_message_task = None
+        raise ImportError("Invalid Celery tasks.")
+    logger.info("✅ Celery tasks imported successfully.")
 except Exception as e:
-    logger.error(f"Celery tasks import failed: {e}")
-    process_whatsapp_message = None
-    send_whatsapp_message_task = None
+    logger.error(f"❌ Celery tasks import failed: {e}")
+    raise
 
 # --- OPENAI CLIENT INITIALIZATION (v1.x COMPATIBLE) ---
 try:
@@ -126,51 +137,24 @@ try:
     openai_client = OpenAI(
         api_key=os.getenv("OPENAI_API_KEY"),
         timeout=30.0
-        # proxies argument removed; use HTTP_PROXY/HTTPS_PROXY env vars if needed
     )
     logger.info("OpenAI client (v1.x) initialized.")
 except ImportError:
-    # Fallback for v0.x
-    import openai
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    openai_client = openai
-    # Define error types for v0.x
-    class RateLimitError(Exception): pass
-    class APIError(Exception): pass
-    class AuthenticationError(Exception): pass
-    class APITimeoutError(Exception): pass
-    logger.info("OpenAI client (v0.x) initialized.")
-
-# --- REDIS CLIENT VALIDATION ---
-try:
-    if redis_client is not None:
-        redis_client.ping()
-        logger.info("✅ Redis connection validated.")
-    else:
-        logger.error("❌ Redis client is not initialized.")
-        raise RuntimeError("Redis client is not initialized.")
-except Exception as e:
-    logger.error(f"❌ Redis connection failed: {e}")
-    raise
-
-# --- DATABASE CONNECTION POOL VALIDATION ---
-if db_pool is not None:
+    logger.warning("OpenAI client v1.x not available, falling back to v0.27.0 or earlier")
     try:
-        test_conn = db_pool.getconn()
-        with test_conn.cursor() as c:
-            c.execute("SELECT 1")
-        db_pool.putconn(test_conn)
-        logger.info("✅ Database connection pool validated.")
+        # Fallback to v0.27.0 or earlier
+        from openai import OpenAI, RateLimitError, APIError, AuthenticationError, APITimeoutError
+        openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            timeout=30.0
+        )
+        logger.info("OpenAI client (v0.27.0 or earlier) initialized.")
     except Exception as e:
-        logger.error(f"❌ Database connection pool failed: {e}")
+        logger.error(f"❌ OpenAI client initialization failed: {e}")
         raise
-else:
-    logger.error("❌ db_pool is not initialized.")
-    raise RuntimeError("db_pool is not initialized.")
 
 # --- GOOGLE SERVICE ACCOUNT KEY VALIDATION ---
 try:
-    # Check GOOGLE_SERVICE_ACCOUNT_KEY is not None before json.loads
     google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
     if not google_key:
         raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
@@ -193,447 +177,88 @@ socketio = SocketIO(
     app,
     cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
     async_mode="gevent",
-    message_queue=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), # Added message queue for Celery
+    message_queue=REDIS_URL,
     ping_timeout=60,
     ping_interval=15,
     logger=True,
     engineio_logger=True
 )
 
+# --- CACHE SETUP ---
+settings_cache = TTLCache(maxsize=10, ttl=300)
+
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login'
+login_manager.login_view = 'login'  # type: ignore
 
-# --- ENVIRONMENT VARIABLES ---
-SECRET_KEY = os.getenv("SECRET_KEY", "dev_secret_key")
-app.config["SECRET_KEY"] = SECRET_KEY
-
-# --- DEPENDENCY CHECKS ---
-# Ensure required packages are installed: redis, psycopg2
-try:
-    import redis
-except ImportError:
-    logger.error("Missing dependency: redis. Please install with 'pip install redis'.")
-    raise
-try:
-    import psycopg2
-    import psycopg2.pool
-except ImportError:
-    logger.error("Missing dependency: psycopg2. Please install with 'pip install psycopg2-binary'.")
-    raise
-
-# --- REDIS CLIENT ---
-REDIS_URL = os.getenv("REDIS_URL")
-if not REDIS_URL:
-    logger.error("REDIS_URL not set in environment variables")
-    raise ValueError("REDIS_URL not set")
-try:
-    redis_client = redis.Redis.from_url(REDIS_URL)
-    redis_client.ping()
-    logger.info("Redis client initialized and connection verified.")
-except Exception as e:
-    logger.error(f"Redis connection failed: {e}")
-    redis_client = None
-
-# --- DATABASE CONNECTION POOL ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    logger.error("DATABASE_URL not set in environment variables")
-    raise ValueError("DATABASE_URL not set")
-database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, database_url)
-    test_conn = db_pool.getconn()
-    db_pool.putconn(test_conn)
-    logger.info("PostgreSQL connection pool initialized and connection verified.")
-except Exception as e:
-    logger.error(f"PostgreSQL connection failed: {e}")
-    db_pool = None
-
-# --- CELERY TASKS ---
-# Import Celery tasks at the top to avoid shadowing and ensure proper initialization
-try:
-    from tasks import process_whatsapp_message, send_whatsapp_message_task
-    # Ensure these are Celery tasks (should have .delay)
-    if not (hasattr(process_whatsapp_message, 'delay') and hasattr(send_whatsapp_message_task, 'delay')):
-        logger.error("Celery tasks are not properly decorated. Check @celery_app.task in tasks.py.")
-        process_whatsapp_message = None
-        send_whatsapp_message_task = None
-except Exception as e:
-    logger.error(f"Celery tasks import failed: {e}")
-    process_whatsapp_message = None
-    send_whatsapp_message_task = None
-
-# Initialize connection pool
-try:
-    database_url = database_url.replace("postgres://", "postgresql://", 1)
-    logger.info(f"Using DATABASE_URL: {database_url}")
-except NameError:
-    logger.error("❌ DATABASE_URL environment variable not set")
-    raise ValueError("DATABASE_URL environment variable not set")
-
-# Use sslmode=require
-if "sslmode" not in database_url:
-    database_url += "?sslmode=require"
-    logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
-
-db_pool = SimpleConnectionPool(
-    minconn=1,  # Start with 1 connection
-    maxconn=5,  # Limit to 5 connections to avoid overloading
-    dsn=database_url,
-    sslmode="require",  # Enforce SSL
-    sslrootcert=None,  # Let psycopg2 handle SSL certificates
-    connect_timeout=10,  # 10-second timeout for connections
-    options="-c statement_timeout=10000"  # Set a 10-second statement timeout
-)
-logger.info("✅ Database connection pool initialized with minconn=1, maxconn=5, connect_timeout=10")
-
-# Cache for ai_enabled setting with 5-second TTL
-settings_cache = TTLCache(maxsize=1, ttl=5) # type: ignore
-
-# Import tasks after app and logger are initialized to avoid circular imports
-# logger.debug("Importing tasks module...")
-# from tasks import process_whatsapp_message, send_whatsapp_message_task # Commented out global import
-# logger.debug("Tasks module imported.")
-
-# Validate OpenAI API key
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
-    raise ValueError("OPENAI_API_KEY not set")
-
-# OpenAI client initialization (v1.x and v0.x compatibility)
-logger.info("Initializing OpenAI client...")
-try:
-    # Try v1.x style
-    openai_client = OpenAI(
-        api_key=OPENAI_API_KEY,
-        timeout=30.0
-    )
-    # Test attribute to ensure v1.x
-    _ = openai_client.chat.completions
-    logger.info("OpenAI client (v1.x) initialized.")
-except AttributeError:
-    # Fallback to v0.x style
-    openai.api_key = OPENAI_API_KEY
-    openai_client = openai
-    logger.info("OpenAI client (v0.x) initialized.")
-
-# Semaphore for controlling concurrent OpenAI API calls
-try:
-    OPENAI_CONCURRENCY = int(os.getenv("OPENAI_CONCURRENCY", "5"))
-except Exception:
-    OPENAI_CONCURRENCY = 5
-logger.info(f"OpenAI concurrency limit: {OPENAI_CONCURRENCY}")
-
-# --- CIRCUIT BREAKER IMPLEMENTATION ---
-class CircuitBreaker:
-    def __init__(self, max_failures=5, reset_timeout=60):
-        self.max_failures = max_failures
-        self.reset_timeout = reset_timeout
-        self.failure_count = 0
-        self.last_failure_time = 0
-        self.lock = threading.Lock()
-        self.open = False
-
-    def call(self, func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            with self.lock:
-                if self.open and (time.time() - self.last_failure_time < self.reset_timeout):
-                    raise RuntimeError("Circuit breaker is open. Try again later.")
-                elif self.open:
-                    self.open = False
-                    self.failure_count = 0
-            try:
-                result = func(*args, **kwargs)
-                with self.lock:
-                    self.failure_count = 0
-                return result
-            except Exception as e:
-                with self.lock:
-                    self.failure_count += 1
-                    self.last_failure_time = time.time()
-                    if self.failure_count >= self.max_failures:
-                        self.open = True
-                        logger.error(f"Circuit breaker tripped for get_ai_response: {str(e)}")
-                raise
-        return wrapper
-
-circuit_breaker = CircuitBreaker(max_failures=5, reset_timeout=120)
-
-# --- ENHANCED get_ai_response WITH CIRCUIT BREAKER, LOGGING, FALLBACKS ---
-@circuit_breaker.call
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=2, min=4, max=30),
-    retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError))
-)
-def get_ai_response(convo_id, username, conversation_history, user_message, chat_id, channel, language="en", correlation_id=None):
-    """
-    Synchronous function to get AI responses using the OpenAI API.
-    Returns: ai_reply, detected_intent, handoff_triggered
-    Enhanced with circuit breaker, retry, and production-grade error handling.
-    """
-    if not correlation_id:
-        correlation_id = f"convo-{convo_id}-{int(time.time())}"
-    start_time_ai = time.time()
-    logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
-    
-    # Ensure conversation_history is a list of dicts
-    if not isinstance(conversation_history, list) or not all(isinstance(msg, dict) for msg in conversation_history):
-        logger.warning(f"Invalid conversation_history format for convo_id {convo_id}. Resetting to current message only.")
-        conversation_history = [{"role": "user", "content": user_message}]
-    elif not conversation_history: # Ensure it's not empty
-        conversation_history = [{"role": "user", "content": user_message}]
-    
-    # Add the current user message to the history if it's not already the last message
-    if not conversation_history or conversation_history[-1].get("content") != user_message or conversation_history[-1].get("role") != "user":
-        conversation_history.append({"role": "user", "content": user_message})
-    
-    # Limit history length to avoid excessive token usage (e.g., last 10 messages)
-    MAX_HISTORY_LEN = 10
-    if len(conversation_history) > MAX_HISTORY_LEN:
-        conversation_history = conversation_history[-MAX_HISTORY_LEN:]
-        logger.debug(f"Trimmed conversation history to last {MAX_HISTORY_LEN} messages for convo_id {convo_id}")
-    
-    system_prompt = f"You are a helpful assistant for Amapola Resort. Current language for response: {language}. Training document: {TRAINING_DOCUMENT[:200]}..." # Truncate for logging
-    messages_for_openai = [
-        {"role": "system", "content": system_prompt}
-    ] + conversation_history
-    
-    ai_reply = None
-    detected_intent = None
-    handoff_triggered = False
-    request_start_time = time.time()
-    try:
-        logger.info(f"[CID:{correlation_id}] Calling OpenAI API for convo_id {convo_id}. Model: gpt-4o-mini. History length: {len(messages_for_openai)}")
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages_for_openai,
-            max_tokens=300,
-            temperature=0.7
-        )
-        ai_reply = response.choices[0].message.content.strip()
-        usage = response.usage
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.info(f"[CID:{correlation_id}] [OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms")
-        
-        # Basic intent detection (example - can be expanded)
-        if "book a room" in user_message.lower() or "reservation" in user_message.lower():
-            detected_intent = "booking_inquiry"
-        if "human" in user_message.lower() or "agent" in user_message.lower() or "speak to someone" in user_message.lower():
-            handoff_triggered = True
-            logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
-            
-    except RateLimitError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "I'm currently experiencing high demand. Please try again in a moment."
-    except APITimeoutError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "I'm having trouble connecting to my brain right now. Please try again shortly."
-    except APIError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "Sorry, I encountered an issue while processing your request."
-    except AuthenticationError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
-        ai_reply = "There's an issue with my configuration. Please notify an administrator."
-    except Exception as e:
-        # Token limit error handling
-        if hasattr(e, 'message') and 'maximum context length' in str(e):
-            logger.error(f"[CID:{correlation_id}] \u274c OpenAI token limit error for convo_id {convo_id}: {str(e)}", exc_info=True)
-            ai_reply = "Sorry, your message is too long for me to process. Please shorten it."
-        else:
-            logger.error(f"[CID:{correlation_id}] \u274c Unexpected error in get_ai_response for convo_id {convo_id}: {str(e)}", exc_info=True)
-            ai_reply = "An unexpected error occurred. I've logged the issue."
-    processing_time = time.time() - start_time_ai
-    logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
-    # Sentry/monitoring hook
-    try:
-        # sentry_sdk.capture_message(f"AI response for {correlation_id}")
-        pass
-    except Exception:
-        pass
-    return ai_reply, detected_intent, handoff_triggered
-
-# Google Calendar setup with Service Account
-GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-if not GOOGLE_SERVICE_ACCOUNT_KEY:
-    logger.error("⚠️ GOOGLE_SERVICE_ACCOUNT_KEY not set in environment variables")
-    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
-try:
-    service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
-except json.JSONDecodeError as e:
-    logger.error(f"⚠️ Invalid GOOGLE_SERVICE_ACCOUNT_KEY format: {e}")
-    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY must be a valid JSON string")
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=SCOPES
-)
-service = build('calendar', 'v3', credentials=credentials)
-
-# Messaging API tokens
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
-if not TWILIO_ACCOUNT_SID:
-    logger.error("⚠️ TWILIO_ACCOUNT_SID not set in environment variables")
-    raise ValueError("TWILIO_ACCOUNT_SID not set")
-if not TWILIO_AUTH_TOKEN:
-    logger.error("⚠️ TWILIO_AUTH_TOKEN not set in environment variables")
-    raise ValueError("TWILIO_AUTH_TOKEN not set")
-if not TWILIO_WHATSAPP_NUMBER:
-    logger.error("⚠️ TWILIO_WHATSAPP_NUMBER not set in environment variables")
-    raise ValueError("TWILIO_WHATSAPP_NUMBER not set")
-WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN")
-if not WHATSAPP_API_TOKEN:
-    logger.warning("⚠️ WHATSAPP_API_TOKEN not set, some WhatsApp features may not work")
-WHATSAPP_API_URL = "https://api.whatsapp.com"
-
-# Load or define the Q&A reference document
-try:
-    logger.debug("Attempting to load qa_reference.txt")
-    with open("qa_reference.txt", "r", encoding='utf-8') as file: # Added encoding
-        TRAINING_DOCUMENT = file.read()
-    logger.info("✅ Loaded Q&A reference document")
-except Exception as e:
-    logger.warning(f"⚠️ qa_reference.txt not found or failed to load: {e}")
-    TRAINING_DOCUMENT = "Amapola Resort Chatbot Training Document... (default)"
-
+# --- DATABASE HELPERS ---
 def get_db_connection():
-    global db_pool
-    if db_pool is None:
-        logger.error("db_pool is not initialized.")
-        raise RuntimeError("db_pool is not initialized.")
-    try:
-        conn = db_pool.getconn()
-        if conn.closed:
-            logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            if db_pool is not None and hasattr(db_pool, 'closeall'):
-                db_pool.closeall()
-            db_pool = SimpleConnectionPool(
-                minconn=1,
-                maxconn=5,
-                dsn=database_url,
-                sslmode="require",
-                sslrootcert=None,
-                connect_timeout=10,
-                options="-c statement_timeout=10000"
-            )
-            conn = db_pool.getconn()
-        # Test the connection with a simple query
-        with conn.cursor() as c:
-            c.execute("SELECT 1")
-        conn.cursor_factory = DictCursor
-        logger.info("✅ Retrieved database connection from pool")
-        return conn
-    except Exception as e:
-        logger.error(f"❌ Failed to get database connection: {str(e)}", exc_info=True)
-        # If the error is SSL-related, reinitialize the pool
-        error_str = str(e).lower()
-        if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac"]):
-            logger.warning("SSL error detected, reinitializing connection pool")
-            try:
-                if db_pool is not None and hasattr(db_pool, 'closeall'):
-                    db_pool.closeall()
-                db_pool = SimpleConnectionPool(
-                    minconn=1,
-                    maxconn=5,
-                    dsn=database_url,
-                    sslmode="require",
-                    sslrootcert=None,
-                    connect_timeout=10,
-                    options="-c statement_timeout=10000"
-                )
-                conn = db_pool.getconn()
-                with conn.cursor() as c:
-                    c.execute("SELECT 1")
-                conn.cursor_factory = DictCursor
-                logger.info("✅ Reinitialized database connection pool and retrieved new connection")
-                return conn
-            except Exception as e2:
-                logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}", exc_info=True)
-        raise e
-
-def release_db_connection(conn):
-    global db_pool
-    if db_pool is None:
-        logger.error("db_pool is not initialized.")
-        return
-    if conn:
+    """Gets a database connection from the pool."""
+    if 'db' not in g:
         try:
-            if conn.closed:
-                logger.warning("Attempted to release a closed connection")
-            else:
-                db_pool.putconn(conn)
-                logger.info("✅ Database connection returned to pool")
+            if not db_pool:
+                raise Exception("Database connection pool is not initialized.")
+            g.db = db_pool.getconn()
+            logger.debug("Acquired DB connection from pool.")
         except Exception as e:
-            logger.error(f"❌ Failed to return database connection to pool: {str(e)}")
+            logger.error(f"❌ Failed to get DB connection from pool: {e}")
+            raise
+    return g.db
 
-def with_db_retry(func):
-    """Decorator to retry database operations on failure."""
-    def wrapper(*args, **kwargs):
-        retries = 5
-        for attempt in range(retries):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"❌ Database operation failed (Attempt {attempt + 1}/{retries}): {str(e)}")
-                error_str = str(e).lower()
-                if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac", "connection already closed"]):
-                    global db_pool
-                    try:
-                        db_pool.closeall()
-                        db_pool = SimpleConnectionPool(
-                            minconn=5,
-                            maxconn=30,
-                            dsn=database_url,
-                            sslmode="require",
-                            sslrootcert=None
-                        )
-                        logger.info("✅ Reinitialized database connection pool due to SSL or connection error")
-                    except Exception as e2:
-                        logger.error(f"❌ Failed to reinitialize database connection pool: {str(e2)}")
-                if attempt < retries - 1:
-                    time.sleep(2)
-                    continue
-                raise e
-    return wrapper
+@app.teardown_appcontext
+def close_db_connection(exception=None):
+    """Closes the database connection at the end of the request."""
+    db = g.pop('db', None)
+    if db is not None:
+        try:
+            if db_pool:
+                db_pool.putconn(db)
+            logger.debug("Released DB connection back to pool.")
+        except Exception as e:
+            logger.error(f"Error putting connection back to pool: {e}")
 
-# Cache the ai_enabled setting
-@with_db_retry
-def get_ai_enabled():
-    if "ai_enabled" in settings_cache:
-        cached_value, cached_timestamp = settings_cache["ai_enabled"]
-        logger.debug(f"CACHE HIT: ai_enabled='{cached_value}', timestamp='{cached_timestamp}'")
-        return cached_value, cached_timestamp
-    
+
+# --- SETTINGS HELPERS ---
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(psycopg2.Error)
+)
+def get_ai_enabled(force_db: bool = False):
+    """
+    Fetches the global AI enabled flag from cache or database.
+    Includes retry logic for database queries.
+    """
+    if not force_db and 'ai_enabled' in settings_cache:
+        cached_value, timestamp = settings_cache['ai_enabled']
+        logger.debug(f"AI enabled status '{cached_value}' from cache.")
+        return cached_value, timestamp
+
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute("SELECT value, last_updated FROM settings WHERE key = %s", ("ai_enabled",))
-        result = c.fetchone()
-        
-        if result:
-            value = result['value']
-            timestamp = result['last_updated']
-            settings_cache["ai_enabled"] = (value, timestamp)
-            logger.debug(f"CACHE MISS: Updated ai_enabled='{value}', timestamp='{timestamp}'")
+        c.execute("SELECT value, last_updated FROM settings WHERE key = 'ai_enabled'")
+        setting = c.fetchone()
+        if setting:
+            value = setting['value']
+            timestamp = setting['last_updated']
+            settings_cache['ai_enabled'] = (value, timestamp)
+            logger.info(f"AI enabled status '{value}' fetched from DB and cached.")
             return value, timestamp
         else:
-            # Default to enabled if no setting found
-            logger.warning("No ai_enabled setting found in database, defaulting to enabled")
-            return "1", datetime.now(timezone.utc).isoformat()
-    except Exception as e:
-        logger.error(f"Failed to get ai_enabled setting: {str(e)}", exc_info=True)
-        # Default to enabled on error
-        return "1", datetime.now(timezone.utc).isoformat()
+            # Default to enabled if not set
+            logger.warning("AI enabled setting not found in DB, defaulting to '1' (enabled).")
+            return "1", None
+    except psycopg2.Error as e:
+        logger.error(f"Database error fetching AI enabled status: {e}", exc_info=True)
+        raise  # Re-raise to trigger tenacity retry
     finally:
-        if conn:
-            release_db_connection(conn)
+        # The teardown context will handle closing the connection
+        pass
 
-# User model for Flask-Login
+
+# --- User class for Flask-Login ---
 class User(UserMixin):
     def __init__(self, id, username):
         self.id = id
@@ -654,8 +279,8 @@ def load_user(user_id):
         logger.error(f"Failed to load user {user_id}: {str(e)}", exc_info=True)
         return None
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 # Login route
 @app.route('/login', methods=['GET', 'POST'])
@@ -696,8 +321,8 @@ def login():
             logger.error(f"Login error for user '{username}': {str(e)}", exc_info=True)
             return render_template('login.html', error="An error occurred during login. Please try again.")
         finally:
-            if conn:
-                release_db_connection(conn)
+            # Connection closed by teardown context
+            pass
     
     return render_template('login.html')
 
@@ -759,8 +384,8 @@ def get_conversations():
         logger.error(f"Failed to get conversations: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to retrieve conversations"}), 500
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 @app.route('/api/messages/<int:convo_id>', methods=['GET'])
 @login_required
@@ -815,8 +440,8 @@ def get_messages(convo_id):
         logger.error(f"Failed to get messages for conversation {convo_id}: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to retrieve messages"}), 500
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 @app.route('/api/ai/toggle/<int:convo_id>', methods=['POST'])
 @login_required
@@ -849,8 +474,8 @@ def toggle_ai(convo_id):
         logger.error(f"Failed to toggle AI for conversation {convo_id}: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to toggle AI setting"}), 500
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 @app.route('/api/ai/global-toggle', methods=['POST'])
 @login_required
@@ -869,7 +494,7 @@ def toggle_global_ai():
         c.execute(
             """
             INSERT INTO settings (key, value, last_updated)
-            VALUES ('ai_enabled', %s, %s)
+            VALUES ('ai_enabled', %s, %s, %s)
             ON CONFLICT (key) DO UPDATE
             SET value = %s, last_updated = %s
             """,
@@ -889,8 +514,8 @@ def toggle_global_ai():
         logger.error(f"Failed to toggle global AI: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to toggle global AI setting"}), 500
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 @app.route('/api/send-message', methods=['POST'])
 @login_required
@@ -950,9 +575,7 @@ def send_message():
         # Forward message to WhatsApp if the conversation is from WhatsApp
         if conversation['channel'] == 'whatsapp' and conversation['chat_id']:
             try:
-                # Ensure send_whatsapp_message_task is a Celery task
-                from tasks import send_whatsapp_message_task
-                send_whatsapp_message_task.delay(
+                send_whatsapp_message_task.delay( # type: ignore
                     conversation['chat_id'],
                     message,
                     f"Agent: {current_user.username}"
@@ -975,8 +598,8 @@ def send_message():
         logger.error(f"Failed to send message to conversation {convo_id}: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to send message"}), 500
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 # Socket.IO events
 @socketio.on('connect')
@@ -1016,6 +639,10 @@ def handle_leave(data):
 def whatsapp_webhook():
     try:
         data = request.json
+        if not data:
+            logger.error("Received empty JSON payload for WhatsApp webhook")
+            return jsonify({"error": "Empty payload"}), 400
+
         logger.info(f"Received WhatsApp webhook: {json.dumps(data)[:200]}...")
         
         # Validate the request
@@ -1025,6 +652,10 @@ def whatsapp_webhook():
         
         from_number = data['From']
         message_body = data['Body']
+
+        if not from_number or not message_body:
+            logger.error(f"Invalid WhatsApp webhook payload. Missing 'From' or 'Body'. Payload: {data}")
+            return jsonify({"error": "Invalid payload"}), 400
         
         # Import here to avoid circular imports
         from tasks import process_whatsapp_message
@@ -1033,7 +664,7 @@ def whatsapp_webhook():
         chat_id = from_number.replace('whatsapp:', '')
         
         # Process the message asynchronously with Celery
-        task = process_whatsapp_message.delay(
+        task = process_whatsapp_message.delay( # type: ignore
             from_number=from_number,
             chat_id=chat_id,
             message_body=message_body,
@@ -1067,7 +698,7 @@ def twilio_webhook():
         chat_id = from_number.replace('whatsapp:', '')
         
         # Process the message asynchronously with Celery
-        task = process_whatsapp_message.delay(
+        task = process_whatsapp_message.delay( # type: ignore
             from_number=from_number,
             chat_id=chat_id,
             message_body=message_body,
@@ -1139,8 +770,8 @@ def get_metrics():
         logger.error(f"Failed to get metrics: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to retrieve metrics"}), 500
     finally:
-        if conn:
-            release_db_connection(conn)
+        # Connection closed by teardown context
+        pass
 
 # OpenAI diagnostic endpoints
 @app.route('/openai-diag')
@@ -1170,7 +801,7 @@ def openai_test():
         )
         
         result = response.choices[0].message.content
-        tokens = response.usage.total_tokens
+        tokens = response.usage.total_tokens if response.usage else 0
         processing_time = time.time() - start_time
         
         logger.info(f"OpenAI diagnostic test successful. Tokens: {tokens}, Time: {processing_time:.2f}s")
@@ -1260,7 +891,7 @@ def health_check():
         conn = get_db_connection()
         with conn.cursor() as c:
             c.execute("SELECT 1")
-        release_db_connection(conn)
+        
         # Check Redis connection
         if redis_client is not None:
             redis_client.ping()
