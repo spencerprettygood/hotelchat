@@ -144,20 +144,22 @@ openai_client = openai
 logger.info("OpenAI client module configured with API key.")
 
 # --- GOOGLE SERVICE ACCOUNT KEY VALIDATION ---
-try:
-    google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-    if not google_key:
-        raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
-    service_account_info = json.loads(google_key)
-    SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-    credentials = service_account.Credentials.from_service_account_info(
-        service_account_info, scopes=SCOPES
-    )
-    service = build('calendar', 'v3', credentials=credentials)
-    logger.info("✅ Google service account credentials loaded.")
-except Exception as e:
-    logger.error(f"❌ Google service account credentials failed: {e}")
-    raise
+# The following block is intentionally commented out to allow deployment without a Google service account key.
+# try:
+#     google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+#     if not google_key:
+#         raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
+#     service_account_info = json.loads(google_key)
+#     SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+#     credentials = service_account.Credentials.from_service_account_info(
+#         service_account_info, scopes=SCOPES
+#     )
+#     service = build('calendar', 'v3', credentials=credentials)
+#     logger.info("✅ Google service account credentials loaded.")
+# except Exception as e:
+#     logger.error(f"❌ Google service account credentials failed: {e}")
+#     raise
+service = None  # Mock/fallback: Google Calendar API is not configured
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
@@ -819,6 +821,8 @@ def get_availability():
     if not start_date or not end_date:
         return jsonify({"error": "Missing start or end date"}), 400
     
+    if service is None:
+        return jsonify({"error": "Google Calendar integration is not configured on this deployment."}), 501
     try:
         # Call Google Calendar API to get events
         events_result = service.events().list(
