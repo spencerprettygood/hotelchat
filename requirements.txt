@@ -5,7 +5,7 @@ Flask-Cors==5.0.0
 Flask-Login==0.6.3
 gunicorn==21.2.0
 gevent==23.9.1
-geventwebsocket==0.10.1
+# geventwebsocket==0.10.1  # Removed: not needed for Flask-SocketIO with gevent, and not available for Python 3.9+ on Render
 
 # Database
 psycopg2-binary==2.9.9
