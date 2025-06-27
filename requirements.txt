@@ -18,10 +18,12 @@ celery==5.3.6
 
 # API Clients
 openai==1.6.1
-# twilio==8.10.0
-# cachetools==5.3.2
-# google-api-python-client==2.108.0
-# google-auth==2.23.4
+twilio==8.10.0
+cachetools==5.3.2
+google-api-python-client==2.108.0
+google-auth==2.23.4
+google-auth-oauthlib==1.0.0
+google-auth-httplib2==0.2.0
 
 # Natural Language Processing
 langdetect==1.0.9
