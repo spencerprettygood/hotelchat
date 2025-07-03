@@ -6,6 +6,7 @@ Flask-Login==0.6.3
 gunicorn==21.2.0
 gevent==23.9.1
 gevent-websocket
+Werkzeug<2.1.0
 
 # Database
 psycopg2-binary==2.9.9
