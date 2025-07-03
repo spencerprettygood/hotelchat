@@ -142,17 +142,15 @@ else:
 
 # --- GOOGLE SERVICE ACCOUNT KEY VALIDATION ---
 try:
-    # Check GOOGLE_SERVICE_ACCOUNT_KEY is not None before json.loads
-    google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-    if not google_key:
-        raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
-    service_account_info = json.loads(google_key)
+    google_key_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY_PATH")
+    if not google_key_path or not os.path.exists(google_key_path):
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY_PATH not set or file does not exist")
     SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-    credentials = service_account.Credentials.from_service_account_info(
-        service_account_info, scopes=SCOPES
+    credentials = service_account.Credentials.from_service_account_file(
+        google_key_path, scopes=SCOPES
     )
     service = build('calendar', 'v3', credentials=credentials)
-    logger.info("✅ Google service account credentials loaded.")
+    logger.info("✅ Google service account credentials loaded from file.")
 except Exception as e:
     logger.error(f"❌ Google service account credentials failed: {e}")
     raise
