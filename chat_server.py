@@ -94,15 +94,19 @@ except Exception as e:
     redis_client = None
 
 # --- DATABASE CONNECTION POOL ---
-database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-db_pool = None
-try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, database_url)
-    test_conn = db_pool.getconn()
-    db_pool.putconn(test_conn)
-    logger.info("PostgreSQL connection pool initialized and connection verified.")
-except Exception as e:
-    logger.error(f"PostgreSQL connection failed: {e}")
+if DATABASE_URL:
+    database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    db_pool = None
+    try:
+        db_pool = SimpleConnectionPool(1, 10, database_url)
+        test_conn = db_pool.getconn()
+        db_pool.putconn(test_conn)
+        logger.info("PostgreSQL connection pool initialized and connection verified.")
+    except Exception as e:
+        logger.error(f"PostgreSQL connection failed: {e}")
+        db_pool = None
+else:
+    database_url = None
     db_pool = None
 
 # --- CELERY TASKS (REMOVED) ---
@@ -764,46 +768,61 @@ def send_message():
 @socketio.on('connect')
 def handle_connect():
     # Allow all connections, but gate actions by authentication
-    logger.info(f"SocketIO: A client connected with sid: {request.sid}")
+    sid = getattr(request, 'sid', None)
+    if sid is None:
+        sid = request.args.get('sid', 'unknown')
+    logger.info(f"SocketIO: A client connected with sid: {sid}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    logger.info(f"SocketIO: Client {request.sid} disconnected")
+    sid = getattr(request, 'sid', None)
+    if sid is None:
+        sid = request.args.get('sid', 'unknown')
+    logger.info(f"SocketIO: Client {sid} disconnected")
 
 @socketio.on('join')
 def handle_join(data):
+    sid = getattr(request, 'sid', None)
+    if sid is None:
+        sid = request.args.get('sid', 'unknown')
     if 'convo_id' not in data:
-        logger.warning(f"Join event missing convo_id from {request.sid}")
+        logger.warning(f"Join event missing convo_id from {sid}")
         return
 
     convo_id = data['convo_id']
     room = f"convo_{convo_id}"
     join_room(room)
-    logger.info(f"Client {request.sid} joined room: {room}")
+    logger.info(f"Client {sid} joined room: {room}")
 
 @socketio.on('leave')
 def handle_leave(data):
+    sid = getattr(request, 'sid', None)
+    if sid is None:
+        sid = request.args.get('sid', 'unknown')
     if 'convo_id' not in data:
-        logger.warning(f"Leave event missing convo_id from {request.sid}")
+        logger.warning(f"Leave event missing convo_id from {sid}")
         return
 
     convo_id = data['convo_id']
     room = f"convo_{convo_id}"
     leave_room(room)
-    logger.info(f"Client {request.sid} left room: {room}")
+    logger.info(f"Client {sid} left room: {room}")
 
 @socketio.on('guest_message')
 def handle_guest_message(data):
+    sid = getattr(request, 'sid', None)
+    if sid is None:
+        sid = request.args.get('sid', 'unknown')
     message = data.get('message')
     chat_id = data.get('chat_id')  # Persisted chat_id from client-side
 
     if not message:
-        logger.warning(f"Guest message from {request.sid} is empty.")
+        logger.warning(f"Guest message from {sid} is empty.")
         return
 
     # If no chat_id is provided (e.g., first message), create one.
     if not chat_id:
-        chat_id = f"web_{request.sid}"
+        chat_id = f"web_{sid}"
         logger.info(f"New guest session. Assigning chat_id: {chat_id}")
 
     # Emit back the chat_id so the client can persist it for the session
@@ -829,15 +848,18 @@ def handle_guest_message(data):
 
 @socketio.on('agent_message')
 def handle_agent_message(data):
+    sid = getattr(request, 'sid', None)
+    if sid is None:
+        sid = request.args.get('sid', 'unknown')
     if not current_user.is_authenticated:
-        logger.warning(f"Unauthenticated agent_message attempt from {request.sid}")
+        logger.warning(f"Unauthenticated agent_message attempt from {sid}")
         return
 
     convo_id = data.get('convo_id')
     message = data.get('message')
 
     if not convo_id or not message:
-        logger.warning(f"Agent message missing convo_id or message from {request.sid}")
+        logger.warning(f"Agent message missing convo_id or message from {sid}")
         return
 
     # Use the centralized helper function to handle the message
