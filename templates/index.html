@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amapola Resort - Chat with Us</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h2>Amapola Resort Support</h2>
+            <p>Ask us anything!</p>
+        </div>
+        <div class="chat-box" id="chatBox">
+            <!-- Messages will be appended here -->
+        </div>
+        <div class="chat-input">
+            <input type="text" id="userInput" class="form-control" placeholder="Type your message...">
+            <button id="sendButton" class="btn btn-primary">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const socket = io();
+            const chatBox = document.getElementById('chatBox');
+            const userInput = document.getElementById('userInput');
+            const sendButton = document.getElementById('sendButton');
+
+            let conversationId = localStorage.getItem('conversationId');
+            let chatId = localStorage.getItem('chatId');
+
+            function addMessage(message, sender) {
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('message', sender);
+                messageElement.textContent = message;
+                chatBox.appendChild(messageElement);
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                if (conversationId) {
+                    socket.emit('join', { convo_id: conversationId });
+                }
+            });
+
+            socket.on('new_message', (data) => {
+                if (data.convo_id === conversationId) {
+                    addMessage(data.message, data.sender);
+                }
+            });
+
+            socket.on('conversation_started', (data) => {
+                conversationId = data.convo_id;
+                chatId = data.chat_id;
+                localStorage.setItem('conversationId', conversationId);
+                localStorage.setItem('chatId', chatId);
+                socket.emit('join', { convo_id: conversationId });
+            });
+
+            function sendMessage() {
+                const message = userInput.value.trim();
+                if (message) {
+                    addMessage(message, 'user');
+                    socket.emit('guest_message', {
+                        message: message,
+                        convo_id: conversationId,
+                        chat_id: chatId
+                    });
+                    userInput.value = '';
+                }
+            }
+
+            sendButton.addEventListener('click', sendMessage);
+            userInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

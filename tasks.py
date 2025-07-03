@@ -256,21 +256,17 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         # Emit to Socket.IO that a new message arrived (for dashboard)
         try:
             # Emit to Socket.IO using the write-only KombuManager
-            try:
-                room = f"conversation_{convo_id}"
-                # Use the 'sio' object to emit the message
-                sio.emit('new_message', {
-                    'convo_id': convo_id,
-                    'message': message_body,
-                    'sender': 'user',
-                    'username': username,
-                    'timestamp': user_timestamp,
-                    'chat_id': chat_id,
-                    'channel': 'whatsapp'
-                }, to=room)
-                logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
-            except Exception as e:
-                logger.error(f"Failed to emit Socket.IO event: {str(e)}")
+            room = f"convo_{convo_id}"
+            sio.emit('new_message', {
+                'id': message_id,
+                'convo_id': convo_id,
+                'username': username,
+                'message': message_body,
+                'sender': 'user',
+                'timestamp': user_timestamp,
+                'chat_id': chat_id,
+                'channel': 'whatsapp'
+            }, to=room)
             logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
         except Exception as e:
             logger.error(f"Failed to emit Socket.IO event: {str(e)}")

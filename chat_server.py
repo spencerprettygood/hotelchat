@@ -204,120 +204,21 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# --- ENVIRONMENT VARIABLES ---
-SECRET_KEY = os.getenv("SECRET_KEY", "dev_secret_key")
-app.config["SECRET_KEY"] = SECRET_KEY
 
-# --- DEPENDENCY CHECKS ---
-# Ensure required packages are installed: redis, psycopg2
-try:
-    import redis
-except ImportError:
-    logger.error("Missing dependency: redis. Please install with 'pip install redis'.")
-    raise
-try:
-    import psycopg2
-    import psycopg2.pool
-except ImportError:
-    logger.error("Missing dependency: psycopg2. Please install with 'pip install psycopg2-binary'.")
-    raise
-
-# --- REDIS CLIENT ---
-REDIS_URL = os.getenv("REDIS_URL")
-if not REDIS_URL:
-    logger.error("REDIS_URL not set in environment variables")
-    raise ValueError("REDIS_URL not set")
-try:
-    redis_client = redis.Redis.from_url(REDIS_URL)
-    redis_client.ping()
-    logger.info("Redis client initialized and connection verified.")
-except Exception as e:
-    logger.error(f"Redis connection failed: {e}")
-    redis_client = None
-
-# --- DATABASE CONNECTION POOL ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    logger.error("DATABASE_URL not set in environment variables")
-    raise ValueError("DATABASE_URL not set")
-database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, database_url)
-    test_conn = db_pool.getconn()
-    db_pool.putconn(test_conn)
-    logger.info("PostgreSQL connection pool initialized and connection verified.")
-except Exception as e:
-    logger.error(f"PostgreSQL connection failed: {e}")
-    db_pool = None
-
-# --- CELERY TASKS ---
-# Import Celery tasks at the top to avoid shadowing and ensure proper initialization
-try:
-    from tasks import process_whatsapp_message, send_whatsapp_message_task
-    # Ensure these are Celery tasks (should have .delay)
-    if not (hasattr(process_whatsapp_message, 'delay') and hasattr(send_whatsapp_message_task, 'delay')):
-        logger.error("Celery tasks are not properly decorated. Check @celery_app.task in tasks.py.")
-        process_whatsapp_message = None
-        send_whatsapp_message_task = None
-except Exception as e:
-    logger.error(f"Celery tasks import failed: {e}")
-    process_whatsapp_message = None
-    send_whatsapp_message_task = None
-
-# Initialize connection pool
-try:
-    database_url = database_url.replace("postgres://", "postgresql://", 1)
-    logger.info(f"Using DATABASE_URL: {database_url}")
-except NameError:
-    logger.error("❌ DATABASE_URL environment variable not set")
-    raise ValueError("DATABASE_URL environment variable not set")
-
-# Use sslmode=require
-if "sslmode" not in database_url:
-    database_url += "?sslmode=require"
-    logger.info(f"Added sslmode=require to DATABASE_URL: {database_url}")
-
-db_pool = SimpleConnectionPool(
-    minconn=1,  # Start with 1 connection
-    maxconn=5,  # Limit to 5 connections to avoid overloading
-    dsn=database_url,
-    sslmode="require",  # Enforce SSL
-    sslrootcert=None,  # Let psycopg2 handle SSL certificates
-    connect_timeout=10,  # 10-second timeout for connections
-    options="-c statement_timeout=10000"  # Set a 10-second statement timeout
-)
-logger.info("✅ Database connection pool initialized with minconn=1, maxconn=5, connect_timeout=10")
+# --- GLOBAL CACHES & CONFIGS ---
 
 # Cache for ai_enabled setting with 5-second TTL
 settings_cache = TTLCache(maxsize=1, ttl=5) # type: ignore
 
-# Import tasks after app and logger are initialized to avoid circular imports
-# logger.debug("Importing tasks module...")
-# from tasks import process_whatsapp_message, send_whatsapp_message_task # Commented out global import
-# logger.debug("Tasks module imported.")
-
-# Validate OpenAI API key
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logger.error("⚠️ OPENAI_API_KEY not set in environment variables")
-    raise ValueError("OPENAI_API_KEY not set")
-
-# OpenAI client initialization (v1.x and v0.x compatibility)
-logger.info("Initializing OpenAI client...")
+# Load or define the Q&A reference document
 try:
-    # Try v1.x style
-    openai_client = OpenAI(
-        api_key=OPENAI_API_KEY,
-        timeout=30.0
-    )
-    # Test attribute to ensure v1.x
-    _ = openai_client.chat.completions
-    logger.info("OpenAI client (v1.x) initialized.")
-except AttributeError:
-    # Fallback to v0.x style
-    openai.api_key = OPENAI_API_KEY
-    openai_client = openai
-    logger.info("OpenAI client (v0.x) initialized.")
+    logger.debug("Attempting to load qa_reference.txt")
+    with open("qa_reference.txt", "r", encoding='utf-8') as file:
+        TRAINING_DOCUMENT = file.read()
+    logger.info("✅ Loaded Q&A reference document")
+except Exception as e:
+    logger.warning(f"⚠️ qa_reference.txt not found or failed to load: {e}")
+    TRAINING_DOCUMENT = "Amapola Resort Chatbot Training Document... (default)"
 
 # Semaphore for controlling concurrent OpenAI API calls
 try:
@@ -325,6 +226,7 @@ try:
 except Exception:
     OPENAI_CONCURRENCY = 5
 logger.info(f"OpenAI concurrency limit: {OPENAI_CONCURRENCY}")
+
 
 # --- CIRCUIT BREAKER IMPLEMENTATION ---
 class CircuitBreaker:
@@ -427,24 +329,24 @@ def get_ai_response(convo_id, username, conversation_history, user_message, chat
             logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
             
     except RateLimitError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] ❌ OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
         ai_reply = "I'm currently experiencing high demand. Please try again in a moment."
     except APITimeoutError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] ❌ OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
         ai_reply = "I'm having trouble connecting to my brain right now. Please try again shortly."
     except APIError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] ❌ OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
         ai_reply = "Sorry, I encountered an issue while processing your request."
     except AuthenticationError as e:
-        logger.error(f"[CID:{correlation_id}] \u274c OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] ❌ OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
         ai_reply = "There's an issue with my configuration. Please notify an administrator."
     except Exception as e:
         # Token limit error handling
         if hasattr(e, 'message') and 'maximum context length' in str(e):
-            logger.error(f"[CID:{correlation_id}] \u274c OpenAI token limit error for convo_id {convo_id}: {str(e)}", exc_info=True)
+            logger.error(f"[CID:{correlation_id}] ❌ OpenAI token limit error for convo_id {convo_id}: {str(e)}", exc_info=True)
             ai_reply = "Sorry, your message is too long for me to process. Please shorten it."
         else:
-            logger.error(f"[CID:{correlation_id}] \u274c Unexpected error in get_ai_response for convo_id {convo_id}: {str(e)}", exc_info=True)
+            logger.error(f"[CID:{correlation_id}] ❌ Unexpected error in get_ai_response for convo_id {convo_id}: {str(e)}", exc_info=True)
             ai_reply = "An unexpected error occurred. I've logged the issue."
     processing_time = time.time() - start_time_ai
     logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
@@ -456,50 +358,7 @@ def get_ai_response(convo_id, username, conversation_history, user_message, chat
         pass
     return ai_reply, detected_intent, handoff_triggered
 
-# Google Calendar setup with Service Account
-GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-if not GOOGLE_SERVICE_ACCOUNT_KEY:
-    logger.error("⚠️ GOOGLE_SERVICE_ACCOUNT_KEY not set in environment variables")
-    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
-try:
-    service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
-except json.JSONDecodeError as e:
-    logger.error(f"⚠️ Invalid GOOGLE_SERVICE_ACCOUNT_KEY format: {e}")
-    raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY must be a valid JSON string")
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=SCOPES
-)
-service = build('calendar', 'v3', credentials=credentials)
-
-# Messaging API tokens
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
-if not TWILIO_ACCOUNT_SID:
-    logger.error("⚠️ TWILIO_ACCOUNT_SID not set in environment variables")
-    raise ValueError("TWILIO_ACCOUNT_SID not set")
-if not TWILIO_AUTH_TOKEN:
-    logger.error("⚠️ TWILIO_AUTH_TOKEN not set in environment variables")
-    raise ValueError("TWILIO_AUTH_TOKEN not set")
-if not TWILIO_WHATSAPP_NUMBER:
-    logger.error("⚠️ TWILIO_WHATSAPP_NUMBER not set in environment variables")
-    raise ValueError("TWILIO_WHATSAPP_NUMBER not set")
-WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN")
-if not WHATSAPP_API_TOKEN:
-    logger.warning("⚠️ WHATSAPP_API_TOKEN not set, some WhatsApp features may not work")
-WHATSAPP_API_URL = "https://api.whatsapp.com"
-
-# Load or define the Q&A reference document
-try:
-    logger.debug("Attempting to load qa_reference.txt")
-    with open("qa_reference.txt", "r", encoding='utf-8') as file: # Added encoding
-        TRAINING_DOCUMENT = file.read()
-    logger.info("✅ Loaded Q&A reference document")
-except Exception as e:
-    logger.warning(f"⚠️ qa_reference.txt not found or failed to load: {e}")
-    TRAINING_DOCUMENT = "Amapola Resort Chatbot Training Document... (default)"
-
+# --- DATABASE HELPER FUNCTIONS ---
 def get_db_connection():
     global db_pool
     if db_pool is None:
@@ -600,7 +459,7 @@ def with_db_retry(func):
                 raise e
     return wrapper
 
-# Cache the ai_enabled setting
+# --- APPLICATION HELPERS ---
 @with_db_retry
 def get_ai_enabled():
     if "ai_enabled" in settings_cache:
@@ -633,6 +492,7 @@ def get_ai_enabled():
         if conn:
             release_db_connection(conn)
 
+# --- USER AUTHENTICATION ---
 # User model for Flask-Login
 class User(UserMixin):
     def __init__(self, id, username):
@@ -656,6 +516,8 @@ def load_user(user_id):
     finally:
         if conn:
             release_db_connection(conn)
+
+# --- ROUTES ---
 
 # Login route
 @app.route('/login', methods=['GET', 'POST'])
@@ -710,6 +572,10 @@ def logout():
     return redirect('/login')
 
 @app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/dashboard')
 @login_required
 def dashboard():
     return render_template('dashboard.html', username=current_user.username)
@@ -981,329 +847,102 @@ def send_message():
 # Socket.IO events
 @socketio.on('connect')
 def handle_connect():
-    if not current_user.is_authenticated:
-        return False
-    logger.info(f"SocketIO: User {current_user.username} connected")
-    return True
+    # Allow all connections, but gate actions by authentication
+    logger.info(f"SocketIO: A client connected with sid: {request.sid}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    if current_user.is_authenticated:
-        logger.info(f"SocketIO: User {current_user.username} disconnected")
+    logger.info(f"SocketIO: Client {request.sid} disconnected")
 
 @socketio.on('join')
 def handle_join(data):
-    if not current_user.is_authenticated:
+    if 'convo_id' not in data:
+        logger.warning(f"Join event missing convo_id from {request.sid}")
         return
-    
-    if 'convo_id' in data:
-        room = f"convo_{data['convo_id']}"
-        join_room(room)
-        logger.info(f"SocketIO: User {current_user.username} joined room {room}")
+
+    convo_id = data['convo_id']
+    room = f"convo_{convo_id}"
+    join_room(room)
+    logger.info(f"Client {request.sid} joined room: {room}")
 
 @socketio.on('leave')
 def handle_leave(data):
-    if not current_user.is_authenticated:
+    if 'convo_id' not in data:
+        logger.warning(f"Leave event missing convo_id from {request.sid}")
         return
+
+    convo_id = data['convo_id']
+    room = f"convo_{convo_id}"
+    leave_room(room)
+    logger.info(f"Client {request.sid} left room: {room}")
+
+@socketio.on('guest_message')
+def handle_guest_message(data):
+    message = data.get('message')
+    convo_id = data.get('convo_id')
+    chat_id = data.get('chat_id') # This might be the guest's socket sid
+
+    if not message:
+        return
+
+    # Use a Celery task to process the message to avoid blocking
+    from tasks import process_whatsapp_message # Local import to avoid circular dependency
     
-    if 'convo_id' in data:
-        room = f"convo_{data['convo_id']}"
-        leave_room(room)
-        logger.info(f"SocketIO: User {current_user.username} left room {room}")
+    # If it's a new chat, generate a unique chat_id
+    if not chat_id:
+        chat_id = f"web_{request.sid}"
 
-# WhatsApp webhook
-@app.route('/api/whatsapp/webhook', methods=['POST'])
-def whatsapp_webhook():
-    try:
-        data = request.json
-        logger.info(f"Received WhatsApp webhook: {json.dumps(data)[:200]}...")
-        
-        # Validate the request
-        if 'From' not in data or 'Body' not in data:
-            logger.error("Invalid WhatsApp webhook payload")
-            return jsonify({"error": "Invalid payload"}), 400
-        
-        from_number = data['From']
-        message_body = data['Body']
-        
-        # Import here to avoid circular imports
-        from tasks import process_whatsapp_message
-        
-        # Extract chat_id from the phone number
-        chat_id = from_number.replace('whatsapp:', '')
-        
-        # Process the message asynchronously with Celery
-        task = process_whatsapp_message.delay(
-            from_number=from_number,
-            chat_id=chat_id,
-            message_body=message_body,
-            user_timestamp=datetime.now(timezone.utc).isoformat()
-        )
-        
-        logger.info(f"WhatsApp message queued for processing. Task ID: {task.id}")
-        
-        return jsonify({"success": True})
-    except Exception as e:
-        logger.error(f"Error processing WhatsApp webhook: {str(e)}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+    # Simulate the data structure expected by the celery task
+    process_whatsapp_message.delay(
+        from_number=chat_id, # Using chat_id as the identifier
+        chat_id=chat_id,
+        message_body=message,
+        user_timestamp=datetime.now(timezone.utc).isoformat()
+    )
+    logger.info(f"Guest message from {chat_id} queued for processing.")
 
-# Twilio WhatsApp webhook
-@app.route('/api/twilio/webhook', methods=['POST'])
-def twilio_webhook():
-    try:
-        from_number = request.form.get('From', '')
-        message_body = request.form.get('Body', '')
-        
-        if not from_number or not message_body:
-            logger.error("Invalid Twilio webhook payload")
-            return Response("<Response></Response>", mimetype='text/xml')
-        
-        logger.info(f"Received Twilio message from {from_number}: {message_body[:100]}...")
-        
-        # Import here to avoid circular imports
-        from tasks import process_whatsapp_message
-        
-        # Extract chat_id from the phone number
-        chat_id = from_number.replace('whatsapp:', '')
-        
-        # Process the message asynchronously with Celery
-        task = process_whatsapp_message.delay(
-            from_number=from_number,
-            chat_id=chat_id,
-            message_body=message_body,
-            user_timestamp=datetime.now(timezone.utc).isoformat()
-        )
-        
-        logger.info(f"Twilio message queued for processing. Task ID: {task.id}")
-        
-        return Response("<Response></Response>", mimetype='text/xml')
-    except Exception as e:
-        logger.error(f"Error processing Twilio webhook: {str(e)}", exc_info=True)
-        return Response("<Response></Response>", mimetype='text/xml')
-
-# Performance monitoring dashboard
-@app.route('/admin/dashboard')
+@socketio.on('agent_message')
 @login_required
-def performance_dashboard():
-    return render_template('performance_dashboard.html')
+def handle_agent_message(data):
+    if not current_user.is_authenticated:
+        logger.warning(f"Unauthenticated agent_message attempt from {request.sid}")
+        return
 
-# Performance metrics API
-@app.route('/api/metrics', methods=['GET'])
-@login_required
-def get_metrics():
-    conn = None
+    convo_id = data.get('convo_id')
+    message = data.get('message')
+
+    if not convo_id or not message:
+        logger.warning(f"Agent message missing convo_id or message from {request.sid}")
+        return
+
+    # The /api/send-message endpoint already handles all logic including DB and whatsapp push
+    # We can call it directly or just emit back to the room
+    timestamp = datetime.now(timezone.utc).isoformat()
+    response_data = {
+        'id': int(time.time() * 1000), # Mock ID
+        'convo_id': convo_id,
+        'username': current_user.username,
+        'message': message,
+        'sender': 'agent',
+        'timestamp': timestamp
+    }
+    room = f"convo_{convo_id}"
+    socketio.emit('new_message', response_data, to=room)
+    logger.info(f"Agent {current_user.username} sent message to room {room}")
+
+    # Also persist it and send to WhatsApp if needed
+    # This can be done by calling the existing send_message logic or a new celery task
+    # For simplicity, let's reuse the existing REST logic via a request
+    # In a larger app, this would be a shared internal function.
     try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        
-        metrics = {}
-        
-        # Count conversations
-        c.execute("SELECT COUNT(*) as count FROM conversations")
-        metrics['conversation_count'] = c.fetchone()['count']
-        
-        # Count messages
-        c.execute("SELECT COUNT(*) as count FROM messages")
-        metrics['message_count'] = c.fetchone()['count']
-        
-        # Count users
-        c.execute("SELECT COUNT(*) as count FROM users")
-        metrics['user_count'] = c.fetchone()['count']
-        
-        # Message statistics by sender
-        c.execute(
-            """
-            SELECT sender, COUNT(*) as count
-            FROM messages
-            GROUP BY sender
-            """
-        )
-        sender_stats = {}
-        for row in c.fetchall():
-            sender_stats[row['sender']] = row['count']
-        metrics['sender_stats'] = sender_stats
-        
-        # Messages in the last 24 hours
-        c.execute(
-            """
-            SELECT COUNT(*) as count
-            FROM messages
-            WHERE timestamp > %s
-            """,
-            ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),)
-        )
-        metrics['messages_last_24h'] = c.fetchone()['count']
-        
-        return jsonify(metrics)
+        with app.test_request_context('/api/send-message', method='POST', json=data):
+            g.user = current_user # Manually set the user for the request context
+            send_message()
     except Exception as e:
-        logger.error(f"Failed to get metrics: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to retrieve metrics"}), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
+        logger.error(f"Failed to persist agent message for convo {convo_id}: {e}")
 
-# OpenAI diagnostic endpoints
-@app.route('/openai-diag')
-@login_required
-def openai_diag():
-    return render_template('openai_diag.html')
 
-@app.route('/api/openai-test', methods=['POST'])
-@login_required
-def openai_test():
-    data = request.json
-    if not data or 'prompt' not in data:
-        return jsonify({"error": "Missing prompt"}), 400
-    
-    prompt = data['prompt']
-    if not prompt:
-        return jsonify({"error": "Prompt cannot be empty"}), 400
-    
-    try:
-        start_time = time.time()
-        
-        # Create a simple prompt for testing
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=100
-        )
-        
-        result = response.choices[0].message.content
-        tokens = response.usage.total_tokens
-        processing_time = time.time() - start_time
-        
-        logger.info(f"OpenAI diagnostic test successful. Tokens: {tokens}, Time: {processing_time:.2f}s")
-        
-        return jsonify({
-            "success": True,
-            "result": result,
-            "tokens": tokens,
-            "time": processing_time
-        })
-    except Exception as e:
-        logger.error(f"OpenAI diagnostic test failed: {str(e)}", exc_info=True)
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-# Calendar API for resort availability
-@app.route('/api/calendar/availability', methods=['GET'])
-@login_required
-def get_availability():
-    start_date = request.args.get('start')
-    end_date = request.args.get('end')
-    
-    if not start_date or not end_date:
-        return jsonify({"error": "Missing start or end date"}), 400
-    
-    try:
-        # Call Google Calendar API to get events
-        events_result = service.events().list(
-            calendarId='primary',
-            timeMin=f"{start_date}T00:00:00Z",
-            timeMax=f"{end_date}T23:59:59Z",
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        events = events_result.get('items', [])
-        
-        # Process events to determine availability
-        availability = {}
-        current_date = datetime.fromisoformat(start_date)
-        end = datetime.fromisoformat(end_date)
-        
-        while current_date <= end:
-            date_str = current_date.strftime('%Y-%m-%d')
-            availability[date_str] = {
-                "standard": True,
-                "deluxe": True,
-                "suite": True
-            }
-            current_date += timedelta(days=1)
-        
-        # Mark dates as unavailable based on events
-        for event in events:
-            if 'summary' not in event:
-                continue
-            
-            summary = event['summary'].lower()
-            start = event['start'].get('dateTime', event['start'].get('date'))
-            end = event['end'].get('dateTime', event['end'].get('date'))
-            
-            # Simplistic parsing for demonstration
-            if 'standard' in summary:
-                room_type = 'standard'
-            elif 'deluxe' in summary:
-                room_type = 'deluxe'
-            elif 'suite' in summary:
-                room_type = 'suite'
-            else:
-                continue
-            
-            # Mark as unavailable
-            event_date = start.split('T')[0] if 'T' in start else start
-            if event_date in availability:
-                availability[event_date][room_type] = False
-        
-        return jsonify(availability)
-    except Exception as e:
-        logger.error(f"Failed to get calendar availability: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to retrieve availability"}), 500
-
-# Health check endpoint
-@app.route('/health')
-def health_check():
-    try:
-        # Check database connection
-        conn = get_db_connection()
-        with conn.cursor() as c:
-            c.execute("SELECT 1")
-        release_db_connection(conn)
-        # Check Redis connection
-        if redis_client is not None:
-            redis_client.ping()
-        # Check OpenAI API key
-        if not os.getenv("OPENAI_API_KEY"):
-            return jsonify({
-                "status": "warning",
-                "database": "ok",
-                "redis": "ok",
-                "openai": "not configured",
-                "message": "OpenAI API key not configured"
-            })
-        # Check Google credentials
-        try:
-            # Check GOOGLE_SERVICE_ACCOUNT_KEY is not None before json.loads
-            google_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-            if not google_key:
-                raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY not set")
-            _ = service_account.Credentials.from_service_account_info(json.loads(google_key), scopes=SCOPES)
-        except Exception:
-            return jsonify({
-                "status": "warning",
-                "database": "ok",
-                "redis": "ok",
-                "openai": "ok",
-                "google": "not configured"
-            })
-        return jsonify({
-            "status": "ok",
-            "database": "ok",
-            "redis": "ok",
-            "openai": "ok",
-            "google": "ok",
-            "uptime": "unknown"
-        })
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}", exc_info=True)
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-# Start the server
+# Main entry point
 if __name__ == '__main__':
     logger.info("🚀 Starting HotelChat server...")
     socketio.run(app, debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
