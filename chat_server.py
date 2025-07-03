@@ -490,13 +490,12 @@ def dashboard():
     return render_template('dashboard.html', username=current_user.username)
 
 @app.route('/live-messages')
-@login_required
 def live_messages():
-    return render_template('live-messages.html', username=current_user.username)
+    username = current_user.username if current_user.is_authenticated else 'Guest'
+    return render_template('live-messages.html', username=username)
 
 # Main application endpoints
 @app.route('/api/conversations', methods=['GET'])
-@login_required
 def get_conversations():
     conn = None
     try:
@@ -538,7 +537,6 @@ def get_conversations():
             release_db_connection(conn)
 
 @app.route('/api/messages/<int:convo_id>', methods=['GET'])
-@login_required
 def get_messages(convo_id):
     conn = None
     try:
@@ -594,7 +592,6 @@ def get_messages(convo_id):
             release_db_connection(conn)
 
 @app.route('/api/ai/toggle/<int:convo_id>', methods=['POST'])
-@login_required
 def toggle_ai(convo_id):
     conn = None
     try:
@@ -628,7 +625,6 @@ def toggle_ai(convo_id):
             release_db_connection(conn)
 
 @app.route('/api/ai/global-toggle', methods=['POST'])
-@login_required
 def toggle_global_ai():
     conn = None
     try:
@@ -742,7 +738,6 @@ def _send_agent_message(convo_id, message, username):
             release_db_connection(conn)
 
 @app.route('/api/send-message', methods=['POST'])
-@login_required
 def send_message():
     data = request.json
     if not data or 'message' not in data or 'convo_id' not in data:
@@ -827,8 +822,8 @@ def handle_guest_message(data):
         logger.error(f"Failed to queue guest message for processing: {e}", exc_info=True)
 
 
+
 @socketio.on('agent_message')
-@login_required
 def handle_agent_message(data):
     if not current_user.is_authenticated:
         logger.warning(f"Unauthenticated agent_message attempt from {request.sid}")
