@@ -26,13 +26,12 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
-import redis as sync_redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from functools import wraps
-import threading
 from celery_app import celery_app
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 DetectorFactory.seed = 0
 
@@ -157,6 +156,10 @@ except Exception as e:
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["SECRET_KEY"] = SECRET_KEY
+
+# Add ProxyFix to handle headers from Render's load balancer
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 CORS(app)
 
 socketio = SocketIO(
@@ -176,7 +179,7 @@ socketio = SocketIO(
 
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login'
+login_manager.login_view = 'login' # type: ignore
 
 
 # --- GLOBAL CACHES & CONFIGS ---
