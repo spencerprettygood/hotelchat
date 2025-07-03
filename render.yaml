@@ -3,14 +3,14 @@ services:
   - type: web
     name: hotelchat-web
     env: python
-    buildCommand: pip install -r requirements.txt
     runtime: python3
-    startCommand: gunicorn -k gevent -w 4 chat_server:app --config gunicorn.conf.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn chat_server:app --config gunicorn.conf.py
     plan: standard
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.13
+        value: "3.11.9"
       - key: LOG_LEVEL
         value: INFO
       - key: WEB_CONCURRENCY
@@ -27,7 +27,7 @@ services:
           type: redis
           property: connectionString
       - key: SECRET_KEY
-        sync: false
+        generateValue: true
       - key: OPENAI_API_KEY
         sync: false
       - key: TWILIO_ACCOUNT_SID
@@ -43,13 +43,13 @@ services:
   - type: worker
     name: hotelchat-worker
     env: python
-    buildCommand: pip install -r requirements.txt
     runtime: python3
+    buildCommand: pip install -r requirements.txt
     startCommand: celery -A tasks worker -l INFO -Q default,whatsapp --concurrency=3
     plan: standard
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.13
+        value: "3.11.9"
       - key: LOG_LEVEL
         value: INFO
       - key: DATABASE_URL
@@ -74,13 +74,11 @@ services:
       - key: GOOGLE_SERVICE_ACCOUNT_KEY
         sync: false
 
-# Database and Redis
-databases:
-  - name: hotelchat-db
-    plan: standard
-    
-services:
   - type: redis
     name: hotelchat-redis
     plan: standard
     ipAllowList: []
+
+databases:
+  - name: hotelchat-db
+    plan: standard
