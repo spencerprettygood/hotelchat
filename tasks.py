@@ -1,3 +1,5 @@
+from __future__ import absolute_import, unicode_literals
+from celery_app import celery_app
 from celery import Celery
 import os
 import psycopg2
@@ -13,6 +15,7 @@ from langdetect import detect, LangDetectException
 from openai import RateLimitError, APIError, AuthenticationError, APITimeoutError
 import socketio
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from ai_helpers import get_ai_response
 
 # Configure logging
 logger = logging.getLogger("chat_server")
@@ -23,26 +26,6 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-# Initialize Celery
-BROKER_URL = os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379')
-celery_app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)
-celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
-    enable_utc=True,
-    worker_concurrency=9,
-    task_routes={
-        'tasks.process_whatsapp_message': {'queue': 'whatsapp'},
-        'tasks.send_whatsapp_message_task': {'queue': 'whatsapp'}
-    },
-    task_default_queue='default',
-    broker_connection_retry_on_startup=True,
-    task_acks_late=True,
-    task_reject_on_worker_lost=True
-)
-
 # Redis client for caching
 redis_client = redis.Redis.from_url(
     os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'),
@@ -52,7 +35,7 @@ redis_client = redis.Redis.from_url(
 
 # Create a SocketIO client for Celery to emit messages
 # This client only writes to the message queue and doesn't run a server.
-sio = socketio.KombuManager(BROKER_URL, write_only=True)
+sio = socketio.KombuManager(os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), write_only=True)
 
 # Twilio client for WhatsApp
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -104,17 +87,39 @@ def send_to_dead_letter_queue(message, reason, correlation_id=None):
     except Exception as e:
         logger.critical(f"[DLQ][CID:{correlation_id}] Failed to write to DLQ: {str(e)}")
 
-@celery_app.task(name="tasks.process_whatsapp_message", bind=True, max_retries=3)
-def process_whatsapp_message(self, from_number, chat_id, message_body, user_timestamp):
+@celery_app.task(name="tasks.send_whatsapp_message_task", bind=True, max_retries=3, default_retry_delay=60)
+def send_whatsapp_message_task(self, to_number, message_body, sender_info="system"):
+    """Sends a WhatsApp message via Twilio."""
+    correlation_id = self.request.id or "N/A"
+    logger.info(f"[CID:{correlation_id}] Sending WhatsApp message to {to_number}")
+    if not twilio_client:
+        logger.error(f"[CID:{correlation_id}] Twilio client not initialized. Cannot send message.")
+        # No retry if client is not configured
+        return
+
+    try:
+        message = twilio_client.messages.create(
+            from_=f'whatsapp:{TWILIO_WHATSAPP_NUMBER}',
+            body=message_body,
+            to=f'whatsapp:{to_number}'
+        )
+        logger.info(f"[CID:{correlation_id}] Successfully sent message SID {message.sid} to {to_number}")
+    except Exception as e:
+        logger.error(f"[CID:{correlation_id}] Failed to send WhatsApp message to {to_number}: {e}", exc_info=True)
+        # Retry on failure
+        raise self.retry(exc=e)
+
+
+@celery_app.task(name="tasks.process_incoming_message", bind=True, max_retries=3)
+def process_incoming_message(self, from_number, chat_id, message_body, user_timestamp, channel, sid=None):
     """
-    Process an incoming WhatsApp message.
+    Process an incoming message from any channel (WhatsApp, Web).
     Enhanced: error categorization, retry, DLQ, correlation ID, Sentry hook.
     """
-    from chat_server import get_ai_response
     import uuid
     correlation_id = str(uuid.uuid4())
     start_time = time.time()
-    logger.info(f"[CID:{correlation_id}] Processing WhatsApp message from {chat_id}: '{message_body[:50]}...'")
+    logger.info(f"[CID:{correlation_id}] Processing {channel} message from {chat_id}: '{message_body[:50]}...'")
     try:
         conn = None
         try:
@@ -126,19 +131,19 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         # Check if conversation exists for this chat_id
         c.execute(
             "SELECT id, username, ai_enabled, language FROM conversations WHERE chat_id = %s AND channel = %s",
-            (chat_id, "whatsapp")
+            (chat_id, channel)
         )
         conversation = c.fetchone()
         
         if conversation:
-            convo_id = conversation['id']
-            username = conversation['username']
-            ai_enabled = conversation['ai_enabled']
-            language = conversation['language']
+            convo_id = conversation['id'] # type: ignore
+            username = conversation['username'] # type: ignore
+            ai_enabled = conversation['ai_enabled'] # type: ignore
+            language = conversation['language'] # type: ignore
             logger.info(f"Found existing conversation for {chat_id}: ID {convo_id}, user '{username}'")
         else:
             # Create a new conversation
-            username = f"WhatsApp_{chat_id}"
+            username = f"{channel.capitalize()}_{chat_id}"
             
             # Try to detect language (default to English if detection fails)
             try:
@@ -152,19 +157,30 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
             c.execute(
                 "INSERT INTO conversations (username, chat_id, channel, ai_enabled, language, last_updated) "
                 "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                (username, chat_id, "whatsapp", 1, language, user_timestamp)
+                (username, chat_id, channel, 1, language, user_timestamp)
             )
-            convo_id = c.fetchone()['id']
+            convo_id = c.fetchone()['id'] # type: ignore
             ai_enabled = 1
             logger.info(f"Created new conversation for {chat_id}: ID {convo_id}, language: {language}")
-        
+
+            # For new web chats, notify the client of its new convo_id and chat_id
+            if channel == 'web' and sid:
+                try:
+                    sio.emit('session_assigned', {
+                        'convo_id': convo_id,
+                        'chat_id': chat_id
+                    }, to=sid)
+                    logger.info(f"[CID:{correlation_id}] Emitted 'session_assigned' to sid {sid} with convo_id {convo_id}")
+                except Exception as e:
+                    logger.error(f"[CID:{correlation_id}] Failed to emit 'session_assigned' to sid {sid}: {e}")
+
         # Log the user message
         c.execute(
             "INSERT INTO messages (convo_id, username, message, sender, timestamp) "
             "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (convo_id, username, message_body, "user", user_timestamp)
         )
-        message_id = c.fetchone()['id']
+        message_id = c.fetchone()['id'] # type: ignore
         logger.info(f"Logged user message with ID {message_id} for convo_id {convo_id}")
         
         # Update conversation timestamp
@@ -185,27 +201,22 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         # Format conversation history for OpenAI
         conversation_history = []
         for msg in history:
-            role = "user" if msg['sender'] == "user" else "assistant"
-            conversation_history.append({"role": role, "content": msg['message']})
+            role = "user" if msg['sender'] == "user" else "assistant" # type: ignore
+            conversation_history.append({"role": role, "content": msg['message']}) # type: ignore
         
         # Check if AI is globally enabled
         c.execute("SELECT value FROM settings WHERE key = %s", ("ai_enabled",))
         setting = c.fetchone()
-        global_ai_enabled = setting['value'] if setting else "1"
+        global_ai_enabled = setting['value'] if setting else "1" # type: ignore
         
         # Process with AI if enabled
         if global_ai_enabled == "1" and ai_enabled == 1:
             logger.info(f"[CID:{correlation_id}] AI is enabled for conversation {convo_id}. Generating response...")
             try:
-                ai_reply, detected_intent, handoff_triggered = get_ai_response(
-                    convo_id=convo_id,
-                    username=username,
-                    conversation_history=conversation_history,
-                    user_message=message_body,
-                    chat_id=chat_id,
-                    channel="whatsapp",
-                    language=language,
-                    correlation_id=correlation_id
+                # The new get_ai_response function has a simpler signature
+                ai_reply = get_ai_response(
+                    prompt=message_body,
+                    conversation_history=conversation_history
                 )
             except Exception as ai_err:
                 logger.error(f"[CID:{correlation_id}] AI response failed: {str(ai_err)}", exc_info=True)
@@ -229,25 +240,41 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                     "VALUES (%s, %s, %s, %s, %s) RETURNING id",
                     (convo_id, "AI Bot", ai_reply, "bot", datetime.now(timezone.utc).isoformat())
                 )
-                ai_message_id = c.fetchone()['id']
+                ai_message_id = c.fetchone()['id'] # type: ignore
                 logger.info(f"Logged AI response with ID {ai_message_id} for convo_id {convo_id}")
                 
-                # Send AI response via WhatsApp
-                send_whatsapp_message_task.delay(
-                    to_number=chat_id,
-                    message=ai_reply,
-                    convo_id=convo_id,
-                    username="AI Bot",
-                    chat_id=chat_id
-                )
-                
-                # Update conversation with intent and needs_agent if handoff triggered
-                if handoff_triggered:
-                    c.execute(
-                        "UPDATE conversations SET needs_agent = 1, booking_intent = %s WHERE id = %s",
-                        (detected_intent, convo_id)
+                # Send AI response via the appropriate channel
+                if channel == 'whatsapp':
+                    send_whatsapp_message_task.delay(
+                        to_number=chat_id,
+                        message_body=ai_reply
                     )
-                    logger.info(f"Updated conversation {convo_id} with handoff flag and intent: {detected_intent}")
+                elif channel == 'web':
+                    # For web, we emit a socketio event back to the client
+                    try:
+                        room = f"convo_{convo_id}"
+                        sio.emit('new_message', {
+                            'id': ai_message_id,
+                            'convo_id': convo_id,
+                            'username': 'AI Bot',
+                            'message': ai_reply,
+                            'sender': 'bot',
+                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                            'chat_id': chat_id,
+                            'channel': channel
+                        }, room=room) # Corrected: use room= instead of to=
+                        logger.info(f"Emitted AI response via Socket.IO to room {room}")
+                    except Exception as e:
+                        logger.error(f"Failed to emit Socket.IO event for AI reply: {str(e)}")
+
+
+                # Handoff logic is removed as it's not part of the simplified get_ai_response
+                # if handoff_triggered:
+                #     c.execute(
+                #         "UPDATE conversations SET needs_agent = 1, booking_intent = %s WHERE id = %s",
+                #         (detected_intent, convo_id)
+                #     )
+                #     logger.info(f"Updated conversation {convo_id} with handoff flag and intent: {detected_intent}")
             else:
                 logger.error(f"No AI response generated for convo_id {convo_id}")
                 
@@ -265,14 +292,14 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
                 'sender': 'user',
                 'timestamp': user_timestamp,
                 'chat_id': chat_id,
-                'channel': 'whatsapp'
-            }, to=room)
+                'channel': channel
+            }, room=room) # Corrected: use room= instead of to=
             logger.info(f"Emitted Socket.IO 'new_message' event to room {room}")
         except Exception as e:
             logger.error(f"Failed to emit Socket.IO event: {str(e)}")
         
         processing_time = time.time() - start_time
-        logger.info(f"[CID:{correlation_id}] WhatsApp message processed in {processing_time:.2f} seconds")
+        logger.info(f"[CID:{correlation_id}] {channel.capitalize()} message processed in {processing_time:.2f} seconds")
         return {"status": "success", "convo_id": convo_id, "processing_time": processing_time}
     except psycopg2.OperationalError as db_op_err:
         logger.error(f"[CID:{correlation_id}] Database operational error: {str(db_op_err)}", exc_info=True)
@@ -299,7 +326,7 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
             pass
         raise self.retry(exc=redis_err, countdown=60, max_retries=3)
     except Exception as e:
-        logger.error(f"[CID:{correlation_id}] \u274c Error processing WhatsApp message: {str(e)}", exc_info=True)
+        logger.error(f"[CID:{correlation_id}] ❌ Error processing {channel} message: {str(e)}", exc_info=True)
         try:
             send_to_dead_letter_queue({
                 'from_number': from_number,
@@ -316,43 +343,3 @@ def process_whatsapp_message(self, from_number, chat_id, message_body, user_time
         except Exception:
             pass
         raise self.retry(exc=e, countdown=120, max_retries=3)
-
-@celery_app.task(name="tasks.send_whatsapp_message_task", bind=True, max_retries=3)
-def send_whatsapp_message_task(self, to_number, message, convo_id=None, username=None, chat_id=None):
-    """
-    Send a WhatsApp message using Twilio.
-    """
-    start_time = time.time()
-    logger.info(f"Sending WhatsApp message to {to_number}: '{message[:50]}...'")
-    
-    try:
-        # Ensure the to_number has the whatsapp: prefix
-        if not to_number.startswith("whatsapp:"):
-            to_number = f"whatsapp:{to_number}"
-        
-        if not twilio_client:
-            logger.error("❌ Twilio client not initialized. Cannot send WhatsApp message.")
-            return {"status": "error", "message": "Twilio client not initialized"}
-        
-        # Send the message via Twilio
-        message_response = twilio_client.messages.create(
-            body=message,
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=to_number
-        )
-        
-        logger.info(f"✅ WhatsApp message sent to {to_number}. Twilio SID: {message_response.sid}")
-        
-        processing_time = time.time() - start_time
-        return {
-            "status": "success", 
-            "message_sid": message_response.sid,
-            "convo_id": convo_id,
-            "processing_time": processing_time
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error sending WhatsApp message to {to_number}: {str(e)}", exc_info=True)
-        # Retry with exponential backoff
-        retry_delay = 30 * (2 ** self.request.retries)  # 30s, 60s, 120s
-        raise self.retry(exc=e, countdown=retry_delay, max_retries=3)

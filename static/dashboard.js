@@ -78,8 +78,13 @@ document.addEventListener('DOMContentLoaded', function() {
      * Fetch conversations from the server
      */
     function fetchConversations() {
-        fetch('/get_conversations')
-            .then(response => response.json())
+        fetch('/api/conversations') // Corrected endpoint
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(conversations => {
                 displayConversations(conversations);
             })
@@ -162,12 +167,12 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Leave previous conversation room if any
         if (socket && activeConversationId) {
-            socket.emit('leave_conversation', { conversation_id: activeConversationId });
+            socket.emit('leave', { convo_id: activeConversationId }); // Corrected event and payload
         }
         
         // Join new conversation room
         if (socket) {
-            socket.emit('join_conversation', { conversation_id: conversationId });
+            socket.emit('join', { convo_id: conversationId }); // Corrected event and payload
         }
         
         // Display active chat template
@@ -196,8 +201,13 @@ document.addEventListener('DOMContentLoaded', function() {
      * Fetch messages for a conversation
      */
     function fetchMessages(conversationId) {
-        fetch(`/get_messages/${conversationId}`)
-            .then(response => response.json())
+        fetch(`/api/messages/${conversationId}`) // Corrected endpoint
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.error) {
                     throw new Error(data.error);
@@ -270,22 +280,18 @@ document.addEventListener('DOMContentLoaded', function() {
         if (socket) {
             socket.emit('agent_message', {
                 convo_id: conversationId,
-                message: message,
-                chat_id: activeConversationChatId,
-                channel: activeConversationChannel
+                message: message
             });
         } else {
             // Fallback to REST API if socket not available
-            fetch('/send_message', {
+            fetch('/api/send-message', { // Corrected endpoint
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     convo_id: conversationId,
-                    message: message,
-                    chat_id: activeConversationChatId,
-                    channel: activeConversationChannel
+                    message: message
                 })
             })
             .then(response => response.json())

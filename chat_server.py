@@ -26,14 +26,13 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from cachetools import TTLCache
-import openai
-from openai import OpenAI, RateLimitError, APIError, AuthenticationError, APITimeoutError
 import redis as sync_redis
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langdetect import detect, DetectorFactory
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from functools import wraps
 import threading
+from celery_app import celery_app
 
 DetectorFactory.seed = 0
 
@@ -87,7 +86,7 @@ logger.info(f"Logging initialized. Level: {LOG_LEVEL}, File: {LOG_FILE_PATH}")
 
 # --- REDIS CLIENT ---
 try:
-    redis_client = redis.Redis.from_url(REDIS_URL)
+    redis_client = sync_redis.Redis.from_url(REDIS_URL)
     redis_client.ping()
     logger.info("Redis client initialized and connection verified.")
 except Exception as e:
@@ -106,40 +105,9 @@ except Exception as e:
     logger.error(f"PostgreSQL connection failed: {e}")
     db_pool = None
 
-# --- CELERY TASKS ---
-try:
-    from tasks import process_whatsapp_message, send_whatsapp_message_task
-    # Ensure these are Celery tasks (should have .delay)
-    if not (hasattr(process_whatsapp_message, 'delay') and hasattr(send_whatsapp_message_task, 'delay')):
-        logger.error("Celery tasks are not properly decorated. Check @celery_app.task in tasks.py.")
-        process_whatsapp_message = None
-        send_whatsapp_message_task = None
-except Exception as e:
-    logger.error(f"Celery tasks import failed: {e}")
-    process_whatsapp_message = None
-    send_whatsapp_message_task = None
-
-# --- OPENAI CLIENT INITIALIZATION (v1.x COMPATIBLE) ---
-try:
-    # Try v1.x import and usage
-    from openai import OpenAI, RateLimitError, APIError, AuthenticationError, APITimeoutError
-    openai_client = OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        timeout=30.0
-        # proxies argument removed; use HTTP_PROXY/HTTPS_PROXY env vars if needed
-    )
-    logger.info("OpenAI client (v1.x) initialized.")
-except ImportError:
-    # Fallback for v0.x
-    import openai
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    openai_client = openai
-    # Define error types for v0.x
-    class RateLimitError(Exception): pass
-    class APIError(Exception): pass
-    class AuthenticationError(Exception): pass
-    class APITimeoutError(Exception): pass
-    logger.info("OpenAI client (v0.x) initialized.")
+# --- CELERY TASKS (REMOVED) ---
+# Removed the direct import of tasks to prevent circular dependencies.
+# Tasks will be called by name using celery_app.send_task().
 
 # --- REDIS CLIENT VALIDATION ---
 try:
@@ -228,135 +196,75 @@ except Exception:
 logger.info(f"OpenAI concurrency limit: {OPENAI_CONCURRENCY}")
 
 
-# --- CIRCUIT BREAKER IMPLEMENTATION ---
-class CircuitBreaker:
-    def __init__(self, max_failures=5, reset_timeout=60):
-        self.max_failures = max_failures
-        self.reset_timeout = reset_timeout
-        self.failure_count = 0
-        self.last_failure_time = 0
-        self.lock = threading.Lock()
-        self.open = False
-
-    def call(self, func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            with self.lock:
-                if self.open and (time.time() - self.last_failure_time < self.reset_timeout):
-                    raise RuntimeError("Circuit breaker is open. Try again later.")
-                elif self.open:
-                    self.open = False
-                    self.failure_count = 0
-            try:
-                result = func(*args, **kwargs)
-                with self.lock:
-                    self.failure_count = 0
-                return result
-            except Exception as e:
-                with self.lock:
-                    self.failure_count += 1
-                    self.last_failure_time = time.time()
-                    if self.failure_count >= self.max_failures:
-                        self.open = True
-                        logger.error(f"Circuit breaker tripped for get_ai_response: {str(e)}")
-                raise
-        return wrapper
-
-circuit_breaker = CircuitBreaker(max_failures=5, reset_timeout=120)
-
-# --- ENHANCED get_ai_response WITH CIRCUIT BREAKER, LOGGING, FALLBACKS ---
-@circuit_breaker.call
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=2, min=4, max=30),
-    retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError))
-)
-def get_ai_response(convo_id, username, conversation_history, user_message, chat_id, channel, language="en", correlation_id=None):
-    """
-    Synchronous function to get AI responses using the OpenAI API.
-    Returns: ai_reply, detected_intent, handoff_triggered
-    Enhanced with circuit breaker, retry, and production-grade error handling.
-    """
-    if not correlation_id:
-        correlation_id = f"convo-{convo_id}-{int(time.time())}"
-    start_time_ai = time.time()
-    logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE initiated for convo_id: {convo_id}, user: {username}, channel: {channel}, lang: {language}. Message: '{user_message[:50]}...'")
-    
-    # Ensure conversation_history is a list of dicts
-    if not isinstance(conversation_history, list) or not all(isinstance(msg, dict) for msg in conversation_history):
-        logger.warning(f"Invalid conversation_history format for convo_id {convo_id}. Resetting to current message only.")
-        conversation_history = [{"role": "user", "content": user_message}]
-    elif not conversation_history: # Ensure it's not empty
-        conversation_history = [{"role": "user", "content": user_message}]
-    
-    # Add the current user message to the history if it's not already the last message
-    if not conversation_history or conversation_history[-1].get("content") != user_message or conversation_history[-1].get("role") != "user":
-        conversation_history.append({"role": "user", "content": user_message})
-    
-    # Limit history length to avoid excessive token usage (e.g., last 10 messages)
-    MAX_HISTORY_LEN = 10
-    if len(conversation_history) > MAX_HISTORY_LEN:
-        conversation_history = conversation_history[-MAX_HISTORY_LEN:]
-        logger.debug(f"Trimmed conversation history to last {MAX_HISTORY_LEN} messages for convo_id {convo_id}")
-    
-    system_prompt = f"You are a helpful assistant for Amapola Resort. Current language for response: {language}. Training document: {TRAINING_DOCUMENT[:200]}..." # Truncate for logging
-    messages_for_openai = [
-        {"role": "system", "content": system_prompt}
-    ] + conversation_history
-    
-    ai_reply = None
-    detected_intent = None
-    handoff_triggered = False
-    request_start_time = time.time()
+# --- DATABASE INITIALIZATION ---
+def initialize_database():
+    """Create all necessary tables if they don't exist."""
+    conn = None
     try:
-        logger.info(f"[CID:{correlation_id}] Calling OpenAI API for convo_id {convo_id}. Model: gpt-4o-mini. History length: {len(messages_for_openai)}")
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages_for_openai,
-            max_tokens=300,
-            temperature=0.7
-        )
-        ai_reply = response.choices[0].message.content.strip()
-        usage = response.usage
-        processing_time = (time.time() - request_start_time) * 1000
-        logger.info(f"[CID:{correlation_id}] [OpenAI Response] Convo ID: {convo_id} - Reply: '{ai_reply[:100]}...' - Tokens: P{usage.prompt_tokens}/C{usage.completion_tokens}/T{usage.total_tokens} - Time: {processing_time:.2f}ms")
+        conn = get_db_connection()
+        c = conn.cursor()
         
-        # Basic intent detection (example - can be expanded)
-        if "book a room" in user_message.lower() or "reservation" in user_message.lower():
-            detected_intent = "booking_inquiry"
-        if "human" in user_message.lower() or "agent" in user_message.lower() or "speak to someone" in user_message.lower():
-            handoff_triggered = True
-            logger.info(f"Handoff to human agent triggered by user message for convo_id {convo_id}")
-            
-    except RateLimitError as e:
-        logger.error(f"[CID:{correlation_id}] ❌ OpenAI RateLimitError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "I'm currently experiencing high demand. Please try again in a moment."
-    except APITimeoutError as e:
-        logger.error(f"[CID:{correlation_id}] ❌ OpenAI APITimeoutError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "I'm having trouble connecting to my brain right now. Please try again shortly."
-    except APIError as e:
-        logger.error(f"[CID:{correlation_id}] ❌ OpenAI APIError for convo_id {convo_id}: {str(e)}", exc_info=True)
-        ai_reply = "Sorry, I encountered an issue while processing your request."
-    except AuthenticationError as e:
-        logger.error(f"[CID:{correlation_id}] ❌ OpenAI AuthenticationError for convo_id {convo_id}: {str(e)} (Check API Key)", exc_info=True)
-        ai_reply = "There's an issue with my configuration. Please notify an administrator."
+        # Users table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(80) UNIQUE NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        logger.info("Table 'users' checked/created.")
+
+        # Conversations table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(255),
+                chat_id VARCHAR(255) UNIQUE,
+                channel VARCHAR(50),
+                last_updated TIMESTAMP WITH TIME ZONE,
+                ai_enabled INTEGER DEFAULT 1,
+                language VARCHAR(10),
+                needs_agent INTEGER DEFAULT 0,
+                booking_intent VARCHAR(255)
+            );
+        """)
+        logger.info("Table 'conversations' checked/created.")
+
+        # Messages table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                convo_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+                username VARCHAR(255),
+                message TEXT,
+                sender VARCHAR(50),
+                timestamp TIMESTAMP WITH TIME ZONE
+            );
+        """)
+        logger.info("Table 'messages' checked/created.")
+
+        # Settings table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key VARCHAR(50) PRIMARY KEY,
+                value TEXT,
+                last_updated TIMESTAMP WITH TIME ZONE
+            );
+        """)
+        logger.info("Table 'settings' checked/created.")
+
+        # Seed initial global AI setting if not present
+        c.execute("INSERT INTO settings (key, value, last_updated) VALUES ('ai_enabled', '1', %s) ON CONFLICT (key) DO NOTHING", (datetime.now(timezone.utc),))
+        logger.info("Initial setting 'ai_enabled' checked/seeded.")
+
+        conn.commit()
+        logger.info("✅ Database initialization complete.")
     except Exception as e:
-        # Token limit error handling
-        if hasattr(e, 'message') and 'maximum context length' in str(e):
-            logger.error(f"[CID:{correlation_id}] ❌ OpenAI token limit error for convo_id {convo_id}: {str(e)}", exc_info=True)
-            ai_reply = "Sorry, your message is too long for me to process. Please shorten it."
-        else:
-            logger.error(f"[CID:{correlation_id}] ❌ Unexpected error in get_ai_response for convo_id {convo_id}: {str(e)}", exc_info=True)
-            ai_reply = "An unexpected error occurred. I've logged the issue."
-    processing_time = time.time() - start_time_ai
-    logger.info(f"[CID:{correlation_id}] GET_AI_RESPONSE for convo_id {convo_id} completed in {processing_time:.2f}s. Intent: {detected_intent}, Handoff: {handoff_triggered}")
-    # Sentry/monitoring hook
-    try:
-        # sentry_sdk.capture_message(f"AI response for {correlation_id}")
-        pass
-    except Exception:
-        pass
-    return ai_reply, detected_intent, handoff_triggered
+        logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
+        # Allow the app to continue, but log the critical error
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 # --- DATABASE HELPER FUNCTIONS ---
 def get_db_connection():
@@ -368,7 +276,7 @@ def get_db_connection():
         conn = db_pool.getconn()
         if conn.closed:
             logger.warning("Connection retrieved from pool is closed, reinitializing pool")
-            if db_pool is not None and hasattr(db_pool, 'closeall'):
+            if db_pool is not None:
                 db_pool.closeall()
             db_pool = SimpleConnectionPool(
                 minconn=1,
@@ -442,7 +350,8 @@ def with_db_retry(func):
                 if any(err in error_str for err in ["ssl syscall error", "eof detected", "decryption failed", "bad record mac", "connection already closed"]):
                     global db_pool
                     try:
-                        db_pool.closeall()
+                        if db_pool:
+                            db_pool.closeall()
                         db_pool = SimpleConnectionPool(
                             minconn=5,
                             maxconn=30,
@@ -758,6 +667,80 @@ def toggle_global_ai():
         if conn:
             release_db_connection(conn)
 
+def _send_agent_message(convo_id, message, username):
+    """Helper function to send a message from an agent."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Get conversation details
+        c.execute(
+            "SELECT username, chat_id, channel FROM conversations WHERE id = %s",
+            (convo_id,)
+        )
+        conversation = c.fetchone()
+
+        if not conversation:
+            return False, "Conversation not found", 404
+
+        # Log the message from the agent (human)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        c.execute(
+            "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (convo_id, username, message, "agent", timestamp)
+        )
+        message_id = c.fetchone()['id']
+
+        # Update conversation timestamp
+        c.execute(
+            "UPDATE conversations SET last_updated = %s WHERE id = %s",
+            (timestamp, convo_id)
+        )
+        conn.commit()
+
+        # Broadcast the message via SocketIO
+        socketio.emit('new_message', {
+            'id': message_id,
+            'convo_id': convo_id,
+            'username': username,
+            'message': message,
+            'sender': 'agent',
+            'timestamp': timestamp
+        }, to=f"convo_{convo_id}")
+
+        logger.info(f"Agent message sent to conversation {convo_id} by {username}")
+
+        # Forward message to WhatsApp if the conversation is from WhatsApp
+        if conversation['channel'] == 'whatsapp' and conversation['chat_id']:
+            try:
+                celery_app.send_task(
+                    'tasks.send_whatsapp_message_task',
+                    args=[
+                        conversation['chat_id'],
+                        message,
+                        f"Agent: {username}"
+                    ]
+                )
+                logger.info(f"Message forwarded to WhatsApp for {conversation['chat_id']}")
+            except Exception as e:
+                logger.error(f"Failed to queue message for WhatsApp: {str(e)}", exc_info=True)
+
+        message_data = {
+            "id": message_id,
+            "username": username,
+            "message": message,
+            "sender": "agent",
+            "timestamp": timestamp
+        }
+        return True, message_data, 200
+    except Exception as e:
+        logger.error(f"Failed to send message to conversation {convo_id}: {str(e)}", exc_info=True)
+        return False, "Failed to send message", 500
+    finally:
+        if conn:
+            release_db_connection(conn)
+
 @app.route('/api/send-message', methods=['POST'])
 @login_required
 def send_message():
@@ -771,78 +754,12 @@ def send_message():
     if not message:
         return jsonify({"error": "Message cannot be empty"}), 400
     
-    conn = None
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        
-        # Get conversation details
-        c.execute(
-            "SELECT username, chat_id, channel, ai_enabled, language FROM conversations WHERE id = %s",
-            (convo_id,)
-        )
-        conversation = c.fetchone()
-        
-        if not conversation:
-            return jsonify({"error": "Conversation not found"}), 404
-        
-        # Log the message from the agent (human)
-        timestamp = datetime.now(timezone.utc).isoformat()
-        c.execute(
-            "INSERT INTO messages (convo_id, username, message, sender, timestamp) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (convo_id, current_user.username, message, "agent", timestamp)
-        )
-        message_id = c.fetchone()['id']
-        
-        # Update conversation timestamp
-        c.execute(
-            "UPDATE conversations SET last_updated = %s WHERE id = %s",
-            (timestamp, convo_id)
-        )
-        conn.commit()
-        
-        # Broadcast the message via SocketIO
-        socketio.emit('new_message', {
-            'id': message_id,
-            'convo_id': convo_id,
-            'username': current_user.username,
-            'message': message,
-            'sender': 'agent',
-            'timestamp': timestamp
-        }, to=f"convo_{convo_id}")  # Changed 'room' to 'to' for Flask-SocketIO compatibility
-        
-        logger.info(f"Agent message sent to conversation {convo_id} by {current_user.username}")
-        
-        # Forward message to WhatsApp if the conversation is from WhatsApp
-        if conversation['channel'] == 'whatsapp' and conversation['chat_id']:
-            try:
-                # Ensure send_whatsapp_message_task is a Celery task
-                from tasks import send_whatsapp_message_task
-                send_whatsapp_message_task.delay(
-                    conversation['chat_id'],
-                    message,
-                    f"Agent: {current_user.username}"
-                )
-                logger.info(f"Message forwarded to WhatsApp for {conversation['chat_id']}")
-            except Exception as e:
-                logger.error(f"Failed to forward message to WhatsApp: {str(e)}", exc_info=True)
-        
-        return jsonify({
-            "success": True,
-            "message": {
-                "id": message_id,
-                "username": current_user.username,
-                "message": message,
-                "sender": "agent",
-                "timestamp": timestamp
-            }
-        })
-    except Exception as e:
-        logger.error(f"Failed to send message to conversation {convo_id}: {str(e)}", exc_info=True)
-        return jsonify({"error": "Failed to send message"}), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
+    success, result, status_code = _send_agent_message(convo_id, message, current_user.username)
+    
+    if success:
+        return jsonify({"success": True, "message": result}), status_code
+    else:
+        return jsonify({"error": result}), status_code
 
 # Socket.IO events
 @socketio.on('connect')
@@ -879,27 +796,36 @@ def handle_leave(data):
 @socketio.on('guest_message')
 def handle_guest_message(data):
     message = data.get('message')
-    convo_id = data.get('convo_id')
-    chat_id = data.get('chat_id') # This might be the guest's socket sid
+    chat_id = data.get('chat_id')  # Persisted chat_id from client-side
 
     if not message:
+        logger.warning(f"Guest message from {request.sid} is empty.")
         return
 
-    # Use a Celery task to process the message to avoid blocking
-    from tasks import process_whatsapp_message # Local import to avoid circular dependency
-    
-    # If it's a new chat, generate a unique chat_id
+    # If no chat_id is provided (e.g., first message), create one.
     if not chat_id:
         chat_id = f"web_{request.sid}"
+        logger.info(f"New guest session. Assigning chat_id: {chat_id}")
 
-    # Simulate the data structure expected by the celery task
-    process_whatsapp_message.delay(
-        from_number=chat_id, # Using chat_id as the identifier
-        chat_id=chat_id,
-        message_body=message,
-        user_timestamp=datetime.now(timezone.utc).isoformat()
-    )
-    logger.info(f"Guest message from {chat_id} queued for processing.")
+    # Emit back the chat_id so the client can persist it for the session
+    emit('session_assigned', {'chat_id': chat_id})
+
+    try:
+        # Use Celery task to process the message asynchronously
+        celery_app.send_task(
+            'tasks.process_incoming_message',
+            args=[
+                chat_id,  # from_number (identifier for web)
+                chat_id,  # chat_id
+                message,
+                datetime.now(timezone.utc).isoformat(),
+                'web'  # channel
+            ]
+        )
+        logger.info(f"Guest message from {chat_id} queued for processing.")
+    except Exception as e:
+        logger.error(f"Failed to queue guest message for processing: {e}", exc_info=True)
+
 
 @socketio.on('agent_message')
 @login_required
@@ -915,34 +841,24 @@ def handle_agent_message(data):
         logger.warning(f"Agent message missing convo_id or message from {request.sid}")
         return
 
-    # The /api/send-message endpoint already handles all logic including DB and whatsapp push
-    # We can call it directly or just emit back to the room
-    timestamp = datetime.now(timezone.utc).isoformat()
-    response_data = {
-        'id': int(time.time() * 1000), # Mock ID
-        'convo_id': convo_id,
-        'username': current_user.username,
-        'message': message,
-        'sender': 'agent',
-        'timestamp': timestamp
-    }
-    room = f"convo_{convo_id}"
-    socketio.emit('new_message', response_data, to=room)
-    logger.info(f"Agent {current_user.username} sent message to room {room}")
+    # Use the centralized helper function to handle the message
+    _send_agent_message(convo_id, message, current_user.username)
 
-    # Also persist it and send to WhatsApp if needed
-    # This can be done by calling the existing send_message logic or a new celery task
-    # For simplicity, let's reuse the existing REST logic via a request
-    # In a larger app, this would be a shared internal function.
-    try:
-        with app.test_request_context('/api/send-message', method='POST', json=data):
-            g.user = current_user # Manually set the user for the request context
-            send_message()
-    except Exception as e:
-        logger.error(f"Failed to persist agent message for convo {convo_id}: {e}")
-
-
-# Main entry point
+# --- MAIN EXECUTION ---
 if __name__ == '__main__':
-    logger.info("🚀 Starting HotelChat server...")
-    socketio.run(app, debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+    # Initialize the database on startup
+    initialize_database()
+    
+    # Get port from environment or default to 5000
+    port = int(os.environ.get("PORT", 5000))
+    
+    # Use Gunicorn for production, Flask dev server for local
+    if os.getenv("FLASK_ENV") == "production":
+        logger.info(f"Starting Gunicorn on port {port}")
+        # Gunicorn is expected to be run from the command line, e.g.,
+        # gunicorn --worker-class gevent --bind 0.0.0.0:5000 chat_server:app
+        # The following is for local execution if needed, but not typical for prod.
+        socketio.run(app, host='0.0.0.0', port=port)
+    else:
+        logger.info(f"Starting Flask development server on port {port}")
+        socketio.run(app, host='0.0.0.0', port=port, debug=True, use_reloader=True)

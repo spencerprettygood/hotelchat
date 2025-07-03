@@ -3,85 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Amapola Resort - Chat with Us</title>
+    <title>Amapola Resort - Guest Chat</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-block-size: 100vh; /* Changed from min-height */
+            background-color: #f0f2f5;
+        }
+        .chat-widget {
+            inline-size: 100%; /* Changed from width */
+            max-inline-size: 420px; /* Changed from max-width */
+            block-size: 80vh; /* Changed from height */
+            max-block-size: 700px; /* Changed from max-height */
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: white;
+        }
+        .chat-header {
+            background-color: #4e6bbd;
+            color: white;
+            padding: 1rem;
+            text-align: center;
+            font-weight: bold;
+            border-block-end: 1px solid #dee2e6; /* Changed from border-bottom */
+        }
+        .chat-header h5 {
+            margin: 0;
+            font-size: 1.1rem;
+        }
+        .chat-header p {
+            margin: 0;
+            font-size: 0.8rem;
+            opacity: 0.9;
+        }
+        #chat-messages {
+            flex-grow: 1;
+            padding: 1rem;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin-block-end: 1rem; /* Changed from margin-bottom */
+            display: flex;
+            flex-direction: column;
+        }
+        .message-sender {
+            font-size: 0.75rem;
+            color: #6c757d;
+            margin-block-end: 0.25rem; /* Changed from margin-bottom */
+        }
+        .message-content {
+            padding: 0.75rem 1rem;
+            border-radius: 15px;
+            max-inline-size: 85%; /* Changed from max-width */
+            line-height: 1.4;
+        }
+        .message-user .message-content {
+            background-color: #007bff;
+            color: white;
+            border-end-end-radius: 5px; /* Changed from border-bottom-right-radius */
+            align-self: flex-end;
+        }
+        .message-user .message-sender {
+            align-self: flex-end;
+        }
+        .message-bot .message-content, .message-agent .message-content {
+            background-color: #e9ecef;
+            color: #333;
+            border-end-start-radius: 5px; /* Changed from border-bottom-left-radius */
+            align-self: flex-start;
+        }
+        #message-form {
+            padding: 1rem;
+            border-block-start: 1px solid #dee2e6; /* Changed from border-top */
+            background-color: #fff;
+        }
+        .status-footer {
+            padding: 0.5rem 1rem;
+            font-size: 0.75rem;
+            color: #6c757d;
+            text-align: center;
+            background-color: #f8f9fa;
+        }
+    </style>
 </head>
 <body>
-    <div class="chat-container">
+    <div class="chat-widget">
         <div class="chat-header">
-            <h2>Amapola Resort Support</h2>
+            <h5>Amapola Resort Chat</h5>
             <p>Ask us anything!</p>
         </div>
-        <div class="chat-box" id="chatBox">
+        <div id="chat-messages">
             <!-- Messages will be appended here -->
         </div>
-        <div class="chat-input">
-            <input type="text" id="userInput" class="form-control" placeholder="Type your message...">
-            <button id="sendButton" class="btn btn-primary">Send</button>
+        <form id="message-form">
+            <div class="input-group">
+                <input type="text" id="message-input" class="form-control" placeholder="Type your message..." autocomplete="off" required>
+                <button type="submit" class="btn btn-primary">Send</button>
+            </div>
+        </form>
+        <div class="status-footer">
+            Status: <span id="status-indicator" class="text-danger">Connecting...</span>
         </div>
     </div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const socket = io();
-            const chatBox = document.getElementById('chatBox');
-            const userInput = document.getElementById('userInput');
-            const sendButton = document.getElementById('sendButton');
-
-            let conversationId = localStorage.getItem('conversationId');
-            let chatId = localStorage.getItem('chatId');
-
-            function addMessage(message, sender) {
-                const messageElement = document.createElement('div');
-                messageElement.classList.add('message', sender);
-                messageElement.textContent = message;
-                chatBox.appendChild(messageElement);
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-
-            socket.on('connect', () => {
-                console.log('Connected to server');
-                if (conversationId) {
-                    socket.emit('join', { convo_id: conversationId });
-                }
-            });
-
-            socket.on('new_message', (data) => {
-                if (data.convo_id === conversationId) {
-                    addMessage(data.message, data.sender);
-                }
-            });
-
-            socket.on('conversation_started', (data) => {
-                conversationId = data.convo_id;
-                chatId = data.chat_id;
-                localStorage.setItem('conversationId', conversationId);
-                localStorage.setItem('chatId', chatId);
-                socket.emit('join', { convo_id: conversationId });
-            });
-
-            function sendMessage() {
-                const message = userInput.value.trim();
-                if (message) {
-                    addMessage(message, 'user');
-                    socket.emit('guest_message', {
-                        message: message,
-                        convo_id: conversationId,
-                        chat_id: chatId
-                    });
-                    userInput.value = '';
-                }
-            }
-
-            sendButton.addEventListener('click', sendMessage);
-            userInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    sendMessage();
-                }
-            });
-        });
-    </script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='guest_chat.js') }}"></script>
 </body>
 </html>
