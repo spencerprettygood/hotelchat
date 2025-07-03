@@ -2,11 +2,13 @@ services:
   # Web service - Flask application with SocketIO
   - type: web
     name: hotelchat-web
-    env: python
-    runtime: python3
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn chat_server:app --config gunicorn.conf.py
+    runtime: python
+    region: oregon
     plan: standard
+    previews:
+      enabled: true
+    buildCommand: "./render_build.sh"
+    startCommand: "gunicorn chat_server:app --config gunicorn.conf.py"
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
@@ -42,11 +44,11 @@ services:
   # Celery worker
   - type: worker
     name: hotelchat-worker
-    env: python
-    runtime: python3
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A tasks worker -l INFO -Q default,whatsapp --concurrency=3
+    runtime: python
+    region: oregon
     plan: standard
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A celery_app.worker worker -l INFO -Q default,whatsapp --concurrency=3"
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
@@ -76,9 +78,11 @@ services:
 
   - type: redis
     name: hotelchat-redis
+    region: oregon
     plan: standard
-    ipAllowList: []
+    ipAllowList: [] # Render services in the same account can connect automatically
 
 databases:
   - name: hotelchat-db
+    region: oregon
     plan: standard

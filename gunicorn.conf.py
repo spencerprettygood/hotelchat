@@ -7,7 +7,7 @@ backlog = 2048
 
 # Worker processes
 workers = int(os.environ.get('WEB_CONCURRENCY', multiprocessing.cpu_count() * 2 + 1))
-worker_class = 'geventwebsocket.gunicorn.workers.GeventWebSocketWorker'
+worker_class = 'gevent'
 worker_connections = 1000
 timeout = 120
 keepalive = 5
