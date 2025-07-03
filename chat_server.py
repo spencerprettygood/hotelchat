@@ -159,7 +159,11 @@ CORS(app)
 
 socketio = SocketIO(
     app,
-    cors_allowed_origins=["http://localhost:5000", "https://hotel-chatbot-1qj5.onrender.com"],
+    cors_allowed_origins=[
+        "http://localhost:5000",
+        "https://hotel-chatbot-1qj5.onrender.com",
+        "https://hotelchat-web.onrender.com"
+    ],
     async_mode="gevent",
     message_queue=os.getenv('REDIS_URL', 'redis://red-cvfhn5nnoe9s73bhmct0:6379'), # Added message queue for Celery
     ping_timeout=60,
